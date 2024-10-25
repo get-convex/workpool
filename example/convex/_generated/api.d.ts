@@ -42,13 +42,27 @@ export declare const internal: FilterApi<
 export declare const components: {
   workpool: {
     public: {
-      add: FunctionReference<
+      enqueue: FunctionReference<
         "mutation",
         "internal",
-        { count: number; name: string; shards?: number },
-        null
+        {
+          fnArgs: any;
+          fnType: "action" | "mutation";
+          handle: string;
+          options: Array<{
+            maxParallelism?: number;
+            name: string;
+            priority?: "low" | "normal" | "high";
+          }>;
+        },
+        string
       >;
-      count: FunctionReference<"query", "internal", { name: string }, number>;
+      result: FunctionReference<
+        "query",
+        "internal",
+        { id: string },
+        { result?: any }
+      >;
     };
   };
 };

@@ -1,61 +1,48 @@
-import { internalMutation, query, mutation } from "./_generated/server";
-import { components } from "./_generated/api";
-import { Counter } from "@convex-dev/workpool";
+import { internalMutation, query, mutation, action } from "./_generated/server";
+import { api, components } from "./_generated/api";
+import { WorkPool } from "@convex-dev/workpool";
 
-const counter = new Counter(components.counter, {
-  shards: { beans: 10, users: 100 },
-});
-const numUsers = counter.for("users");
+const pool = new WorkPool(components.workpool, "example", { maxParallelism: 3 });
 
-export const addOne = mutation({
+export const addMutation = mutation({
   args: {},
   handler: async (ctx, _args) => {
-    await numUsers.inc(ctx);
+    const data = Math.random();
+    await ctx.db.insert("data", {data});
+    return data;
   },
 });
 
-export const getCount = query({
+export const addAction = action({
   args: {},
-  handler: async (ctx, _args) => {
-    return await numUsers.count(ctx);
+  handler: async (ctx, _args): Promise<number> => {
+    return await ctx.runMutation(api.example.addMutation, {});
   },
 });
 
-export const usingClient = internalMutation({
+export const enqueueABunchOfMutations = mutation({
   args: {},
   handler: async (ctx, _args) => {
-    await counter.add(ctx, "accomplishments");
-    await counter.add(ctx, "beans", 2);
-    const count = await counter.count(ctx, "beans");
-    return count;
+    for (let i = 0; i < 500; i++) {
+      await pool.enqueueMutation(ctx, api.example.addMutation, {});
+    }
   },
 });
 
-export const usingFunctions = internalMutation({
+export const enqueueABunchOfActions = mutation({
   args: {},
   handler: async (ctx, _args) => {
-    await numUsers.inc(ctx);
-    await numUsers.inc(ctx);
-    await numUsers.dec(ctx);
-    return numUsers.count(ctx);
+    for (let i = 0; i < 500; i++) {
+      await pool.enqueueAction(ctx, api.example.addAction, {});
+    }
   },
 });
 
-export const directCall = internalMutation({
+export const enqueueAndWait = action({
   args: {},
-  handler: async (ctx, _args) => {
-    await ctx.runMutation(components.counter.public.add, {
-      name: "pennies",
-      count: 250,
-    });
-    await ctx.runMutation(components.counter.public.add, {
-      name: "beans",
-      count: 3,
-      shards: 100,
-    });
-    const count = await ctx.runQuery(components.counter.public.count, {
-      name: "beans",
-    });
-    return count;
+  handler: async (ctx, _args): Promise<number> => {
+    const work = await pool.enqueueAction(ctx, api.example.addAction, {});
+    const result = await pool.pollResult(ctx, work, 30*1000);
+    return result;
   },
 });

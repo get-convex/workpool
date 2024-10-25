@@ -26,16 +26,29 @@ export class WorkPool {
   ) {}
   async enqueueAction<Args extends DefaultFunctionArgs, ReturnType>(
     ctx: RunMutationCtx,
-    delayMs: number,
-    fn: FunctionReference<'action' | 'mutation', FunctionVisibility, Args, ReturnType>,
+    fn: FunctionReference<'action', FunctionVisibility, Args, ReturnType>,
     fnArgs: Args,
   ): Promise<WorkId<ReturnType>> {
     const handle = await createFunctionHandle(fn);
-    const id = await ctx.runMutation(this.component.public.enqueueAction, {
+    const id = await ctx.runMutation(this.component.public.enqueue, {
       handle,
-      delayMs,
       options: this.poolOptions(),
       fnArgs,
+      fnType: "action",
+    });
+    return id as WorkId<ReturnType>;
+  }
+  async enqueueMutation<Args extends DefaultFunctionArgs, ReturnType>(
+    ctx: RunMutationCtx,
+    fn: FunctionReference<'mutation', FunctionVisibility, Args, ReturnType>,
+    fnArgs: Args,
+  ): Promise<WorkId<ReturnType>> {
+    const handle = await createFunctionHandle(fn);
+    const id = await ctx.runMutation(this.component.public.enqueue, {
+      handle,
+      options: this.poolOptions(),
+      fnArgs,
+      fnType: "mutation",
     });
     return id as WorkId<ReturnType>;
   }

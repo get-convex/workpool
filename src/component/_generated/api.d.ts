@@ -30,13 +30,27 @@ declare const fullApi: ApiFromModules<{
 }>;
 export type Mounts = {
   public: {
-    add: FunctionReference<
+    enqueue: FunctionReference<
       "mutation",
       "public",
-      { count: number; name: string; shards?: number },
-      null
+      {
+        fnArgs: any;
+        fnType: "action" | "mutation";
+        handle: string;
+        options: Array<{
+          maxParallelism?: number;
+          name: string;
+          priority?: "low" | "normal" | "high";
+        }>;
+      },
+      string
     >;
-    count: FunctionReference<"query", "public", { name: string }, number>;
+    result: FunctionReference<
+      "query",
+      "public",
+      { id: string },
+      { result?: any }
+    >;
   };
 };
 // For now fullApiWithMounts is only fullApi which provides

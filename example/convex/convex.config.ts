@@ -1,7 +1,7 @@
 import { defineApp } from "convex/server";
-import counter from "@convex-dev/workpool/convex.config";
+import workpool from "@convex-dev/workpool/convex.config";
 
 const app = defineApp();
-app.use(counter);
+app.use(workpool);
 
 export default app;

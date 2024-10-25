@@ -8,7 +8,10 @@ export default defineSchema({
     maxParallelism: v.optional(v.number()),
     priority: v.union(v.literal("low"), v.literal("normal"), v.literal("high")),
     parent: v.optional(v.id("pools")),
-  }).index("name", ["name"]),
+    // Between 0 and 100.
+    overallPriority: v.number(),
+  }).index("name", ["parent", "name"])
+  .index("overallPriority", ["overallPriority"]),
   // State across all pools.
   mainLoop: defineTable({
     fn: v.id("_scheduled_functions"),
@@ -22,18 +25,20 @@ export default defineSchema({
   }).index("pool", ["pool"]),
   pendingWork: defineTable({
     pool: v.id("pools"),
-    // Between 0 and 100.
-    priority: v.number(),
+    fnType: v.union(v.literal("action"), v.literal("mutation")),
     handle: v.string(),
     fnArgs: v.any(),
-  }).index("priority", ["priority"]),
+  }).index("pool", ["pool"]),
   inProgressWork: defineTable({
     pool: v.id("pools"),
     running: v.id("_scheduled_functions"),
     handle: v.string(),
-  }).index("pool", ["pool"]),
+    workId: v.id("pendingWork"),
+  }).index("workId", ["workId"]),
   completedWork: defineTable({
     pool: v.id("pools"),
-    result: v.any(),
-  }).index("pool", ["pool"]),
+    result: v.optional(v.any()),
+    error: v.optional(v.string()),
+    workId: v.id("pendingWork"),
+  }).index("workId", ["workId"]),
 });
