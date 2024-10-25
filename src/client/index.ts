@@ -16,12 +16,9 @@ type WorkId<ReturnType> = string & { __returnType: ReturnType };
 
 export class WorkPool {
   constructor(
-    public component: UseApi<typeof api>,
-    public name: string,
-    public options?: {
-      parent?: WorkPool,
-      maxParallelism?: number,
-      priority?: 'low' | 'normal' | 'high',
+    private component: UseApi<typeof api>,
+    private options: {
+      maxParallelism: number,
     }
   ) {}
   async enqueueAction<Args extends DefaultFunctionArgs, ReturnType>(
@@ -32,7 +29,7 @@ export class WorkPool {
     const handle = await createFunctionHandle(fn);
     const id = await ctx.runMutation(this.component.public.enqueue, {
       handle,
-      options: this.poolOptions(),
+      maxParallelism: this.options.maxParallelism,
       fnArgs,
       fnType: "action",
     });
@@ -46,7 +43,7 @@ export class WorkPool {
     const handle = await createFunctionHandle(fn);
     const id = await ctx.runMutation(this.component.public.enqueue, {
       handle,
-      options: this.poolOptions(),
+      maxParallelism: this.options.maxParallelism,
       fnArgs,
       fnType: "mutation",
     });
@@ -73,25 +70,8 @@ export class WorkPool {
       if (Date.now() - start > timeoutMs) {
         throw new Error(`Timeout waiting for result of work ${id}`);
       }
-      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
     }
-  }
-
-  private individualPoolOptions() {
-    return {
-      name: this.name,
-      maxParallelism: this.options?.maxParallelism,
-      priority: this.options?.priority,
-    };
-  }
-  private poolOptions() {
-    const opts = [this.individualPoolOptions()];
-    let parent = this.options?.parent;
-    while (parent) {
-      opts.push(parent.individualPoolOptions());
-      parent = parent.options?.parent;
-    }
-    return opts;
   }
 }
 

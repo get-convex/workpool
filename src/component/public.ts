@@ -1,116 +1,125 @@
-import { Infer, v } from "convex/values";
+import { v } from "convex/values";
 import { DatabaseReader, DatabaseWriter, internalAction, internalMutation, mutation, MutationCtx, query } from "./_generated/server";
-import { FunctionArgs, FunctionHandle, FunctionType } from "convex/server";
-import { Doc, Id } from "./_generated/dataModel";
+import { FunctionHandle } from "convex/server";
+import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
-
-// In order from child to parent.
-const poolOptionsValidator = v.array(v.object({
-  name: v.string(),
-  maxParallelism: v.optional(v.number()),
-  priority: v.optional(v.union(v.literal("low"), v.literal("normal"), v.literal("high"))),
-}));
 
 // Intentionally written so it never contends with any other mutations.
 export const enqueue = mutation({
   args: {
     handle: v.string(),
-    options: poolOptionsValidator,
+    maxParallelism: v.number(),
     fnArgs: v.any(),
     fnType: v.union(v.literal("action"), v.literal("mutation")),
   },
-  returns: v.string(),
-  handler: async (ctx, { handle, options, fnArgs, fnType }) => {
-    const { pool } = await ensurePoolsExist(ctx.db, options);
+  returns: v.id("pendingWork"),
+  handler: async (ctx, { handle, maxParallelism, fnArgs, fnType }) => {
+    await ensurePoolExists(ctx.db, maxParallelism);
     const workId = await ctx.db.insert("pendingWork", {
-      pool,
       handle,
       fnArgs,
       fnType,
     });
-    await ctx.scheduler.runAfter(0, internal.public.runNew);
+    await kickMainLoop(ctx, MAIN_LOOP_DEBOUNCE_MS, true);
     return workId;
   },
 });
 
-export const runNew = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    await kickMainLoop(ctx, true);
-  },
-});
-
-async function getEffectiveMaxParallelism(db: DatabaseReader, poolId: Id<"pools">): Promise<number> {
-  const pool = (await db.get(poolId))!;
-  const individualMaxParallelism = pool.maxParallelism ?? Number.POSITIVE_INFINITY;
-  const parentMaxParallelism = pool.parent ? await getEffectiveMaxParallelism(db, pool.parent) : Number.POSITIVE_INFINITY;
-  return Math.min(individualMaxParallelism, parentMaxParallelism);
+async function getMaxParallelism(db: DatabaseReader): Promise<number> {
+  const pool = (await db.query("pools").unique())!;
+  return pool.maxParallelism;
 }
 
-async function getEffectiveCountInProgress(db: DatabaseReader, poolId: Id<"pools">): Promise<number> {
-  const poolState = (await db.query("poolState").withIndex("pool", (q) => q.eq("pool", poolId)).unique())!;
-  const children = await db.query("pools").withIndex("name", (q) => q.eq("parent", poolId)).collect();
-  const childrenCount = await Promise.all(children.map((child) => getEffectiveCountInProgress(db, child._id)));
-  return poolState.countInProgress + childrenCount.reduce((a, b) => a + b, 0);
+async function getCountInProgress(db: DatabaseReader): Promise<number> {
+  const poolState = (await db.query("poolState").unique())!;
+  return poolState.countInProgress;
 }
 
-async function getPoolState(db: DatabaseReader, poolId: Id<"pools">): Promise<{
+async function getPoolState(db: DatabaseReader): Promise<{
   countInProgress: number;
   maxParallelism: number;
 }> {
   return {
-    countInProgress: await getEffectiveCountInProgress(db, poolId),
-    maxParallelism: await getEffectiveMaxParallelism(db, poolId),
+    countInProgress: await getCountInProgress(db),
+    maxParallelism: await getMaxParallelism(db),
   };
 }
+
+const WORK_TIMEOUT = 10 * 60 * 1000;
 
 // There should only ever be at most one of these scheduled or running.
 // The scheduled one is in the "mainLoop" table.
 export const mainLoop = internalMutation({
   args: {},
   handler: async (ctx) => {
-    for await (const pool of ctx.db.query("pools").withIndex("overallPriority").order("desc")) {
-      const { countInProgress, maxParallelism } = await getPoolState(ctx.db, pool._id);
-      if (countInProgress >= maxParallelism) {
+    const { countInProgress, maxParallelism } = await getPoolState(ctx.db);
+
+    // Move from pendingWork to inProgressWork.
+    const toSchedule = Math.min(maxParallelism - countInProgress, 100);
+    let count = countInProgress;
+    let didSomething = false;
+    const pending = await ctx.db.query("pendingWork").take(toSchedule);
+    for (const work of pending) {
+      let scheduledId: Id<"_scheduled_functions">;
+      if (work.fnType === "action") {
+        await kickMainLoop(ctx, WORK_TIMEOUT, false);
+        scheduledId = await ctx.scheduler.runAfter(0, internal.public.runActionWrapper, {
+          workId: work._id,
+          handle: work.handle,
+          fnArgs: work.fnArgs,
+        });
+      } else {
+        scheduledId = await ctx.scheduler.runAfter(0, internal.public.runMutationWrapper, {
+          workId: work._id,
+          handle: work.handle,
+          fnArgs: work.fnArgs,
+        });
+      }
+      await ctx.db.insert("inProgressWork", {
+        running: scheduledId,
+        workId: work._id,
+      });
+      await ctx.db.delete(work._id);
+      didSomething = true;
+      count++;
+    }
+
+    // Move from pendingCompletion to completedWork, deleting from inProgressWork.
+    const completed = await ctx.db.query("pendingCompletion").take(100);
+    for (const work of completed) {
+      const inProgressWork = await ctx.db.query("inProgressWork").withIndex("workId", (q) => q.eq("workId", work.workId)).unique();
+      if (!inProgressWork) {
         continue;
       }
-      const toSchedule = Math.min(maxParallelism - countInProgress, 100);
-      const pending = await ctx.db.query("pendingWork").withIndex("pool", (q) => q.eq("pool", pool._id)).take(toSchedule);
-      for await (const work of pending) {
-        let scheduledId: Id<"_scheduled_functions">;
-        if (work.fnType === "action") {
-          await ctx.scheduler.runAfter(10 * 60 * 1000, internal.public.actionTimeout, {
-            pool: work.pool,
-            workId: work._id,
-          });
-          scheduledId = await ctx.scheduler.runAfter(0, internal.public.runActionWrapper, {
-            workId: work._id,
-            pool: work.pool,
-            handle: work.handle,
-            fnArgs: work.fnArgs,
-          });
-        } else {
-          scheduledId = await ctx.scheduler.runAfter(0, internal.public.runMutationWrapper, {
-            workId: work._id,
-            pool: work.pool,
-            handle: work.handle,
-            fnArgs: work.fnArgs,
-          });
-        }
-        await ctx.db.insert("inProgressWork", {
-          pool: work.pool,
-          running: scheduledId,
-          handle: work.handle,
-          workId: work._id,
-        });
-        await ctx.db.delete(work._id);
-        const poolState = (await ctx.db.query("poolState").withIndex("pool", (q) => q.eq("pool", work.pool)).unique())!;
-        await ctx.db.patch(poolState._id, { countInProgress: poolState.countInProgress + 1 });
-      }
-      if (toSchedule < maxParallelism - countInProgress) {
-        await kickMainLoop(ctx, false);
-        break;
-      }
+      await ctx.db.delete(inProgressWork._id);
+      await ctx.db.insert("completedWork", {
+        result: work.result,
+        error: work.error,
+        workId: work.workId,
+      });
+      didSomething = true;
+      count--;
+    }
+
+    // Check for timeouts in inProgressWork.
+    const oldInProgress = await ctx.db.query("inProgressWork").withIndex("by_creation_time", q=>q.lt("_creationTime", Date.now() - WORK_TIMEOUT)).collect();
+    for (const work of oldInProgress) {
+      await ctx.scheduler.cancel(work.running);
+      await ctx.db.delete(work._id);
+      await ctx.db.insert("completedWork", {
+        error: "Timeout",
+        workId: work.workId,
+      });
+      didSomething = true;
+      count--;
+    }
+
+    if (didSomething) {
+      const poolState = (await ctx.db.query("poolState").unique())!;
+      await ctx.db.patch(poolState._id, { countInProgress: count });
+
+      // There might be more to do.
+      await kickMainLoop(ctx, MAIN_LOOP_DEBOUNCE_MS, false);
     }
   }
 });
@@ -118,47 +127,23 @@ export const mainLoop = internalMutation({
 export const runActionWrapper = internalAction({
   args: {
     workId: v.id("pendingWork"),
-    pool: v.id("pools"),
     handle: v.string(),
     fnArgs: v.any(),
   },
-  handler: async (ctx, { pool, workId, handle: handleStr, fnArgs }) => {
+  handler: async (ctx, { workId, handle: handleStr, fnArgs }) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handle = handleStr as FunctionHandle<'action', any, any>;
     try {
       const retval = await ctx.runAction(handle, fnArgs);
-      await ctx.runMutation(internal.public.saveResult, { pool, workId, result: retval });
+      await ctx.runMutation(internal.public.saveResult, { workId, result: retval });
     } catch (e: unknown) {
-      await ctx.runMutation(internal.public.saveResult, { pool, workId, error: (e as Error).message });
+      await ctx.runMutation(internal.public.saveResult, { workId, error: (e as Error).message });
     }
   },
-});
-
-export const actionTimeout = internalMutation({
-  args: {
-    workId: v.id("pendingWork"),
-    pool: v.id("pools"),
-  },
-  handler: async (ctx, { pool, workId }) => {
-    const work = await ctx.db.query("inProgressWork").withIndex("workId", (q) => q.eq("workId", workId)).unique();
-    if (work) {
-      await ctx.scheduler.cancel(work.running);
-      await ctx.db.delete(work._id);
-      await ctx.db.insert("completedWork", {
-        pool,
-        error: "Timeout",
-        workId,
-      });
-      const poolState = (await ctx.db.query("poolState").withIndex("pool", (q) => q.eq("pool", pool)).unique())!;
-      await ctx.db.patch(poolState._id, { countInProgress: poolState.countInProgress - 1 });
-      await kickMainLoop(ctx, true);
-    }
-  }
 });
 
 export const saveResult = internalMutation({
   args: {
-    pool: v.id("pools"),
     workId: v.id("pendingWork"),
     result: v.optional(v.any()),
     error: v.optional(v.string()),
@@ -166,65 +151,60 @@ export const saveResult = internalMutation({
   handler: saveResultHandler,
 });
 
-async function saveResultHandler(ctx: MutationCtx, { pool, workId, result, error }: {
-  pool: Id<"pools">,
+async function saveResultHandler(ctx: MutationCtx, { workId, result, error }: {
   workId: Id<"pendingWork">,
   result?: unknown,
   error?: string,
 }): Promise<void> {
-  const inProgressWork = await ctx.db.query("inProgressWork").withIndex("workId", (q) => q.eq("workId", workId)).unique();
-  if (!inProgressWork) {
-    return;
-  }
-  await ctx.db.delete(inProgressWork._id);
-  await ctx.db.insert("completedWork", {
-    pool,
+  await ctx.db.insert("pendingCompletion", {
     result,
     error,
     workId,
   });
-  await ctx.scheduler.runAfter(0, internal.public.decrementInProgress, { pool });
+  await kickMainLoop(ctx, MAIN_LOOP_DEBOUNCE_MS, false);
 }
-
-export const decrementInProgress = internalMutation({
-  args: {
-    pool: v.id("pools"),
-  },
-  handler: async (ctx, { pool }) => {
-    const poolState = (await ctx.db.query("poolState").withIndex("pool", (q) => q.eq("pool", pool)).unique())!;
-    await ctx.db.patch(poolState._id, { countInProgress: poolState.countInProgress - 1 });
-    await kickMainLoop(ctx, true);
-  },
-});
 
 export const runMutationWrapper = internalMutation({
   args: {
     workId: v.id("pendingWork"),
-    pool: v.id("pools"),
     handle: v.string(),
     fnArgs: v.any(),
   },
-  handler: async (ctx, { pool, workId, handle: handleStr, fnArgs }) => {
+  handler: async (ctx, { workId, handle: handleStr, fnArgs }) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handle = handleStr as FunctionHandle<'mutation', any, any>;
     try {
       const retval = await ctx.runMutation(handle, fnArgs);
-      await saveResultHandler(ctx, { pool, workId, result: retval });
+      await saveResultHandler(ctx, { workId, result: retval });
     } catch (e: unknown) {
-      await saveResultHandler(ctx, { pool, workId, error: (e as Error).message });
+      await saveResultHandler(ctx, { workId, error: (e as Error).message });
     }
   }
 });
 
-async function kickMainLoop(ctx: MutationCtx, cancelExisting: boolean): Promise<void> {
-  const fn = await ctx.scheduler.runAfter(0, internal.public.mainLoop, {});
+const MAIN_LOOP_DEBOUNCE_MS = 50;
+
+async function kickMainLoop(ctx: MutationCtx, delay: number, cancelExisting: boolean): Promise<void> {
   const mainLoop = await ctx.db.query("mainLoop").unique();
   if (mainLoop) {
-    if (cancelExisting) {
-      await ctx.scheduler.cancel(mainLoop.fn);
+    const existingFn = await ctx.db.system.get(mainLoop.fn);
+    if (existingFn === null || existingFn.completedTime) {
+      // mainLoop stopped, so we restart it.
+      const fn = await ctx.scheduler.runAfter(delay, internal.public.mainLoop, {});
+      await ctx.db.patch(mainLoop._id, { fn });
+    } else if (existingFn.scheduledTime < Date.now() + delay) {
+      // mainLoop will run soon anyway, so we don't need to kick it.
+      return;
+    } else {
+      // mainLoop is scheduled to run later, so we should cancel it and reschedule.
+      if (cancelExisting) {
+        await ctx.scheduler.cancel(mainLoop.fn);
+      }
+      const fn = await ctx.scheduler.runAfter(delay, internal.public.mainLoop, {});
+      await ctx.db.patch(mainLoop._id, { fn });
     }
-    await ctx.db.patch(mainLoop._id, { fn });
   } else {
+    const fn = await ctx.scheduler.runAfter(delay, internal.public.mainLoop, {});
     await ctx.db.insert("mainLoop", { fn });
   }
 }
@@ -249,68 +229,17 @@ export const result = query({
   },
 });
 
-async function ensurePoolsExist(
+async function ensurePoolExists(
   db: DatabaseWriter,
-  options: Infer<typeof poolOptionsValidator>,
-): Promise<{
-  pool: Id<"pools">,
-}> {
-  if (options.length === 0) {
-    throw new Error("Must have at least one pool");
+  maxParallelism: number,
+) {
+  const pool = await db.query("pools").unique();
+  if (!pool) {
+    await db.insert("pools", {
+      maxParallelism,
+    });
+    await db.insert("poolState", {
+      countInProgress: 0,
+    });
   }
-  options.reverse();
-  let parent: Id<"pools"> | undefined = undefined;
-  let minPriority = 0;
-  let maxPriority = 100;
-  for (const poolOptions of options) {
-    const priorityOption = poolOptions.priority ?? "normal";
-    const firstThird = Math.floor((2 * minPriority + maxPriority) / 3);
-    const secondThird = Math.ceil((minPriority + 2 * maxPriority) / 3);
-    switch (priorityOption) {
-      case "low":
-        maxPriority = firstThird;
-        break;
-      case "normal":
-        minPriority = firstThird;
-        maxPriority = secondThird;
-        break;
-      case "high":
-        minPriority = secondThird;
-        break;
-    }
-    const overallPriority = Math.round((minPriority + maxPriority) / 2);
-
-    const pool = await db
-      .query("pools")
-      .withIndex("name", (q) => q.eq("parent", parent).eq("name", poolOptions.name))
-      .unique();
-    if (pool) {
-      if (poolOptions.maxParallelism !== pool?.maxParallelism) {
-        await db.patch(pool._id, { maxParallelism: poolOptions.maxParallelism });
-      }
-      if (priorityOption !== pool?.priority) {
-        await db.patch(pool._id, { priority: priorityOption });
-      }
-      if (pool.parent !== parent) {
-        await db.patch(pool._id, { parent });
-      }
-      if (pool.overallPriority !== overallPriority) {
-        await db.patch(pool._id, { overallPriority });
-      }
-      parent = pool._id;
-    } else {
-      const id: Id<"pools"> = await db.insert("pools", {
-        name: poolOptions.name,
-        maxParallelism: poolOptions.maxParallelism,
-        priority: priorityOption,
-        parent,
-        overallPriority,
-      });
-      await db.insert("poolState", { pool: id, countInProgress: 0 });
-      parent = id;
-    }
-  }
-  return {
-    pool: parent!,
-  };
 }

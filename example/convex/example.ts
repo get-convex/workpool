@@ -2,7 +2,7 @@ import { internalMutation, query, mutation, action } from "./_generated/server";
 import { api, components } from "./_generated/api";
 import { WorkPool } from "@convex-dev/workpool";
 
-const pool = new WorkPool(components.workpool, "example", { maxParallelism: 3 });
+const pool = new WorkPool(components.workpool, { maxParallelism: 3 });
 
 export const addMutation = mutation({
   args: {},

@@ -49,11 +49,7 @@ export declare const components: {
           fnArgs: any;
           fnType: "action" | "mutation";
           handle: string;
-          options: Array<{
-            maxParallelism?: number;
-            name: string;
-            priority?: "low" | "normal" | "high";
-          }>;
+          maxParallelism: number;
         },
         string
       >;
