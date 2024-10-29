@@ -23,7 +23,7 @@ export const addAction = action({
 export const enqueueABunchOfMutations = mutation({
   args: {},
   handler: async (ctx, _args) => {
-    for (let i = 0; i < 500; i++) {
+    for (let i = 0; i < 30; i++) {
       await pool.enqueueMutation(ctx, api.example.addMutation, {});
     }
   },
@@ -32,7 +32,7 @@ export const enqueueABunchOfMutations = mutation({
 export const enqueueABunchOfActions = mutation({
   args: {},
   handler: async (ctx, _args) => {
-    for (let i = 0; i < 500; i++) {
+    for (let i = 0; i < 30; i++) {
       await pool.enqueueAction(ctx, api.example.addAction, {});
     }
   },

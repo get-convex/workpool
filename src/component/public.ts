@@ -4,7 +4,6 @@ import { FunctionHandle } from "convex/server";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 
-// Intentionally written so it never contends with any other mutations.
 export const enqueue = mutation({
   args: {
     handle: v.string(),
@@ -20,7 +19,7 @@ export const enqueue = mutation({
       fnArgs,
       fnType,
     });
-    await kickMainLoop(ctx, MAIN_LOOP_DEBOUNCE_MS, true);
+    await kickMainLoop(ctx, MAIN_LOOP_DEBOUNCE_MS, false);
     return workId;
   },
 });
@@ -59,10 +58,11 @@ export const mainLoop = internalMutation({
     let count = countInProgress;
     let didSomething = false;
     const pending = await ctx.db.query("pendingWork").take(toSchedule);
+    console.trace(`mainLoop scheduling ${pending.length} work items`);
     for (const work of pending) {
       let scheduledId: Id<"_scheduled_functions">;
       if (work.fnType === "action") {
-        await kickMainLoop(ctx, WORK_TIMEOUT, false);
+        await kickMainLoop(ctx, WORK_TIMEOUT, true);
         scheduledId = await ctx.scheduler.runAfter(0, internal.public.runActionWrapper, {
           workId: work._id,
           handle: work.handle,
@@ -86,12 +86,13 @@ export const mainLoop = internalMutation({
 
     // Move from pendingCompletion to completedWork, deleting from inProgressWork.
     const completed = await ctx.db.query("pendingCompletion").take(100);
+    console.log(`mainLoop completing ${completed.length} work items`);
     for (const work of completed) {
       const inProgressWork = await ctx.db.query("inProgressWork").withIndex("workId", (q) => q.eq("workId", work.workId)).unique();
-      if (!inProgressWork) {
-        continue;
+      if (inProgressWork) {
+        await ctx.db.delete(inProgressWork._id);
       }
-      await ctx.db.delete(inProgressWork._id);
+      await ctx.db.delete(work._id);
       await ctx.db.insert("completedWork", {
         result: work.result,
         error: work.error,
@@ -115,11 +116,12 @@ export const mainLoop = internalMutation({
     }
 
     if (didSomething) {
+      console.log(`mainLoop did something, count=${count}`);
       const poolState = (await ctx.db.query("poolState").unique())!;
       await ctx.db.patch(poolState._id, { countInProgress: count });
 
       // There might be more to do.
-      await kickMainLoop(ctx, MAIN_LOOP_DEBOUNCE_MS, false);
+      await kickMainLoop(ctx, MAIN_LOOP_DEBOUNCE_MS, true);
     }
   }
 });
@@ -184,7 +186,7 @@ export const runMutationWrapper = internalMutation({
 
 const MAIN_LOOP_DEBOUNCE_MS = 50;
 
-async function kickMainLoop(ctx: MutationCtx, delay: number, cancelExisting: boolean): Promise<void> {
+async function kickMainLoop(ctx: MutationCtx, delay: number, isCurrentlyExecuting: boolean): Promise<void> {
   const mainLoop = await ctx.db.query("mainLoop").unique();
   if (mainLoop) {
     const existingFn = await ctx.db.system.get(mainLoop.fn);
@@ -192,18 +194,22 @@ async function kickMainLoop(ctx: MutationCtx, delay: number, cancelExisting: boo
       // mainLoop stopped, so we restart it.
       const fn = await ctx.scheduler.runAfter(delay, internal.public.mainLoop, {});
       await ctx.db.patch(mainLoop._id, { fn });
-    } else if (existingFn.scheduledTime < Date.now() + delay) {
+      console.log("mainLoop stopped, so we restarted it");
+    } else if (!isCurrentlyExecuting && existingFn.scheduledTime < Date.now() + delay) {
       // mainLoop will run soon anyway, so we don't need to kick it.
+      // console.trace("mainLoop already scheduled to run soon");
       return;
     } else {
       // mainLoop is scheduled to run later, so we should cancel it and reschedule.
-      if (cancelExisting) {
+      if (!isCurrentlyExecuting) {
         await ctx.scheduler.cancel(mainLoop.fn);
       }
       const fn = await ctx.scheduler.runAfter(delay, internal.public.mainLoop, {});
       await ctx.db.patch(mainLoop._id, { fn });
+      console.log("mainLoop was scheduled later, so reschedule it to run sooner");
     }
   } else {
+    console.log("starting mainLoop");
     const fn = await ctx.scheduler.runAfter(delay, internal.public.mainLoop, {});
     await ctx.db.insert("mainLoop", { fn });
   }
@@ -217,7 +223,9 @@ export const result = query({
     result: v.optional(v.any()),
   }),
   handler: async (ctx, { id }) => {
-    const completedWork = await ctx.db.query("completedWork").withIndex("workId", (q) => q.eq("workId", id)).unique();
+    const completedWork = await ctx.db.query("completedWork")
+      .withIndex("workId", (q) => q.eq("workId", id))
+      .unique();
     if (completedWork) {
       if (completedWork.error) {
         throw new Error(completedWork.error);
