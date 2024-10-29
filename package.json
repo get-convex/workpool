@@ -26,7 +26,10 @@
     "typecheck": "tsc --noEmit",
     "prepare": "npm run build",
     "prepack": "node node10stubs.mjs",
-    "postpack": "node node10stubs.mjs --cleanup"
+    "postpack": "node node10stubs.mjs --cleanup",
+    "test": "vitest run",
+    "test:debug": "vitest --inspect-brk --no-file-parallelism",
+    "test:coverage": "vitest run --coverage --coverage.reporter=text"
   },
   "files": [
     "dist",
@@ -55,8 +58,8 @@
       }
     }
   },
-  "dependencies": {
-    "convex": "^1.16.2"
+  "peerDependencies": {
+    "convex": "^1.17.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.1",
@@ -65,7 +68,8 @@
     "globals": "^15.9.0",
     "prettier": "3.2.5",
     "typescript": "~5.0.3",
-    "typescript-eslint": "^8.4.0"
+    "typescript-eslint": "^8.4.0",
+    "vitest": "^2.1.4"
   },
   "main": "./dist/commonjs/client/index.js",
   "types": "./dist/commonjs/client/index.d.ts",

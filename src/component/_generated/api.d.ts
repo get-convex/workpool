@@ -30,22 +30,27 @@ declare const fullApi: ApiFromModules<{
 }>;
 export type Mounts = {
   public: {
+    cancel: FunctionReference<"mutation", "public", { id: string }, any>;
     enqueue: FunctionReference<
       "mutation",
       "public",
       {
         fnArgs: any;
-        fnType: "action" | "mutation";
+        fnType: "action" | "mutation" | "unknown";
         handle: string;
         maxParallelism: number;
+        runAtTime: number;
       },
       string
     >;
-    result: FunctionReference<
+    status: FunctionReference<
       "query",
       "public",
       { id: string },
-      { result?: any }
+      | { kind: "pending" }
+      | { kind: "inProgress" }
+      | { kind: "success"; result: any }
+      | { error: string; kind: "error" }
     >;
   };
 };

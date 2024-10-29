@@ -8,22 +8,18 @@ export default defineSchema({
   }),
   // State across all pools.
   mainLoop: defineTable({
-    fn: v.id("_scheduled_functions"),
-  }),
-  // State for the whole pool.
-  // We could use a sharded counter, but that doesn't help much because we have
-  // to accumulate the total count anyway, which serializes all the writes.
-  poolState: defineTable({
-    countInProgress: v.number(),
+    fn: v.optional(v.id("_scheduled_functions")),
+    generation: v.number(),
   }),
 
   // Client appends to this table to enqueue work.
   // The main loop pops from the front (low _creationTime) to process.
   pendingWork: defineTable({
-    fnType: v.union(v.literal("action"), v.literal("mutation")),
+    fnType: v.union(v.literal("action"), v.literal("mutation"), v.literal("unknown")),
     handle: v.string(),
     fnArgs: v.any(),
-  }),
+    runAtTime: v.number(),
+  }).index("runAtTime", ["runAtTime"]),
   // Completely read and written by the main loop.
   inProgressWork: defineTable({
     running: v.id("_scheduled_functions"),
@@ -37,6 +33,9 @@ export default defineSchema({
     error: v.optional(v.string()),
     workId: v.id("pendingWork"),
   }).index("workId", ["workId"]),
+  pendingCancelation: defineTable({
+    workId: v.id("pendingWork"),
+  }),
   // Inserted here by the main loop.
   completedWork: defineTable({
     result: v.optional(v.any()),

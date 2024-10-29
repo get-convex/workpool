@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import {
   createFunctionHandle,
   DefaultFunctionArgs,
@@ -12,7 +13,7 @@ import {
 import { GenericId } from "convex/values";
 import { api } from "../component/_generated/api";
 
-type WorkId<ReturnType> = string & { __returnType: ReturnType };
+export type WorkId<ReturnType> = string & { __returnType: ReturnType };
 
 export class WorkPool {
   constructor(
@@ -32,6 +33,7 @@ export class WorkPool {
       maxParallelism: this.options.maxParallelism,
       fnArgs,
       fnType: "action",
+      runAtTime: Date.now(),
     });
     return id as WorkId<ReturnType>;
   }
@@ -46,15 +48,49 @@ export class WorkPool {
       maxParallelism: this.options.maxParallelism,
       fnArgs,
       fnType: "mutation",
+      runAtTime: Date.now(),
     });
     return id as WorkId<ReturnType>;
+  }
+  async enqueueUnknown<Args extends DefaultFunctionArgs>(
+    ctx: RunMutationCtx,
+    fn: FunctionReference<'action' | 'mutation', FunctionVisibility, Args, null>,
+    fnArgs: Args,
+    runAtTime: number,
+  ): Promise<WorkId<null>> {
+    const handle = await createFunctionHandle(fn);
+    const id = await ctx.runMutation(this.component.public.enqueue, {
+      handle,
+      maxParallelism: this.options.maxParallelism,
+      fnArgs,
+      fnType: 'unknown',
+      runAtTime,
+    });
+    return id as WorkId<null>;
+  }
+  async cancel(ctx: RunMutationCtx, id: WorkId<any>): Promise<void> {
+    await ctx.runMutation(this.component.public.cancel, { id });
+  }
+  async status<ReturnType>(
+    ctx: RunQueryCtx,
+    id: WorkId<ReturnType>,
+  ): Promise<
+    { kind: "pending" } | { kind: "inProgress" } | { kind: "success", result: ReturnType } | { kind: "error", error: string }
+  > {
+    return await ctx.runQuery(this.component.public.status, { id });
   }
   async tryResult<ReturnType>(
     ctx: RunQueryCtx,
     id: WorkId<ReturnType>,
   ): Promise<ReturnType | undefined> {
-    const { result } = await ctx.runQuery(this.component.public.result, { id });
-    return result;
+    const status = await this.status(ctx, id);
+    if (status.kind === "success") {
+      return status.result;
+    }
+    if (status.kind === "error") {
+      throw new Error(status.error);
+    }
+    return undefined;
   }
   async pollResult<ReturnType>(
     ctx: RunQueryCtx & RunActionCtx,
@@ -63,7 +99,7 @@ export class WorkPool {
   ): Promise<ReturnType> {
     const start = Date.now();
     while (true) {
-      const { result } = await ctx.runQuery(this.component.public.result, { id });
+      const result = await this.tryResult(ctx, id);
       if (result !== undefined) {
         return result;
       }
@@ -72,6 +108,31 @@ export class WorkPool {
       }
       await new Promise<void>((resolve) => setTimeout(resolve, 50));
     }
+  }
+  ctx<DataModel extends GenericDataModel>(
+    ctx: Pick<GenericActionCtx<DataModel>, 'runAction' | 'runMutation' | 'runQuery'>,
+  ): Pick<GenericActionCtx<DataModel>, 'runAction' | 'runMutation' | 'scheduler'> {
+    return {
+      runAction: (async (action: any, args: any) => {
+        const workId = await this.enqueueAction(ctx, action, args);
+        return this.pollResult(ctx, workId, 30*1000);
+      }) as any,
+      runMutation: (async (mutation: any, args: any) => {
+        const workId = await this.enqueueMutation(ctx, mutation, args);
+        return this.pollResult(ctx, workId, 30*1000);
+      }) as any,
+      scheduler: {
+        runAfter: async (delay: number, fn: any, args: any) => {
+          await this.enqueueUnknown(ctx, fn, args, Date.now() + delay);
+        },
+        runAt: async (time: number, fn: any, args: any) => {
+          await this.enqueueUnknown(ctx, fn, args, time);
+        },
+        cancel: async (id: any) => {
+          await this.cancel(ctx, id);
+        }
+      } as any,
+    };
   }
 }
 
