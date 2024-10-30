@@ -105,7 +105,11 @@ export const mainLoop = internalMutation({
     if (loopDoc) {
       await ctx.db.patch(loopDoc._id, { generation: args.generation + 1 });
     } else {
-      await ctx.db.insert("mainLoop", { generation: args.generation + 1 });
+      await ctx.db.insert("mainLoop", {
+        generation: args.generation + 1,
+        // Don't know when it will next run. This will get patched later.
+        runAtTime: Number.POSITIVE_INFINITY,
+      });
     }
 
     const { maxParallelism, debounceMs } = await getOptions(ctx.db);
@@ -325,35 +329,53 @@ export const runMutationWrapper = internalMutation({
   }
 });
 
+export const startMainLoop = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const mainLoop = await ctx.db.query("mainLoop").unique();
+    if (!mainLoop) {
+      (await console(ctx)).debug("starting mainLoop");
+      const fn = await ctx.scheduler.runAfter(0, internal.public.mainLoop, { generation: 0 });
+      await ctx.db.insert("mainLoop", { fn, generation: 0, runAtTime: Date.now() });
+      return;
+    }
+    const existingFn = mainLoop.fn ? await ctx.db.system.get(mainLoop.fn) : null;
+    if (existingFn === null || existingFn.completedTime) {
+      // mainLoop stopped, so we restart it.
+      const fn = await ctx.scheduler.runAfter(0, internal.public.mainLoop, { generation: mainLoop.generation });
+      await ctx.db.patch(mainLoop._id, { fn });
+      (await console(ctx)).debug("mainLoop stopped, so we restarted it");
+    }
+  },
+});
+
 async function kickMainLoop(ctx: MutationCtx, delayMs: number, isCurrentlyExecuting: boolean): Promise<void> {
   const { debounceMs } = await getOptions(ctx.db);
   const delay = Math.max(delayMs, debounceMs);
-  const mainLoop = await ctx.db.query("mainLoop").unique();
+  const runAtTime = Date.now() + delay;
+  // Look for mainLoop documents that we want to reschedule.
+  // If we're currently running mainLoop, we definitely want to reschedule.
+  // Otherwise, only reschedule if the new runAtTime is earlier than the existing one.
+  const mainLoop = await ctx.db.query("mainLoop").withIndex("runAtTime", q => {
+    if (isCurrentlyExecuting) return q;
+    else return q.gt("runAtTime", runAtTime)
+  }).unique();
   if (!mainLoop) {
-    (await console(ctx)).debug("starting mainLoop");
-    const fn = await ctx.scheduler.runAfter(delay, internal.public.mainLoop, { generation: 0 });
-    await ctx.db.insert("mainLoop", { fn, generation: 0 });
+    // Two possibilities:
+    // 1. There is no main loop, in which case `startMainLoop` needs to be called.
+    // 2. The main loop is scheduled to run soon, so we don't need to do anything.
+    // Unfortunately, we can't tell the difference between those cases without taking
+    // a read dependency on soon-to-be-run mainLoop documents, so we assume the latter.
+    (await console(ctx)).debug("mainLoop already scheduled to run soon (or doesn't exist, in which case you should call `startMainLoop`)");
     return;
   }
-  const existingFn = mainLoop.fn ? await ctx.db.system.get(mainLoop.fn) : null;
-  if (existingFn === null || existingFn.completedTime) {
-    // mainLoop stopped, so we restart it.
-    const fn = await ctx.scheduler.runAfter(delay, internal.public.mainLoop, { generation: mainLoop.generation });
-    await ctx.db.patch(mainLoop._id, { fn });
-    (await console(ctx)).debug("mainLoop stopped, so we restarted it");
-  } else if (!isCurrentlyExecuting && existingFn.scheduledTime < Date.now() + delay) {
-    // mainLoop will run soon anyway, so we don't need to kick it.
-    // console.trace("mainLoop already scheduled to run soon");
-    return;
-  } else {
-    // mainLoop is scheduled to run later, so we should cancel it and reschedule.
-    if (!isCurrentlyExecuting && mainLoop.fn) {
-      await ctx.scheduler.cancel(mainLoop.fn);
-    }
-    const fn = await ctx.scheduler.runAfter(delay, internal.public.mainLoop, { generation: mainLoop.generation });
-    await ctx.db.patch(mainLoop._id, { fn });
-    (await console(ctx)).debug("mainLoop was scheduled later, so reschedule it to run sooner");
+  // mainLoop is scheduled to run later, so we should cancel it and reschedule.
+  if (!isCurrentlyExecuting && mainLoop.fn) {
+    await ctx.scheduler.cancel(mainLoop.fn);
   }
+  const fn = await ctx.scheduler.runAt(runAtTime, internal.public.mainLoop, { generation: mainLoop.generation });
+  await ctx.db.patch(mainLoop._id, { fn, runAtTime });
+  (await console(ctx)).debug("mainLoop was scheduled later, so reschedule it to run sooner");
 }
 
 export const status = query({

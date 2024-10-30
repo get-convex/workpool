@@ -52,7 +52,8 @@ export default defineSchema({
   mainLoop: defineTable({
     fn: v.optional(v.id("_scheduled_functions")),
     generation: v.number(),
-  }),
+    runAtTime: v.number(),
+  }).index("runAtTime", ["runAtTime"]),
 
   pendingWork: defineTable({
     fnType: v.union(v.literal("action"), v.literal("mutation"), v.literal("unknown")),
