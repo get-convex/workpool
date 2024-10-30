@@ -95,6 +95,7 @@ export const mainLoop = internalMutation({
     generation: v.number(),
   },
   handler: async (ctx, args) => {
+    const console_ = await console(ctx);
 
     // Make sure mainLoop is serialized.
     const loopDoc = await ctx.db.query("mainLoop").unique();
@@ -114,17 +115,22 @@ export const mainLoop = internalMutation({
 
     const { maxParallelism, debounceMs } = await getOptions(ctx.db);
 
+    console_.time("inProgress count");
     // This is the only function reading and writing inProgressWork,
     // and it's bounded by MAX_POSSIBLE_PARALLELISM, so we can
     // read it all into memory.
     const inProgressBefore = await ctx.db.query("inProgressWork").collect();
+    console_.debug(`${inProgressBefore.length} in progress`);
+    console_.timeEnd("inProgress count");
 
     // Move from pendingWork to inProgressWork.
+    console_.time("pendingWork");
     const toSchedule = Math.min(maxParallelism - inProgressBefore.length, BATCH_SIZE);
     let didSomething = false;
     const pending = await ctx.db.query("pendingWork")
       .withIndex("runAtTime", q=>q.lte("runAtTime", Date.now()))
       .take(toSchedule);
+    console_.debug(`scheduling ${pending.length} pending work`);
     await Promise.all(pending.map(async (work) => {
       const { scheduledId, timeoutMs } = await beginWork(ctx, work);
       await ctx.db.insert("inProgressWork", {
@@ -135,11 +141,14 @@ export const mainLoop = internalMutation({
       await ctx.db.delete(work._id);
       didSomething = true;
     }));
+    console_.timeEnd("pendingWork");
 
     // Move from pendingCompletion to completedWork, deleting from inProgressWork.
     // We could do all of these, but we don't want to OCC with work completing,
     // so we only do a few at a time.
+    console_.time("pendingCompletion");
     const completed = await ctx.db.query("pendingCompletion").take(BATCH_SIZE);
+    console_.debug(`completing ${completed.length}`);
     await Promise.all(completed.map(async (work) => {
       const inProgressWork = await ctx.db.query("inProgressWork").withIndex("workId", (q) => q.eq("workId", work.workId)).unique();
       if (inProgressWork) {
@@ -153,8 +162,11 @@ export const mainLoop = internalMutation({
       });
       didSomething = true;
     }));
+    console_.timeEnd("pendingCompletion");
 
+    console_.time("pendingCancelation");
     const canceled = await ctx.db.query("pendingCancelation").take(BATCH_SIZE);
+    console_.debug(`canceling ${canceled.length}`);
     await Promise.all(canceled.map(async (work) => {
       const inProgressWork = await ctx.db.query("inProgressWork").withIndex("workId", (q) => q.eq("workId", work.workId)).unique();
       if (inProgressWork) {
@@ -168,8 +180,10 @@ export const mainLoop = internalMutation({
       await ctx.db.delete(work._id);
       didSomething = true;
     }));
+    console_.timeEnd("pendingCancelation");
 
     if (completed.length === 0) {
+      console_.time("inProgressWork check for unclean exits");
       // If all completions are handled, check everything in inProgressWork.
       // This will find everything that timed out, failed ungracefully, was
       // cancelled, or succeeded without a return value.
@@ -177,7 +191,7 @@ export const mainLoop = internalMutation({
       await Promise.all(inProgress.map(async (work) => {
         const result = await checkInProgressWork(ctx, work);
         if (result !== null) {
-          (await console(ctx)).debug("inProgressWork finished uncleanly", work.workId, result);
+          console_.debug("inProgressWork finished uncleanly", work.workId, result);
           await ctx.db.delete(work._id);
           await ctx.db.insert("completedWork", {
             workId: work.workId,
@@ -186,8 +200,10 @@ export const mainLoop = internalMutation({
           didSomething = true;
         }
       }));
+      console_.timeEnd("inProgressWork check for unclean exits");
     }
 
+    console_.time("kickMainLoop");
     if (didSomething) {
       // There might be more to do.
       await kickMainLoop(ctx, debounceMs, true);
@@ -204,6 +220,7 @@ export const mainLoop = internalMutation({
       const nextTime = Math.min(nextPendingTime, nextInProgress);
       await kickMainLoop(ctx, nextTime - Date.now(), true);
     }
+    console_.timeEnd("kickMainLoop");
   }
 });
 
