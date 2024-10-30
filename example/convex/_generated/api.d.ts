@@ -41,6 +41,12 @@ export declare const components: {
   workpool: {
     public: {
       cancel: FunctionReference<"mutation", "internal", { id: string }, any>;
+      cleanup: FunctionReference<
+        "mutation",
+        "internal",
+        { maxAgeMs: number },
+        any
+      >;
       enqueue: FunctionReference<
         "mutation",
         "internal",
@@ -50,8 +56,10 @@ export declare const components: {
           handle: string;
           options: {
             actionTimeoutMs?: number;
+            completedWorkMaxAgeMs?: number;
             debounceMs?: number;
             fastHeartbeatMs?: number;
+            logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
             maxParallelism: number;
             mutationTimeoutMs?: number;
             slowHeartbeatMs?: number;

@@ -12,6 +12,7 @@ import {
 } from "convex/server";
 import { GenericId } from "convex/values";
 import { api } from "../component/_generated/api";
+import { LogLevel } from "../component/logging";
 
 export type WorkId<ReturnType> = string & { __returnType: ReturnType };
 
@@ -19,18 +20,41 @@ export class WorkPool {
   constructor(
     private component: UseApi<typeof api>,
     private options: {
+      // How many actions/mutations can be running at once within this pool.
+      // Min 1, Max 300.
       maxParallelism: number,
+      // How long an action can run before the pool considers it to be timed out.
+      // The action itself might time out earlier.
+      // Default 15 minutes.
       actionTimeoutMs?: number,
+      // How long a mutation can run before the pool considers it to be timed out.
+      // The mutation itself might time out earlier.
+      // Default 30 seconds.
       mutationTimeoutMs?: number,
+      // How long a function started by `enqueueUnknown` or `runAt` or `runAfter`
+      // can run before the pool considers it to be timed out.
+      // The function itself might time out earlier.
+      // Default 15 minutes.
       unknownTimeoutMs?: number,
       // When there is something to do, wait this long between loop iterations,
       // to allow more work to accumulate.
+      // Default 50ms.
       debounceMs?: number,
-      // When something is happening, wait this long to check if anything has
+      // When something is running, wait this long to check if anything has
       // been canceled or failed unexpectedly.
+      // Default 10s.
       fastHeartbeatMs?: number,
-      // When nothing is happening, wait this long to check if there is new work.
+      // When nothing is happening, wait this long to check if there is new work
+      // that we missed.
+      // Default 2 hours.
       slowHeartbeatMs?: number,
+      // How much to log.
+      // Default WARN.
+      logLevel?: LogLevel,
+      // How long to keep completed work in the database, for access by `status`,
+      // `tryResult`, and `pollResult`.
+      // Default 1 day.
+      completedWorkMaxAgeMs?: number,
     }
   ) {}
   async enqueueAction<Args extends DefaultFunctionArgs, ReturnType>(

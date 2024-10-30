@@ -3,7 +3,12 @@ import { api, components } from "./_generated/api";
 import { WorkId, WorkPool } from "@convex-dev/workpool";
 import { v } from "convex/values";
 
-const pool = new WorkPool(components.workpool, { maxParallelism: 3 });
+const pool = new WorkPool(components.workpool, { 
+  maxParallelism: 3,
+  completedWorkMaxAgeMs: 60 * 1000,
+  logLevel: "DEBUG",
+  debounceMs: 500,
+});
 
 export const addMutation = mutation({
   args: { data: v.optional(v.number()) },

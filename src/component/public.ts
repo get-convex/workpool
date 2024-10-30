@@ -1,8 +1,13 @@
 import { v } from "convex/values";
-import { DatabaseReader, DatabaseWriter, internalAction, internalMutation, mutation, MutationCtx, query } from "./_generated/server";
+import { DatabaseReader, internalAction, internalMutation, mutation, MutationCtx, query, QueryCtx } from "./_generated/server";
 import { FunctionHandle } from "convex/server";
 import { Doc, Id } from "./_generated/dataModel";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
+import { createLogger, logLevel, LogLevel } from "./logging";
+import { components } from "./_generated/api";
+import { Crons } from "@convex-dev/crons";
+
+const crons = new Crons(components.crons);
 
 export const enqueue = mutation({
   args: {
@@ -15,6 +20,8 @@ export const enqueue = mutation({
       debounceMs: v.optional(v.number()),
       fastHeartbeatMs: v.optional(v.number()),
       slowHeartbeatMs: v.optional(v.number()),
+      logLevel: v.optional(logLevel),
+      completedWorkMaxAgeMs: v.optional(v.number()),
     }),
     fnArgs: v.any(),
     fnType: v.union(v.literal("action"), v.literal("mutation"), v.literal("unknown")),
@@ -24,7 +31,7 @@ export const enqueue = mutation({
   handler: async (ctx, { handle, options, fnArgs, fnType, runAtTime }) => {
     const debounceMs = options.debounceMs ?? 50;
     await ensurePoolExists(
-      ctx.db,
+      ctx,
       {
         maxParallelism: options.maxParallelism,
         actionTimeoutMs: options.actionTimeoutMs ?? 15 * 60 * 1000,
@@ -33,6 +40,8 @@ export const enqueue = mutation({
         debounceMs,
         fastHeartbeatMs: options.fastHeartbeatMs ?? 10 * 1000,
         slowHeartbeatMs: options.slowHeartbeatMs ?? 2 * 60 * 60 * 1000,
+        completedWorkMaxAgeMs: options.completedWorkMaxAgeMs ?? 24 * 60 * 60 * 1000,
+        logLevel: options.logLevel ?? "WARN",
       },
     );
     const workId = await ctx.db.insert("pendingWork", {
@@ -48,7 +57,9 @@ export const enqueue = mutation({
 });
 
 export const cancel = mutation({
-  args: { id: v.id("pendingWork") },
+  args: {
+    id: v.id("pendingWork"),
+  },
   handler: async (ctx, { id }) => {
     await ctx.db.insert("pendingCancelation", { workId: id });
   },
@@ -67,7 +78,13 @@ async function getOptions(db: DatabaseReader) {
   };
 }
 
-const WORK_TIMEOUT = 10 * 60 * 1000;
+async function console(ctx: QueryCtx) {
+  const pool = await ctx.db.query("pools").unique();
+  if (!pool) {
+    return globalThis.console;
+  }
+  return createLogger(pool.logLevel);
+}
 
 const BATCH_SIZE = 10;
 
@@ -156,6 +173,7 @@ export const mainLoop = internalMutation({
       await Promise.all(inProgress.map(async (work) => {
         const result = await checkInProgressWork(ctx, work);
         if (result !== null) {
+          (await console(ctx)).debug("inProgressWork finished uncleanly", work.workId, result);
           await ctx.db.delete(work._id);
           await ctx.db.insert("completedWork", {
             workId: work.workId,
@@ -231,7 +249,7 @@ async function checkInProgressWork(
   if (workStatus === null) {
     return { error: "Timeout" };
   } else if (workStatus.state.kind === "pending" || workStatus.state.kind === "inProgress") {
-    if (workStatus._creationTime < Date.now() - WORK_TIMEOUT) {
+    if (Date.now() - workStatus._creationTime > doc.timeoutMs) {
       await ctx.scheduler.cancel(doc.running);
       return { error: "Timeout" };
     }
@@ -312,7 +330,7 @@ async function kickMainLoop(ctx: MutationCtx, delayMs: number, isCurrentlyExecut
   const delay = Math.max(delayMs, debounceMs);
   const mainLoop = await ctx.db.query("mainLoop").unique();
   if (!mainLoop) {
-    console.log("starting mainLoop");
+    (await console(ctx)).debug("starting mainLoop");
     const fn = await ctx.scheduler.runAfter(delay, internal.public.mainLoop, { generation: 0 });
     await ctx.db.insert("mainLoop", { fn, generation: 0 });
     return;
@@ -322,7 +340,7 @@ async function kickMainLoop(ctx: MutationCtx, delayMs: number, isCurrentlyExecut
     // mainLoop stopped, so we restart it.
     const fn = await ctx.scheduler.runAfter(delay, internal.public.mainLoop, { generation: mainLoop.generation });
     await ctx.db.patch(mainLoop._id, { fn });
-    console.log("mainLoop stopped, so we restarted it");
+    (await console(ctx)).debug("mainLoop stopped, so we restarted it");
   } else if (!isCurrentlyExecuting && existingFn.scheduledTime < Date.now() + delay) {
     // mainLoop will run soon anyway, so we don't need to kick it.
     // console.trace("mainLoop already scheduled to run soon");
@@ -334,7 +352,7 @@ async function kickMainLoop(ctx: MutationCtx, delayMs: number, isCurrentlyExecut
     }
     const fn = await ctx.scheduler.runAfter(delay, internal.public.mainLoop, { generation: mainLoop.generation });
     await ctx.db.patch(mainLoop._id, { fn });
-    console.log("mainLoop was scheduled later, so reschedule it to run sooner");
+    (await console(ctx)).debug("mainLoop was scheduled later, so reschedule it to run sooner");
   }
 }
 
@@ -379,10 +397,24 @@ export const status = query({
   },
 });
 
+export const cleanup = mutation({
+  args: {
+    maxAgeMs: v.number(),
+  },
+  handler: async (ctx, { maxAgeMs }) => {
+    const old = Date.now() - maxAgeMs;
+    const docs = await ctx.db.query("completedWork")
+      .withIndex("by_creation_time", (q) => q.lt("_creationTime", old))
+      .collect();
+    await Promise.all(docs.map((doc) => ctx.db.delete(doc._id)));
+  },
+});
+
 const MAX_POSSIBLE_PARALLELISM = 300;
+const CLEANUP_CRON_NAME = "cleanup";
 
 async function ensurePoolExists(
-  db: DatabaseWriter,
+  ctx: MutationCtx,
   {
     maxParallelism,
     actionTimeoutMs,
@@ -391,6 +423,8 @@ async function ensurePoolExists(
     debounceMs,
     fastHeartbeatMs,
     slowHeartbeatMs,
+    completedWorkMaxAgeMs,
+    logLevel,
   }: {
     maxParallelism: number,
     actionTimeoutMs: number,
@@ -399,6 +433,8 @@ async function ensurePoolExists(
     debounceMs: number,
     fastHeartbeatMs: number,
     slowHeartbeatMs: number,
+    completedWorkMaxAgeMs: number,
+    logLevel: LogLevel,
   },
 ) {
   if (maxParallelism > MAX_POSSIBLE_PARALLELISM) {
@@ -410,32 +446,38 @@ async function ensurePoolExists(
   if (debounceMs < 10) {
     throw new Error("debounceMs must be >= 10 to prevent OCCs");
   }
-  const pool = await db.query("pools").unique();
+  const pool = await ctx.db.query("pools").unique();
   if (pool) {
     if (pool.maxParallelism !== maxParallelism) {
-      await db.patch(pool._id, { maxParallelism });
+      await ctx.db.patch(pool._id, { maxParallelism });
     }
     if (pool.actionTimeoutMs !== actionTimeoutMs) {
-      await db.patch(pool._id, { actionTimeoutMs });
+      await ctx.db.patch(pool._id, { actionTimeoutMs });
     }
     if (pool.mutationTimeoutMs !== mutationTimeoutMs) {
-      await db.patch(pool._id, { mutationTimeoutMs });
+      await ctx.db.patch(pool._id, { mutationTimeoutMs });
     }
     if (pool.unknownTimeoutMs !== unknownTimeoutMs) {
-      await db.patch(pool._id, { unknownTimeoutMs });
+      await ctx.db.patch(pool._id, { unknownTimeoutMs });
     }
     if (pool.debounceMs !== debounceMs) {
-      await db.patch(pool._id, { debounceMs });
+      await ctx.db.patch(pool._id, { debounceMs });
     }
     if (pool.fastHeartbeatMs !== fastHeartbeatMs) {
-      await db.patch(pool._id, { fastHeartbeatMs });
+      await ctx.db.patch(pool._id, { fastHeartbeatMs });
     }
     if (pool.slowHeartbeatMs !== slowHeartbeatMs) {
-      await db.patch(pool._id, { slowHeartbeatMs });
+      await ctx.db.patch(pool._id, { slowHeartbeatMs });
+    }
+    if (pool.completedWorkMaxAgeMs !== completedWorkMaxAgeMs) {
+      await ctx.db.patch(pool._id, { completedWorkMaxAgeMs });
+    }
+    if (pool.logLevel !== logLevel) {
+      await ctx.db.patch(pool._id, { logLevel });
     }
   }
   if (!pool) {
-    await db.insert("pools", {
+    await ctx.db.insert("pools", {
       maxParallelism,
       actionTimeoutMs,
       mutationTimeoutMs,
@@ -443,6 +485,23 @@ async function ensurePoolExists(
       debounceMs,
       fastHeartbeatMs,
       slowHeartbeatMs,
+      completedWorkMaxAgeMs,
+      logLevel,
     });
+  }
+  let cleanupCron = await crons.get(ctx, { name: CLEANUP_CRON_NAME });
+  const cronFrequencyMs = Math.min(completedWorkMaxAgeMs, 24 * 60 * 60 * 1000);
+  if (cleanupCron !== null && !(cleanupCron.schedule.kind === "interval" && cleanupCron.schedule.ms === cronFrequencyMs)) {
+    await crons.delete(ctx, { id: cleanupCron.id });
+    cleanupCron = null;
+  }
+  if (cleanupCron === null) {
+    await crons.register(
+      ctx,
+      { kind: "interval", ms: cronFrequencyMs },
+      api.public.cleanup,
+      { maxAgeMs: completedWorkMaxAgeMs },
+      CLEANUP_CRON_NAME,
+    );
   }
 }
