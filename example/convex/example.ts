@@ -8,6 +8,8 @@ const pool = new WorkPool(components.workpool, {
   completedWorkMaxAgeMs: 60 * 1000,
   logLevel: "DEBUG",
   debounceMs: 500,
+  slowHeartbeatMs: 10 * 1000,
+  fastHeartbeatMs: 1000,
 });
 
 export const addMutation = mutation({
