@@ -7,21 +7,41 @@ import { internal } from "./_generated/api";
 export const enqueue = mutation({
   args: {
     handle: v.string(),
-    maxParallelism: v.number(),
+    options: v.object({
+      maxParallelism: v.number(),
+      actionTimeoutMs: v.optional(v.number()),
+      mutationTimeoutMs: v.optional(v.number()),
+      unknownTimeoutMs: v.optional(v.number()),
+      debounceMs: v.optional(v.number()),
+      fastHeartbeatMs: v.optional(v.number()),
+      slowHeartbeatMs: v.optional(v.number()),
+    }),
     fnArgs: v.any(),
     fnType: v.union(v.literal("action"), v.literal("mutation"), v.literal("unknown")),
     runAtTime: v.number(),
   },
   returns: v.id("pendingWork"),
-  handler: async (ctx, { handle, maxParallelism, fnArgs, fnType, runAtTime }) => {
-    await ensurePoolExists(ctx.db, maxParallelism);
+  handler: async (ctx, { handle, options, fnArgs, fnType, runAtTime }) => {
+    const debounceMs = options.debounceMs ?? 50;
+    await ensurePoolExists(
+      ctx.db,
+      {
+        maxParallelism: options.maxParallelism,
+        actionTimeoutMs: options.actionTimeoutMs ?? 15 * 60 * 1000,
+        mutationTimeoutMs: options.mutationTimeoutMs ?? 30 * 1000,
+        unknownTimeoutMs: options.unknownTimeoutMs ?? 15 * 60 * 1000,
+        debounceMs,
+        fastHeartbeatMs: options.fastHeartbeatMs ?? 10 * 1000,
+        slowHeartbeatMs: options.slowHeartbeatMs ?? 2 * 60 * 60 * 1000,
+      },
+    );
     const workId = await ctx.db.insert("pendingWork", {
       handle,
       fnArgs,
       fnType,
       runAtTime,
     });
-    const delay = Math.max(runAtTime - Date.now(), MAIN_LOOP_DEBOUNCE_MS);
+    const delay = Math.max(runAtTime - Date.now(), debounceMs);
     await kickMainLoop(ctx, delay, false);
     return workId;
   },
@@ -34,9 +54,17 @@ export const cancel = mutation({
   },
 });
 
-async function getMaxParallelism(db: DatabaseReader): Promise<number> {
+async function getOptions(db: DatabaseReader) {
   const pool = (await db.query("pools").unique())!;
-  return pool.maxParallelism;
+  return {
+    maxParallelism: pool.maxParallelism,
+    actionTimeoutMs: pool.actionTimeoutMs,
+    mutationTimeoutMs: pool.mutationTimeoutMs,
+    unknownTimeoutMs: pool.unknownTimeoutMs,
+    debounceMs: pool.debounceMs,
+    fastHeartbeatMs: pool.fastHeartbeatMs,
+    slowHeartbeatMs: pool.slowHeartbeatMs,
+  };
 }
 
 const WORK_TIMEOUT = 10 * 60 * 1000;
@@ -63,7 +91,7 @@ export const mainLoop = internalMutation({
       await ctx.db.insert("mainLoop", { generation: args.generation + 1 });
     }
 
-    const maxParallelism = await getMaxParallelism(ctx.db);
+    const { maxParallelism, debounceMs } = await getOptions(ctx.db);
 
     // This is the only function reading and writing inProgressWork,
     // and it's bounded by MAX_POSSIBLE_PARALLELISM, so we can
@@ -77,9 +105,10 @@ export const mainLoop = internalMutation({
       .withIndex("runAtTime", q=>q.lte("runAtTime", Date.now()))
       .take(toSchedule);
     await Promise.all(pending.map(async (work) => {
-      const scheduledId = await beginWork(ctx, work);
+      const { scheduledId, timeoutMs } = await beginWork(ctx, work);
       await ctx.db.insert("inProgressWork", {
         running: scheduledId,
+        timeoutMs,
         workId: work._id,
       });
       await ctx.db.delete(work._id);
@@ -139,19 +168,19 @@ export const mainLoop = internalMutation({
 
     if (didSomething) {
       // There might be more to do.
-      await kickMainLoop(ctx, MAIN_LOOP_DEBOUNCE_MS, true);
+      await kickMainLoop(ctx, debounceMs, true);
     } else {
       // Decide when to wake up.
-      const inProgressFinal = await ctx.db.query("inProgressWork").collect();
+      const { fastHeartbeatMs, slowHeartbeatMs } = await getOptions(ctx.db);
+      const allInProgressWork = await ctx.db.query("inProgressWork").collect();
       const nextPending = await ctx.db.query("pendingWork").withIndex("runAtTime").first();
-      const nextPendingTime = nextPending ? nextPending.runAtTime : Infinity;
-      const nextInProgress = Math.min(...inProgressFinal.map((w) =>
-        w._creationTime + WORK_TIMEOUT
-      ));
+      const nextPendingTime = nextPending ? nextPending.runAtTime : slowHeartbeatMs + Date.now();
+      const nextInProgress = allInProgressWork.length ? Math.min(
+        fastHeartbeatMs + Date.now(),
+        ...allInProgressWork.map((w) => w._creationTime + w.timeoutMs),
+      ) : Number.POSITIVE_INFINITY;
       const nextTime = Math.min(nextPendingTime, nextInProgress);
-      if (nextTime !== Infinity) {
-        await kickMainLoop(ctx, nextTime - Date.now(), true);
-      }
+      await kickMainLoop(ctx, nextTime - Date.now(), true);
     }
   }
 });
@@ -159,23 +188,36 @@ export const mainLoop = internalMutation({
 async function beginWork(
   ctx: MutationCtx,
   work: Doc<"pendingWork">,
-): Promise<Id<"_scheduled_functions">> {
+): Promise<{
+  scheduledId: Id<"_scheduled_functions">,
+  timeoutMs: number,
+}> {
+  const { mutationTimeoutMs, actionTimeoutMs, unknownTimeoutMs } = await getOptions(ctx.db);
   if (work.fnType === "action") {
-    return await ctx.scheduler.runAfter(0, internal.public.runActionWrapper, {
-      workId: work._id,
-      handle: work.handle,
-      fnArgs: work.fnArgs,
-    });
+    return {
+      scheduledId: await ctx.scheduler.runAfter(0, internal.public.runActionWrapper, {
+        workId: work._id,
+        handle: work.handle,
+        fnArgs: work.fnArgs,
+      }),
+      timeoutMs: actionTimeoutMs,
+    };
   } else if (work.fnType === "mutation") {
-    return await ctx.scheduler.runAfter(0, internal.public.runMutationWrapper, {
-      workId: work._id,
-      handle: work.handle,
-      fnArgs: work.fnArgs,
-    });
+    return {
+      scheduledId: await ctx.scheduler.runAfter(0, internal.public.runMutationWrapper, {
+        workId: work._id,
+        handle: work.handle,
+        fnArgs: work.fnArgs,
+      }),
+      timeoutMs: mutationTimeoutMs,
+    };
   } else if (work.fnType === "unknown") {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handle = work.handle as FunctionHandle<'action' | 'mutation', any, any>;
-    return await ctx.scheduler.runAfter(0, handle, work.fnArgs);
+    return {
+      scheduledId: await ctx.scheduler.runAfter(0, handle, work.fnArgs),
+      timeoutMs: unknownTimeoutMs,
+    };
   } else {
     throw new Error(`Unexpected fnType ${work.fnType}`);
   }
@@ -238,12 +280,13 @@ async function saveResultHandler(ctx: MutationCtx, { workId, result, error }: {
   result?: unknown,
   error?: string,
 }): Promise<void> {
+  const { debounceMs } = await getOptions(ctx.db);
   await ctx.db.insert("pendingCompletion", {
     result,
     error,
     workId,
   });
-  await kickMainLoop(ctx, MAIN_LOOP_DEBOUNCE_MS, false);
+  await kickMainLoop(ctx, debounceMs, false);
 }
 
 export const runMutationWrapper = internalMutation({
@@ -264,10 +307,9 @@ export const runMutationWrapper = internalMutation({
   }
 });
 
-const MAIN_LOOP_DEBOUNCE_MS = 50;
-
 async function kickMainLoop(ctx: MutationCtx, delayMs: number, isCurrentlyExecuting: boolean): Promise<void> {
-  const delay = Math.max(delayMs, MAIN_LOOP_DEBOUNCE_MS);
+  const { debounceMs } = await getOptions(ctx.db);
+  const delay = Math.max(delayMs, debounceMs);
   const mainLoop = await ctx.db.query("mainLoop").unique();
   if (!mainLoop) {
     console.log("starting mainLoop");
@@ -341,18 +383,66 @@ const MAX_POSSIBLE_PARALLELISM = 300;
 
 async function ensurePoolExists(
   db: DatabaseWriter,
-  maxParallelism: number,
+  {
+    maxParallelism,
+    actionTimeoutMs,
+    mutationTimeoutMs,
+    unknownTimeoutMs,
+    debounceMs,
+    fastHeartbeatMs,
+    slowHeartbeatMs,
+  }: {
+    maxParallelism: number,
+    actionTimeoutMs: number,
+    mutationTimeoutMs: number,
+    unknownTimeoutMs: number,
+    debounceMs: number,
+    fastHeartbeatMs: number,
+    slowHeartbeatMs: number,
+  },
 ) {
   if (maxParallelism > MAX_POSSIBLE_PARALLELISM) {
     throw new Error(`maxParallelism must be <= ${MAX_POSSIBLE_PARALLELISM}`);
   }
+  if (maxParallelism < 1) {
+    throw new Error("maxParallelism must be >= 1");
+  }
+  if (debounceMs < 10) {
+    throw new Error("debounceMs must be >= 10 to prevent OCCs");
+  }
   const pool = await db.query("pools").unique();
-  if (pool && pool.maxParallelism !== maxParallelism) {
-    await db.patch(pool._id, { maxParallelism });
+  if (pool) {
+    if (pool.maxParallelism !== maxParallelism) {
+      await db.patch(pool._id, { maxParallelism });
+    }
+    if (pool.actionTimeoutMs !== actionTimeoutMs) {
+      await db.patch(pool._id, { actionTimeoutMs });
+    }
+    if (pool.mutationTimeoutMs !== mutationTimeoutMs) {
+      await db.patch(pool._id, { mutationTimeoutMs });
+    }
+    if (pool.unknownTimeoutMs !== unknownTimeoutMs) {
+      await db.patch(pool._id, { unknownTimeoutMs });
+    }
+    if (pool.debounceMs !== debounceMs) {
+      await db.patch(pool._id, { debounceMs });
+    }
+    if (pool.fastHeartbeatMs !== fastHeartbeatMs) {
+      await db.patch(pool._id, { fastHeartbeatMs });
+    }
+    if (pool.slowHeartbeatMs !== slowHeartbeatMs) {
+      await db.patch(pool._id, { slowHeartbeatMs });
+    }
   }
   if (!pool) {
     await db.insert("pools", {
       maxParallelism,
+      actionTimeoutMs,
+      mutationTimeoutMs,
+      unknownTimeoutMs,
+      debounceMs,
+      fastHeartbeatMs,
+      slowHeartbeatMs,
     });
   }
 }

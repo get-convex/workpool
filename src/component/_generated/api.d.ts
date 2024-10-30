@@ -1,5 +1,3 @@
-/* prettier-ignore-start */
-
 /* eslint-disable */
 /**
  * Generated `api` utility.
@@ -38,7 +36,15 @@ export type Mounts = {
         fnArgs: any;
         fnType: "action" | "mutation" | "unknown";
         handle: string;
-        maxParallelism: number;
+        options: {
+          actionTimeoutMs?: number;
+          debounceMs?: number;
+          fastHeartbeatMs?: number;
+          maxParallelism: number;
+          mutationTimeoutMs?: number;
+          slowHeartbeatMs?: number;
+          unknownTimeoutMs?: number;
+        };
         runAtTime: number;
       },
       string
@@ -69,5 +75,3 @@ export declare const internal: FilterApi<
 >;
 
 export declare const components: {};
-
-/* prettier-ignore-end */

@@ -20,6 +20,17 @@ export class WorkPool {
     private component: UseApi<typeof api>,
     private options: {
       maxParallelism: number,
+      actionTimeoutMs?: number,
+      mutationTimeoutMs?: number,
+      unknownTimeoutMs?: number,
+      // When there is something to do, wait this long between loop iterations,
+      // to allow more work to accumulate.
+      debounceMs?: number,
+      // When something is happening, wait this long to check if anything has
+      // been canceled or failed unexpectedly.
+      fastHeartbeatMs?: number,
+      // When nothing is happening, wait this long to check if there is new work.
+      slowHeartbeatMs?: number,
     }
   ) {}
   async enqueueAction<Args extends DefaultFunctionArgs, ReturnType>(
@@ -30,7 +41,7 @@ export class WorkPool {
     const handle = await createFunctionHandle(fn);
     const id = await ctx.runMutation(this.component.public.enqueue, {
       handle,
-      maxParallelism: this.options.maxParallelism,
+      options: this.options,
       fnArgs,
       fnType: "action",
       runAtTime: Date.now(),
@@ -45,13 +56,15 @@ export class WorkPool {
     const handle = await createFunctionHandle(fn);
     const id = await ctx.runMutation(this.component.public.enqueue, {
       handle,
-      maxParallelism: this.options.maxParallelism,
+      options: this.options,
       fnArgs,
       fnType: "mutation",
       runAtTime: Date.now(),
     });
     return id as WorkId<ReturnType>;
   }
+  // Unknown is if you don't know at runtime whether it's an action or mutation,
+  // which can happen if it comes from `runAt` or `runAfter`.
   async enqueueUnknown<Args extends DefaultFunctionArgs>(
     ctx: RunMutationCtx,
     fn: FunctionReference<'action' | 'mutation', FunctionVisibility, Args, null>,
@@ -61,7 +74,7 @@ export class WorkPool {
     const handle = await createFunctionHandle(fn);
     const id = await ctx.runMutation(this.component.public.enqueue, {
       handle,
-      maxParallelism: this.options.maxParallelism,
+      options: this.options,
       fnArgs,
       fnType: 'unknown',
       runAtTime,
@@ -110,8 +123,8 @@ export class WorkPool {
     }
   }
   ctx<DataModel extends GenericDataModel>(
-    ctx: Pick<GenericActionCtx<DataModel>, 'runAction' | 'runMutation' | 'runQuery'>,
-  ): Pick<GenericActionCtx<DataModel>, 'runAction' | 'runMutation' | 'scheduler'> {
+    ctx: GenericActionCtx<DataModel>,
+  ): GenericActionCtx<DataModel> {
     return {
       runAction: (async (action: any, args: any) => {
         const workId = await this.enqueueAction(ctx, action, args);
@@ -132,6 +145,10 @@ export class WorkPool {
           await this.cancel(ctx, id);
         }
       } as any,
+      auth: ctx.auth,
+      storage: ctx.storage,
+      vectorSearch: ctx.vectorSearch.bind(ctx),
+      runQuery: ctx.runQuery.bind(ctx),
     };
   }
 }

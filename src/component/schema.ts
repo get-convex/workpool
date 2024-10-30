@@ -5,6 +5,12 @@ export default defineSchema({
   // Statically configured.
   pools: defineTable({
     maxParallelism: v.number(),
+    actionTimeoutMs: v.number(),
+    mutationTimeoutMs: v.number(),
+    unknownTimeoutMs: v.number(),
+    debounceMs: v.number(),
+    fastHeartbeatMs: v.number(),
+    slowHeartbeatMs: v.number(),
   }),
   // State across all pools.
   mainLoop: defineTable({
@@ -23,6 +29,7 @@ export default defineSchema({
   // Completely read and written by the main loop.
   inProgressWork: defineTable({
     running: v.id("_scheduled_functions"),
+    timeoutMs: v.number(),
     workId: v.id("pendingWork"),
   }).index("workId", ["workId"]),
   // Appended by processing threads.
