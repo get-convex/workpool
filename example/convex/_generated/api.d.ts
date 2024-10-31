@@ -79,6 +79,8 @@ export declare const components: {
         | { kind: "success"; result: any }
         | { error: string; kind: "error" }
       >;
+      stopCleanup: FunctionReference<"mutation", "internal", {}, any>;
+      stopMainLoop: FunctionReference<"mutation", "internal", {}, any>;
     };
   };
 };

@@ -381,6 +381,29 @@ export const startMainLoop = mutation({
   },
 });
 
+export const stopMainLoop = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const mainLoop = await ctx.db.query("mainLoop").unique();
+    if (mainLoop) {
+      if (mainLoop.fn) {
+        await ctx.scheduler.cancel(mainLoop.fn);
+      }
+      await ctx.db.delete(mainLoop._id);
+    }
+  },
+});
+
+export const stopCleanup = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const cron = await crons.get(ctx, { name: CLEANUP_CRON_NAME });
+    if (cron) {
+      await crons.delete(ctx, { id: cron.id });
+    }
+  },
+});
+
 async function kickMainLoop(ctx: MutationCtx, delayMs: number, isCurrentlyExecuting: boolean): Promise<void> {
   const debounceMs = (await getOptions(ctx.db))?.debounceMs ?? 50;
   const delay = Math.max(delayMs, debounceMs);

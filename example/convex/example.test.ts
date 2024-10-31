@@ -21,20 +21,34 @@ describe("workpool", () => {
 
   let t: Awaited<ReturnType<typeof setupTest>>;
 
+  async function runToCompletion() {
+    // We don't want to advance time so far that the cleanup runs and deletes
+    // the work before we can check the status. So stop cleanup altogether.
+    await t.mutation(components.workpool.public.stopCleanup, {});
+    // Run a few loops of the mainLoop to process the work.
+    // Note we can't call `t.finishAllScheduledFunctions` here because that
+    // would loop forever.
+    for (let i = 0; i < 10; i++) {
+      vi.runAllTimers();
+      await t.finishInProgressScheduledFunctions();
+    }
+  }
+
   beforeEach(async () => {
-    //vi.useFakeTimers();
+    vi.useFakeTimers();
     t = await setupTest();
     await t.mutation(components.workpool.public.startMainLoop, {});
   });
 
   afterEach(async () => {
-    //await t.finishAllScheduledFunctions(vi.runAllTimers);
-    //vi.useRealTimers();
+    await t.mutation(components.workpool.public.stopMainLoop, {});
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.useRealTimers();
   });
 
   test.only("enqueue and get status", async () => {
     const id = await t.mutation(api.example.enqueueOneMutation, {data: 1});
-    await sleep(2000);
+    await runToCompletion();
     expect(await t.query(api.example.status, { id })).toEqual({
       kind: "success",
       result: 1,

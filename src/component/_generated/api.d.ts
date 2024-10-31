@@ -64,6 +64,8 @@ export type Mounts = {
       | { kind: "success"; result: any }
       | { error: string; kind: "error" }
     >;
+    stopCleanup: FunctionReference<"mutation", "public", {}, any>;
+    stopMainLoop: FunctionReference<"mutation", "public", {}, any>;
   };
 };
 // For now fullApiWithMounts is only fullApi which provides
