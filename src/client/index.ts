@@ -78,7 +78,6 @@ export class WorkPool {
     fnArgs: Args,
   ): Promise<WorkId<ReturnType>> {
     const handle = await createFunctionHandle(fn);
-    console.log("enqueueMutation", handle);
     const id = await ctx.runMutation(this.component.public.enqueue, {
       handle,
       options: this.options,
@@ -86,7 +85,6 @@ export class WorkPool {
       fnType: "mutation",
       runAtTime: Date.now(),
     });
-    console.log("done enqueueMutation", id);
     return id as WorkId<ReturnType>;
   }
   // Unknown is if you don't know at runtime whether it's an action or mutation,

@@ -46,7 +46,7 @@ describe("workpool", () => {
     vi.useRealTimers();
   });
 
-  test.only("enqueue and get status", async () => {
+  test("enqueue and get status", async () => {
     const id = await t.mutation(api.example.enqueueOneMutation, {data: 1});
     await runToCompletion();
     expect(await t.query(api.example.status, { id })).toEqual({
@@ -60,7 +60,3 @@ describe("workpool", () => {
     expect(result).toEqual(3);
   });
 });
-
-async function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}

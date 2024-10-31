@@ -5,8 +5,15 @@ import { v } from "convex/values";
 
 const pool = new WorkPool(components.workpool, { 
   maxParallelism: 3,
-  completedWorkMaxAgeMs: 60 * 1000,
+  // For tests, disable completed work cleanup.
+  completedWorkMaxAgeMs: Number.POSITIVE_INFINITY,
   logLevel: "DEBUG",
+});
+const lowpriPool = new WorkPool(components.lowpriWorkpool, {
+  maxParallelism: 1,
+  // For tests, disable completed work cleanup.
+  completedWorkMaxAgeMs: Number.POSITIVE_INFINITY,
+  logLevel: "INFO",
 });
 
 export const addMutation = mutation({
@@ -44,6 +51,24 @@ export const enqueueABunchOfMutations = mutation({
   handler: async (ctx, _args) => {
     for (let i = 0; i < 30; i++) {
       await pool.enqueueMutation(ctx, api.example.addMutation, {});
+    }
+  },
+});
+
+export const addLowPri = mutation({
+  args: { data: v.optional(v.number()) },
+  handler: async (ctx, { data }) => {
+    const d = -(data ?? Math.random());
+    await ctx.db.insert("data", {data: d});
+    return d;
+  },
+});
+
+export const enqueueLowPriMutations = mutation({
+  args: {},
+  handler: async (ctx, _args) => {
+    for (let i = 0; i < 30; i++) {
+      await lowpriPool.enqueueMutation(ctx, api.example.addLowPri, {});
     }
   },
 });

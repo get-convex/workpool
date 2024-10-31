@@ -361,24 +361,26 @@ export const runMutationWrapper = internalMutation({
   }
 });
 
+async function startMainLoopHandler(ctx: MutationCtx) {
+  const mainLoop = await ctx.db.query("mainLoop").unique();
+  if (!mainLoop) {
+    (await console(ctx)).debug("starting mainLoop");
+    const fn = await ctx.scheduler.runAfter(0, internal.public.mainLoop, { generation: 0 });
+    await ctx.db.insert("mainLoop", { fn, generation: 0, runAtTime: Date.now() });
+    return;
+  }
+  const existingFn = mainLoop.fn ? await ctx.db.system.get(mainLoop.fn) : null;
+  if (existingFn === null || existingFn.completedTime) {
+    // mainLoop stopped, so we restart it.
+    const fn = await ctx.scheduler.runAfter(0, internal.public.mainLoop, { generation: mainLoop.generation });
+    await ctx.db.patch(mainLoop._id, { fn });
+    (await console(ctx)).debug("mainLoop stopped, so we restarted it");
+  }
+}
+
 export const startMainLoop = mutation({
   args: {},
-  handler: async (ctx) => {
-    const mainLoop = await ctx.db.query("mainLoop").unique();
-    if (!mainLoop) {
-      (await console(ctx)).debug("starting mainLoop");
-      const fn = await ctx.scheduler.runAfter(0, internal.public.mainLoop, { generation: 0 });
-      await ctx.db.insert("mainLoop", { fn, generation: 0, runAtTime: Date.now() });
-      return;
-    }
-    const existingFn = mainLoop.fn ? await ctx.db.system.get(mainLoop.fn) : null;
-    if (existingFn === null || existingFn.completedTime) {
-      // mainLoop stopped, so we restart it.
-      const fn = await ctx.scheduler.runAfter(0, internal.public.mainLoop, { generation: mainLoop.generation });
-      await ctx.db.patch(mainLoop._id, { fn });
-      (await console(ctx)).debug("mainLoop stopped, so we restarted it");
-    }
-  },
+  handler: startMainLoopHandler,
 });
 
 export const stopMainLoop = mutation({
@@ -565,9 +567,20 @@ async function ensurePoolExists(
       completedWorkMaxAgeMs,
       logLevel,
     });
+    await startMainLoopHandler(ctx);
   }
-  let cleanupCron = await crons.get(ctx, { name: CLEANUP_CRON_NAME });
+  await ensureCleanupCron(ctx, completedWorkMaxAgeMs);
+}
+
+async function ensureCleanupCron(
+  ctx: MutationCtx,
+  completedWorkMaxAgeMs: number,
+) {
+  if (completedWorkMaxAgeMs === Number.POSITIVE_INFINITY) {
+    return;
+  }
   const cronFrequencyMs = Math.min(completedWorkMaxAgeMs, 24 * 60 * 60 * 1000);
+  let cleanupCron = await crons.get(ctx, { name: CLEANUP_CRON_NAME });
   if (cleanupCron !== null && !(cleanupCron.schedule.kind === "interval" && cleanupCron.schedule.ms === cronFrequencyMs)) {
     await crons.delete(ctx, { id: cleanupCron.id });
     cleanupCron = null;
@@ -575,7 +588,7 @@ async function ensurePoolExists(
   if (cleanupCron === null) {
     await crons.register(
       ctx,
-      { kind: "interval", ms: cronFrequencyMs },
+      { kind: "interval", ms: completedWorkMaxAgeMs },
       api.public.cleanup,
       { maxAgeMs: completedWorkMaxAgeMs },
       CLEANUP_CRON_NAME,
