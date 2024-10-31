@@ -1,4 +1,4 @@
-import { mutation, action, query } from "./_generated/server";
+import { mutation, action, query, ActionCtx } from "./_generated/server";
 import { api, components } from "./_generated/api";
 import { WorkId, WorkPool } from "@convex-dev/workpool";
 import { v } from "convex/values";
@@ -65,3 +65,18 @@ export const enqueueAndWait = action({
     return result;
   },
 });
+
+export const doSomethingInPool = action({
+  args: {},
+  handler: async (ctx, _args): Promise<number> => {
+    // poolCtx is a drop-in replacement for ctx that does all work in the pool.
+    const poolCtx = pool.ctx(ctx);
+    return await doSomething(poolCtx);
+  },
+});
+
+async function doSomething(ctx: ActionCtx): Promise<number> {
+  const data1 = await ctx.runMutation(api.example.addMutation, {data: 1});
+  const data2 = await ctx.runAction(api.example.addAction, {data: 2});
+  return data1 + data2;
+}

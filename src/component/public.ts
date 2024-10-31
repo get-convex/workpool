@@ -66,7 +66,10 @@ export const cancel = mutation({
 });
 
 async function getOptions(db: DatabaseReader) {
-  const pool = (await db.query("pools").unique())!;
+  const pool = await db.query("pools").unique();
+  if (!pool) {
+    return null;
+  }
   return {
     maxParallelism: pool.maxParallelism,
     actionTimeoutMs: pool.actionTimeoutMs,
@@ -113,7 +116,12 @@ export const mainLoop = internalMutation({
       });
     }
 
-    const { maxParallelism, debounceMs } = await getOptions(ctx.db);
+    const options = await getOptions(ctx.db);
+    if (!options) {
+      await kickMainLoop(ctx, 60 * 60 * 1000, true);
+      return;
+    }
+    const { maxParallelism, debounceMs, fastHeartbeatMs, slowHeartbeatMs } = options;
 
     console_.time("inProgress count");
     // This is the only function reading and writing inProgressWork,
@@ -209,7 +217,6 @@ export const mainLoop = internalMutation({
       await kickMainLoop(ctx, debounceMs, true);
     } else {
       // Decide when to wake up.
-      const { fastHeartbeatMs, slowHeartbeatMs } = await getOptions(ctx.db);
       const allInProgressWork = await ctx.db.query("inProgressWork").collect();
       const nextPending = await ctx.db.query("pendingWork").withIndex("runAtTime").first();
       const nextPendingTime = nextPending ? nextPending.runAtTime : slowHeartbeatMs + Date.now();
@@ -231,7 +238,11 @@ async function beginWork(
   scheduledId: Id<"_scheduled_functions">,
   timeoutMs: number,
 }> {
-  const { mutationTimeoutMs, actionTimeoutMs, unknownTimeoutMs } = await getOptions(ctx.db);
+  const options = await getOptions(ctx.db);
+  if (!options) {
+    throw new Error("cannot begin work with no pool");
+  }
+  const { mutationTimeoutMs, actionTimeoutMs, unknownTimeoutMs } = options;
   if (work.fnType === "action") {
     return {
       scheduledId: await ctx.scheduler.runAfter(0, internal.public.runActionWrapper, {
@@ -319,7 +330,11 @@ async function saveResultHandler(ctx: MutationCtx, { workId, result, error }: {
   result?: unknown,
   error?: string,
 }): Promise<void> {
-  const { debounceMs } = await getOptions(ctx.db);
+  const options = await getOptions(ctx.db);
+  if (!options) {
+    throw new Error("cannot save result with no pool");
+  }
+  const { debounceMs } = options;
   await ctx.db.insert("pendingCompletion", {
     result,
     error,
@@ -346,7 +361,7 @@ export const runMutationWrapper = internalMutation({
   }
 });
 
-export const startMainLoop = internalMutation({
+export const startMainLoop = mutation({
   args: {},
   handler: async (ctx) => {
     const mainLoop = await ctx.db.query("mainLoop").unique();
@@ -367,7 +382,7 @@ export const startMainLoop = internalMutation({
 });
 
 async function kickMainLoop(ctx: MutationCtx, delayMs: number, isCurrentlyExecuting: boolean): Promise<void> {
-  const { debounceMs } = await getOptions(ctx.db);
+  const debounceMs = (await getOptions(ctx.db))?.debounceMs ?? 50;
   const delay = Math.max(delayMs, debounceMs);
   const runAtTime = Date.now() + delay;
   // Look for mainLoop documents that we want to reschedule.

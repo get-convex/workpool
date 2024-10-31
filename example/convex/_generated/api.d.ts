@@ -69,6 +69,7 @@ export declare const components: {
         },
         string
       >;
+      startMainLoop: FunctionReference<"mutation", "internal", {}, any>;
       status: FunctionReference<
         "query",
         "internal",
