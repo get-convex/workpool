@@ -20,6 +20,13 @@ const crons = new Crons(components.crons);
 export const enqueue = mutation({
   args: {
     fnHandle: v.string(),
+    fnArgs: v.any(),
+    fnType: v.union(
+      v.literal("action"),
+      v.literal("mutation"),
+      v.literal("unknown")
+    ),
+    runAtTime: v.number(),
     options: v.object({
       maxParallelism: v.number(),
       actionTimeoutMs: v.optional(v.number()),
@@ -31,13 +38,6 @@ export const enqueue = mutation({
       logLevel: v.optional(logLevel),
       ttl: v.optional(v.number()),
     }),
-    fnArgs: v.any(),
-    fnType: v.union(
-      v.literal("action"),
-      v.literal("mutation"),
-      v.literal("unknown")
-    ),
-    runAtTime: v.number(),
   },
   returns: v.id("pendingWork"),
   handler: async (ctx, { fnHandle, options, fnArgs, fnType, runAtTime }) => {

@@ -74,10 +74,10 @@ export class WorkPool {
     const fnHandle = await createFunctionHandle(fn);
     const id = await ctx.runMutation(this.component.lib.enqueue, {
       fnHandle,
-      options: this.options,
       fnArgs,
       fnType: "action",
       runAtTime: Date.now(),
+      options: this.options,
     });
     return id as WorkId<ReturnType>;
   }
@@ -89,10 +89,10 @@ export class WorkPool {
     const fnHandle = await createFunctionHandle(fn);
     const id = await ctx.runMutation(this.component.lib.enqueue, {
       fnHandle,
-      options: this.options,
       fnArgs,
       fnType: "mutation",
       runAtTime: Date.now(),
+      options: this.options,
     });
     return id as WorkId<ReturnType>;
   }
@@ -112,10 +112,10 @@ export class WorkPool {
     const fnHandle = await createFunctionHandle(fn);
     const id = await ctx.runMutation(this.component.lib.enqueue, {
       fnHandle,
-      options: this.options,
       fnArgs,
       fnType: "unknown",
       runAtTime,
+      options: this.options,
     });
     return id as WorkId<null>;
   }
