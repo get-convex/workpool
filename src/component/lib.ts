@@ -75,19 +75,7 @@ export const cancel = mutation({
 });
 
 async function getOptions(db: DatabaseReader) {
-  const pool = await db.query("pools").unique();
-  if (!pool) {
-    return null;
-  }
-  return {
-    maxParallelism: pool.maxParallelism,
-    actionTimeoutMs: pool.actionTimeoutMs,
-    mutationTimeoutMs: pool.mutationTimeoutMs,
-    unknownTimeoutMs: pool.unknownTimeoutMs,
-    debounceMs: pool.debounceMs,
-    fastHeartbeatMs: pool.fastHeartbeatMs,
-    slowHeartbeatMs: pool.slowHeartbeatMs,
-  };
+  return db.query("pools").unique();
 }
 
 async function console(ctx: QueryCtx) {
