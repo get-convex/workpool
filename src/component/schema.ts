@@ -61,7 +61,7 @@ export default defineSchema({
       v.literal("mutation"),
       v.literal("unknown")
     ),
-    handle: v.string(),
+    fnHandle: v.string(),
     fnArgs: v.any(),
     runAtTime: v.number(),
   }).index("runAtTime", ["runAtTime"]),

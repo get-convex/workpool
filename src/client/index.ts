@@ -62,9 +62,9 @@ export class WorkPool {
     fn: FunctionReference<"action", FunctionVisibility, Args, ReturnType>,
     fnArgs: Args
   ): Promise<WorkId<ReturnType>> {
-    const handle = await createFunctionHandle(fn);
+    const fnHandle = await createFunctionHandle(fn);
     const id = await ctx.runMutation(this.component.lib.enqueue, {
-      handle,
+      fnHandle,
       options: this.options,
       fnArgs,
       fnType: "action",
@@ -77,9 +77,9 @@ export class WorkPool {
     fn: FunctionReference<"mutation", FunctionVisibility, Args, ReturnType>,
     fnArgs: Args
   ): Promise<WorkId<ReturnType>> {
-    const handle = await createFunctionHandle(fn);
+    const fnHandle = await createFunctionHandle(fn);
     const id = await ctx.runMutation(this.component.lib.enqueue, {
-      handle,
+      fnHandle,
       options: this.options,
       fnArgs,
       fnType: "mutation",
@@ -100,9 +100,9 @@ export class WorkPool {
     fnArgs: Args,
     runAtTime: number
   ): Promise<WorkId<null>> {
-    const handle = await createFunctionHandle(fn);
+    const fnHandle = await createFunctionHandle(fn);
     const id = await ctx.runMutation(this.component.lib.enqueue, {
-      handle,
+      fnHandle,
       options: this.options,
       fnArgs,
       fnType: "unknown",

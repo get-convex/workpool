@@ -52,8 +52,8 @@ export declare const components: {
         "internal",
         {
           fnArgs: any;
+          fnHandle: string;
           fnType: "action" | "mutation" | "unknown";
-          handle: string;
           options: {
             actionTimeoutMs?: number;
             completedWorkMaxAgeMs?: number;
@@ -97,8 +97,8 @@ export declare const components: {
         "internal",
         {
           fnArgs: any;
+          fnHandle: string;
           fnType: "action" | "mutation" | "unknown";
-          handle: string;
           options: {
             actionTimeoutMs?: number;
             completedWorkMaxAgeMs?: number;

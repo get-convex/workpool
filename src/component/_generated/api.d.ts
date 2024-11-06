@@ -37,8 +37,8 @@ export type Mounts = {
       "public",
       {
         fnArgs: any;
+        fnHandle: string;
         fnType: "action" | "mutation" | "unknown";
-        handle: string;
         options: {
           actionTimeoutMs?: number;
           completedWorkMaxAgeMs?: number;

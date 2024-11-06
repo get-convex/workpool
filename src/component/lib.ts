@@ -19,7 +19,7 @@ const crons = new Crons(components.crons);
 
 export const enqueue = mutation({
   args: {
-    handle: v.string(),
+    fnHandle: v.string(),
     options: v.object({
       maxParallelism: v.number(),
       actionTimeoutMs: v.optional(v.number()),
@@ -40,7 +40,7 @@ export const enqueue = mutation({
     runAtTime: v.number(),
   },
   returns: v.id("pendingWork"),
-  handler: async (ctx, { handle, options, fnArgs, fnType, runAtTime }) => {
+  handler: async (ctx, { fnHandle, options, fnArgs, fnType, runAtTime }) => {
     const debounceMs = options.debounceMs ?? 50;
     await ensurePoolExists(ctx, {
       maxParallelism: options.maxParallelism,
@@ -55,7 +55,7 @@ export const enqueue = mutation({
       logLevel: options.logLevel ?? "WARN",
     });
     const workId = await ctx.db.insert("pendingWork", {
-      handle,
+      fnHandle,
       fnArgs,
       fnType,
       runAtTime,
@@ -292,7 +292,7 @@ async function beginWork(
         internal.lib.runActionWrapper,
         {
           workId: work._id,
-          handle: work.handle,
+          fnHandle: work.fnHandle,
           fnArgs: work.fnArgs,
         }
       ),
@@ -305,22 +305,16 @@ async function beginWork(
         internal.lib.runMutationWrapper,
         {
           workId: work._id,
-          handle: work.handle,
+          fnHandle: work.fnHandle,
           fnArgs: work.fnArgs,
         }
       ),
       timeoutMs: mutationTimeoutMs,
     };
   } else if (work.fnType === "unknown") {
-    const handle = work.handle as FunctionHandle<
-      "action" | "mutation",
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      any,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      any
-    >;
+    const fnHandle = work.fnHandle as FunctionHandle<"action" | "mutation">;
     return {
-      scheduledId: await ctx.scheduler.runAfter(0, handle, work.fnArgs),
+      scheduledId: await ctx.scheduler.runAfter(0, fnHandle, work.fnArgs),
       timeoutMs: unknownTimeoutMs,
     };
   } else {
@@ -359,14 +353,13 @@ async function checkInProgressWork(
 export const runActionWrapper = internalAction({
   args: {
     workId: v.id("pendingWork"),
-    handle: v.string(),
+    fnHandle: v.string(),
     fnArgs: v.any(),
   },
-  handler: async (ctx, { workId, handle: handleStr, fnArgs }) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const handle = handleStr as FunctionHandle<"action", any, any>;
+  handler: async (ctx, { workId, fnHandle: handleStr, fnArgs }) => {
+    const fnHandle = handleStr as FunctionHandle<"action">;
     try {
-      const retval = await ctx.runAction(handle, fnArgs);
+      const retval = await ctx.runAction(fnHandle, fnArgs);
       await ctx.runMutation(internal.lib.saveResult, {
         workId,
         result: retval,
@@ -417,14 +410,13 @@ async function saveResultHandler(
 export const runMutationWrapper = internalMutation({
   args: {
     workId: v.id("pendingWork"),
-    handle: v.string(),
+    fnHandle: v.string(),
     fnArgs: v.any(),
   },
-  handler: async (ctx, { workId, handle: handleStr, fnArgs }) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const handle = handleStr as FunctionHandle<"mutation", any, any>;
+  handler: async (ctx, { workId, fnHandle: handleStr, fnArgs }) => {
+    const fnHandle = handleStr as FunctionHandle<"mutation">;
     try {
-      const retval = await ctx.runMutation(handle, fnArgs);
+      const retval = await ctx.runMutation(fnHandle, fnArgs);
       await saveResultHandler(ctx, { workId, result: retval });
     } catch (e: unknown) {
       await saveResultHandler(ctx, { workId, error: (e as Error).message });
