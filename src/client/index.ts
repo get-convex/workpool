@@ -176,15 +176,11 @@ export class WorkPool {
         return this.pollResult(ctx, workId, 30 * 1000);
       }) as any,
       scheduler: {
-        runAfter: async (delay: number, fn: any, args: any) => {
-          await this.enqueueUnknown(ctx, fn, args, Date.now() + delay);
-        },
-        runAt: async (time: number, fn: any, args: any) => {
-          await this.enqueueUnknown(ctx, fn, args, time);
-        },
-        cancel: async (id: any) => {
-          await this.cancel(ctx, id);
-        },
+        runAfter: async (delay: number, fn: any, args: any) =>
+          this.enqueueUnknown(ctx, fn, args, Date.now() + delay),
+        runAt: async (time: number, fn: any, args: any) =>
+          this.enqueueUnknown(ctx, fn, args, time),
+        cancel: async (id: any) => this.cancel(ctx, id),
       } as any,
       auth: ctx.auth,
       storage: ctx.storage,
