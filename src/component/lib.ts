@@ -289,7 +289,7 @@ async function beginWork(
     return {
       scheduledId: await ctx.scheduler.runAfter(
         0,
-        internal.public.runActionWrapper,
+        internal.lib.runActionWrapper,
         {
           workId: work._id,
           handle: work.handle,
@@ -302,7 +302,7 @@ async function beginWork(
     return {
       scheduledId: await ctx.scheduler.runAfter(
         0,
-        internal.public.runMutationWrapper,
+        internal.lib.runMutationWrapper,
         {
           workId: work._id,
           handle: work.handle,
@@ -367,12 +367,12 @@ export const runActionWrapper = internalAction({
     const handle = handleStr as FunctionHandle<"action", any, any>;
     try {
       const retval = await ctx.runAction(handle, fnArgs);
-      await ctx.runMutation(internal.public.saveResult, {
+      await ctx.runMutation(internal.lib.saveResult, {
         workId,
         result: retval,
       });
     } catch (e: unknown) {
-      await ctx.runMutation(internal.public.saveResult, {
+      await ctx.runMutation(internal.lib.saveResult, {
         workId,
         error: (e as Error).message,
       });
@@ -436,7 +436,7 @@ async function startMainLoopHandler(ctx: MutationCtx) {
   const mainLoop = await ctx.db.query("mainLoop").unique();
   if (!mainLoop) {
     (await console(ctx)).debug("starting mainLoop");
-    const fn = await ctx.scheduler.runAfter(0, internal.public.mainLoop, {
+    const fn = await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {
       generation: 0,
     });
     await ctx.db.insert("mainLoop", {
@@ -449,7 +449,7 @@ async function startMainLoopHandler(ctx: MutationCtx) {
   const existingFn = mainLoop.fn ? await ctx.db.system.get(mainLoop.fn) : null;
   if (existingFn === null || existingFn.completedTime) {
     // mainLoop stopped, so we restart it.
-    const fn = await ctx.scheduler.runAfter(0, internal.public.mainLoop, {
+    const fn = await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {
       generation: mainLoop.generation,
     });
     await ctx.db.patch(mainLoop._id, { fn });
@@ -518,7 +518,7 @@ async function kickMainLoop(
   if (!isCurrentlyExecuting && mainLoop.fn) {
     await ctx.scheduler.cancel(mainLoop.fn);
   }
-  const fn = await ctx.scheduler.runAt(runAtTime, internal.public.mainLoop, {
+  const fn = await ctx.scheduler.runAt(runAtTime, internal.lib.mainLoop, {
     generation: mainLoop.generation,
   });
   await ctx.db.patch(mainLoop._id, { fn, runAtTime });
@@ -641,7 +641,7 @@ async function ensureCleanupCron(
     await crons.register(
       ctx,
       { kind: "interval", ms: completedWorkMaxAgeMs },
-      api.public.cleanup,
+      api.lib.cleanup,
       { maxAgeMs: completedWorkMaxAgeMs },
       CLEANUP_CRON_NAME
     );
