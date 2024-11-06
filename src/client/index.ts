@@ -63,7 +63,7 @@ export class WorkPool {
        * `tryResult`, and `pollResult`.
        * Default 1 day.
        */
-      completedWorkMaxAgeMs?: number;
+      ttl?: number;
     }
   ) {}
   async enqueueAction<Args extends DefaultFunctionArgs, ReturnType>(

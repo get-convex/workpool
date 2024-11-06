@@ -29,7 +29,7 @@ export const enqueue = mutation({
       fastHeartbeatMs: v.optional(v.number()),
       slowHeartbeatMs: v.optional(v.number()),
       logLevel: v.optional(logLevel),
-      completedWorkMaxAgeMs: v.optional(v.number()),
+      ttl: v.optional(v.number()),
     }),
     fnArgs: v.any(),
     fnType: v.union(
@@ -50,8 +50,7 @@ export const enqueue = mutation({
       debounceMs,
       fastHeartbeatMs: options.fastHeartbeatMs ?? 10 * 1000,
       slowHeartbeatMs: options.slowHeartbeatMs ?? 2 * 60 * 60 * 1000,
-      completedWorkMaxAgeMs:
-        options.completedWorkMaxAgeMs ?? 24 * 60 * 60 * 1000,
+      ttl: options.ttl ?? 24 * 60 * 60 * 1000,
       logLevel: options.logLevel ?? "WARN",
     });
     const workId = await ctx.db.insert("pendingWork", {
@@ -607,17 +606,14 @@ async function ensurePoolExists(
     await ctx.db.insert("pools", opts);
     await startMainLoopHandler(ctx);
   }
-  await ensureCleanupCron(ctx, opts.completedWorkMaxAgeMs);
+  await ensureCleanupCron(ctx, opts.ttl);
 }
 
-async function ensureCleanupCron(
-  ctx: MutationCtx,
-  completedWorkMaxAgeMs: number
-) {
-  if (completedWorkMaxAgeMs === Number.POSITIVE_INFINITY) {
+async function ensureCleanupCron(ctx: MutationCtx, ttl: number) {
+  if (ttl === Number.POSITIVE_INFINITY) {
     return;
   }
-  const cronFrequencyMs = Math.min(completedWorkMaxAgeMs, 24 * 60 * 60 * 1000);
+  const cronFrequencyMs = Math.min(ttl, 24 * 60 * 60 * 1000);
   let cleanupCron = await crons.get(ctx, { name: CLEANUP_CRON_NAME });
   if (
     cleanupCron !== null &&
@@ -632,9 +628,9 @@ async function ensureCleanupCron(
   if (cleanupCron === null) {
     await crons.register(
       ctx,
-      { kind: "interval", ms: completedWorkMaxAgeMs },
+      { kind: "interval", ms: ttl },
       api.lib.cleanup,
-      { maxAgeMs: completedWorkMaxAgeMs },
+      { maxAgeMs: ttl },
       CLEANUP_CRON_NAME
     );
   }

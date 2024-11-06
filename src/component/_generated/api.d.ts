@@ -41,13 +41,13 @@ export type Mounts = {
         fnType: "action" | "mutation" | "unknown";
         options: {
           actionTimeoutMs?: number;
-          completedWorkMaxAgeMs?: number;
           debounceMs?: number;
           fastHeartbeatMs?: number;
           logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
           maxParallelism: number;
           mutationTimeoutMs?: number;
           slowHeartbeatMs?: number;
+          ttl?: number;
           unknownTimeoutMs?: number;
         };
         runAtTime: number;

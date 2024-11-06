@@ -44,7 +44,7 @@ export default defineSchema({
     debounceMs: v.number(),
     fastHeartbeatMs: v.number(),
     slowHeartbeatMs: v.number(),
-    completedWorkMaxAgeMs: v.number(),
+    ttl: v.number(),
     logLevel,
   }),
 
