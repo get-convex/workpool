@@ -413,8 +413,9 @@ export const runMutationWrapper = internalMutation({
 
 async function startMainLoopHandler(ctx: MutationCtx) {
   const mainLoop = await ctx.db.query("mainLoop").unique();
+  const console_ = await console(ctx);
   if (!mainLoop) {
-    (await console(ctx)).debug("starting mainLoop");
+    console_.debug("starting mainLoop");
     const fn = await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {
       generation: 0,
     });
@@ -432,7 +433,7 @@ async function startMainLoopHandler(ctx: MutationCtx) {
       generation: mainLoop.generation,
     });
     await ctx.db.patch(mainLoop._id, { fn });
-    (await console(ctx)).debug("mainLoop stopped, so we restarted it");
+    console_.debug("mainLoop stopped, so we restarted it");
   }
 }
 
@@ -472,6 +473,7 @@ async function kickMainLoop(
   const debounceMs = (await getOptions(ctx.db))?.debounceMs ?? 50;
   const delay = Math.max(delayMs, debounceMs);
   const runAtTime = Date.now() + delay;
+  const console_ = await console(ctx);
   // Look for mainLoop documents that we want to reschedule.
   // If we're currently running mainLoop, we definitely want to reschedule.
   // Otherwise, only reschedule if the new runAtTime is earlier than the existing one.
@@ -488,7 +490,7 @@ async function kickMainLoop(
     // 2. The main loop is scheduled to run soon, so we don't need to do anything.
     // Unfortunately, we can't tell the difference between those cases without taking
     // a read dependency on soon-to-be-run mainLoop documents, so we assume the latter.
-    (await console(ctx)).debug(
+    console_.debug(
       "mainLoop already scheduled to run soon (or doesn't exist, in which case you should call `startMainLoop`)"
     );
     return;
@@ -501,7 +503,7 @@ async function kickMainLoop(
     generation: mainLoop.generation,
   });
   await ctx.db.patch(mainLoop._id, { fn, runAtTime });
-  (await console(ctx)).debug(
+  console_.debug(
     "mainLoop was scheduled later, so reschedule it to run sooner"
   );
 }
