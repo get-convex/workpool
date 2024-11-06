@@ -27,7 +27,7 @@ const scrapePool = new Workpool(components.scrapeWorkpool, {
 export const signUp = mutation({
   handler: async (ctx, args) => {
     const userId = await ctx.db.insert("users", args);
-    await emailPool.enqueueAction(internal.auth.sendEmailVerification, { userId });
+    await emailPool.enqueueAction(internal.auth.sendVerifyEmail, { userId });
   },
 });
 
@@ -113,7 +113,7 @@ const pool = new Workpool(components.emailWorkpool, {
   maxParallelism: 10,
   // More options available, such as:
   actionTimeoutMs: 10 * 60 * 1000,
-  completedWorkMaxAgeMs: 7 * 24 * 60 * 60 * 1000,
+  ttl: 7 * 24 * 60 * 60 * 1000,
 });
 ```
 
