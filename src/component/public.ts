@@ -130,6 +130,7 @@ export const mainLoop = internalMutation({
 
     const options = await getOptions(ctx.db);
     if (!options) {
+      console_.info("no pool, skipping mainLoop");
       await kickMainLoop(ctx, 60 * 60 * 1000, true);
       return;
     }
@@ -312,10 +313,11 @@ async function beginWork(
       timeoutMs: mutationTimeoutMs,
     };
   } else if (work.fnType === "unknown") {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handle = work.handle as FunctionHandle<
       "action" | "mutation",
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       any
     >;
     return {
@@ -670,6 +672,7 @@ async function ensureCleanupCron(
   completedWorkMaxAgeMs: number
 ) {
   if (completedWorkMaxAgeMs === Number.POSITIVE_INFINITY) {
+    (await console(ctx)).info("completedWorkMaxAgeMs is Infinity, so we won't schedule cleanup");
     return;
   }
   const cronFrequencyMs = Math.min(completedWorkMaxAgeMs, 24 * 60 * 60 * 1000);

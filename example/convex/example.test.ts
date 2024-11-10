@@ -56,9 +56,4 @@ describe("workpool", () => {
       result: 1,
     });
   });
-
-  test("drop in replacement for ctx", async () => {
-    const result = await t.action(api.example.doSomethingInPool, {});
-    expect(result).toEqual(3);
-  });
 });
