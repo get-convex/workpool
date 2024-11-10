@@ -19,7 +19,14 @@ const crons = new Crons(components.crons);
 
 export const enqueue = mutation({
   args: {
-    handle: v.string(),
+    fnHandle: v.string(),
+    fnArgs: v.any(),
+    fnType: v.union(
+      v.literal("action"),
+      v.literal("mutation"),
+      v.literal("unknown")
+    ),
+    runAtTime: v.number(),
     options: v.object({
       maxParallelism: v.number(),
       actionTimeoutMs: v.optional(v.number()),
@@ -29,18 +36,11 @@ export const enqueue = mutation({
       fastHeartbeatMs: v.optional(v.number()),
       slowHeartbeatMs: v.optional(v.number()),
       logLevel: v.optional(logLevel),
-      completedWorkMaxAgeMs: v.optional(v.number()),
+      ttl: v.optional(v.number()),
     }),
-    fnArgs: v.any(),
-    fnType: v.union(
-      v.literal("action"),
-      v.literal("mutation"),
-      v.literal("unknown")
-    ),
-    runAtTime: v.number(),
   },
   returns: v.id("pendingWork"),
-  handler: async (ctx, { handle, options, fnArgs, fnType, runAtTime }) => {
+  handler: async (ctx, { fnHandle, options, fnArgs, fnType, runAtTime }) => {
     const debounceMs = options.debounceMs ?? 50;
     await ensurePoolExists(ctx, {
       maxParallelism: options.maxParallelism,
@@ -50,12 +50,11 @@ export const enqueue = mutation({
       debounceMs,
       fastHeartbeatMs: options.fastHeartbeatMs ?? 10 * 1000,
       slowHeartbeatMs: options.slowHeartbeatMs ?? 2 * 60 * 60 * 1000,
-      completedWorkMaxAgeMs:
-        options.completedWorkMaxAgeMs ?? 24 * 60 * 60 * 1000,
+      ttl: options.ttl ?? 24 * 60 * 60 * 1000,
       logLevel: options.logLevel ?? "WARN",
     });
     const workId = await ctx.db.insert("pendingWork", {
-      handle,
+      fnHandle,
       fnArgs,
       fnType,
       runAtTime,
@@ -76,19 +75,7 @@ export const cancel = mutation({
 });
 
 async function getOptions(db: DatabaseReader) {
-  const pool = await db.query("pools").unique();
-  if (!pool) {
-    return null;
-  }
-  return {
-    maxParallelism: pool.maxParallelism,
-    actionTimeoutMs: pool.actionTimeoutMs,
-    mutationTimeoutMs: pool.mutationTimeoutMs,
-    unknownTimeoutMs: pool.unknownTimeoutMs,
-    debounceMs: pool.debounceMs,
-    fastHeartbeatMs: pool.fastHeartbeatMs,
-    slowHeartbeatMs: pool.slowHeartbeatMs,
-  };
+  return db.query("pools").unique();
 }
 
 async function console(ctx: QueryCtx) {
@@ -293,7 +280,7 @@ async function beginWork(
         internal.lib.runActionWrapper,
         {
           workId: work._id,
-          handle: work.handle,
+          fnHandle: work.fnHandle,
           fnArgs: work.fnArgs,
         }
       ),
@@ -306,22 +293,16 @@ async function beginWork(
         internal.lib.runMutationWrapper,
         {
           workId: work._id,
-          handle: work.handle,
+          fnHandle: work.fnHandle,
           fnArgs: work.fnArgs,
         }
       ),
       timeoutMs: mutationTimeoutMs,
     };
   } else if (work.fnType === "unknown") {
-    const handle = work.handle as FunctionHandle<
-      "action" | "mutation",
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      any,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      any
-    >;
+    const fnHandle = work.fnHandle as FunctionHandle<"action" | "mutation">;
     return {
-      scheduledId: await ctx.scheduler.runAfter(0, handle, work.fnArgs),
+      scheduledId: await ctx.scheduler.runAfter(0, fnHandle, work.fnArgs),
       timeoutMs: unknownTimeoutMs,
     };
   } else {
@@ -360,13 +341,13 @@ async function checkInProgressWork(
 export const runActionWrapper = internalAction({
   args: {
     workId: v.id("pendingWork"),
-    handle: v.string(),
+    fnHandle: v.string(),
     fnArgs: v.any(),
   },
-  handler: async (ctx, { workId, handle: handleStr, fnArgs }) => {
-    const handle = handleStr as FunctionHandle<"action">;
+  handler: async (ctx, { workId, fnHandle: handleStr, fnArgs }) => {
+    const fnHandle = handleStr as FunctionHandle<"action">;
     try {
-      const retval = await ctx.runAction(handle, fnArgs);
+      const retval = await ctx.runAction(fnHandle, fnArgs);
       await ctx.runMutation(internal.lib.saveResult, {
         workId,
         result: retval,
@@ -417,14 +398,13 @@ async function saveResultHandler(
 export const runMutationWrapper = internalMutation({
   args: {
     workId: v.id("pendingWork"),
-    handle: v.string(),
+    fnHandle: v.string(),
     fnArgs: v.any(),
   },
-  handler: async (ctx, { workId, handle: handleStr, fnArgs }) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const handle = handleStr as FunctionHandle<"mutation", any, any>;
+  handler: async (ctx, { workId, fnHandle: handleStr, fnArgs }) => {
+    const fnHandle = handleStr as FunctionHandle<"mutation">;
     try {
-      const retval = await ctx.runMutation(handle, fnArgs);
+      const retval = await ctx.runMutation(fnHandle, fnArgs);
       await saveResultHandler(ctx, { workId, result: retval });
     } catch (e: unknown) {
       await saveResultHandler(ctx, { workId, error: (e as Error).message });
@@ -434,8 +414,9 @@ export const runMutationWrapper = internalMutation({
 
 async function startMainLoopHandler(ctx: MutationCtx) {
   const mainLoop = await ctx.db.query("mainLoop").unique();
+  const console_ = await console(ctx);
   if (!mainLoop) {
-    (await console(ctx)).debug("starting mainLoop");
+    console_.debug("starting mainLoop");
     const fn = await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {
       generation: 0,
     });
@@ -453,7 +434,7 @@ async function startMainLoopHandler(ctx: MutationCtx) {
       generation: mainLoop.generation,
     });
     await ctx.db.patch(mainLoop._id, { fn });
-    (await console(ctx)).debug("mainLoop stopped, so we restarted it");
+    console_.debug("mainLoop stopped, so we restarted it");
   }
 }
 
@@ -493,6 +474,7 @@ async function kickMainLoop(
   const debounceMs = (await getOptions(ctx.db))?.debounceMs ?? 50;
   const delay = Math.max(delayMs, debounceMs);
   const runAtTime = Date.now() + delay;
+  const console_ = await console(ctx);
   // Look for mainLoop documents that we want to reschedule.
   // If we're currently running mainLoop, we definitely want to reschedule.
   // Otherwise, only reschedule if the new runAtTime is earlier than the existing one.
@@ -509,7 +491,7 @@ async function kickMainLoop(
     // 2. The main loop is scheduled to run soon, so we don't need to do anything.
     // Unfortunately, we can't tell the difference between those cases without taking
     // a read dependency on soon-to-be-run mainLoop documents, so we assume the latter.
-    (await console(ctx)).debug(
+    console_.debug(
       "mainLoop already scheduled to run soon (or doesn't exist, in which case you should call `startMainLoop`)"
     );
     return;
@@ -522,7 +504,7 @@ async function kickMainLoop(
     generation: mainLoop.generation,
   });
   await ctx.db.patch(mainLoop._id, { fn, runAtTime });
-  (await console(ctx)).debug(
+  console_.debug(
     "mainLoop was scheduled later, so reschedule it to run sooner"
   );
 }
@@ -615,18 +597,15 @@ async function ensurePoolExists(
     await ctx.db.insert("pools", opts);
     await startMainLoopHandler(ctx);
   }
-  await ensureCleanupCron(ctx, opts.completedWorkMaxAgeMs);
+  await ensureCleanupCron(ctx, opts.ttl);
 }
 
-async function ensureCleanupCron(
-  ctx: MutationCtx,
-  completedWorkMaxAgeMs: number
-) {
-  if (completedWorkMaxAgeMs === Number.POSITIVE_INFINITY) {
+async function ensureCleanupCron(ctx: MutationCtx, ttl: number) {
+  if (ttl === Number.POSITIVE_INFINITY) {
     (await console(ctx)).info("completedWorkMaxAgeMs is Infinity, so we won't schedule cleanup");
     return;
   }
-  const cronFrequencyMs = Math.min(completedWorkMaxAgeMs, 24 * 60 * 60 * 1000);
+  const cronFrequencyMs = Math.min(ttl, 24 * 60 * 60 * 1000);
   let cleanupCron = await crons.get(ctx, { name: CLEANUP_CRON_NAME });
   if (
     cleanupCron !== null &&
@@ -641,9 +620,9 @@ async function ensureCleanupCron(
   if (cleanupCron === null) {
     await crons.register(
       ctx,
-      { kind: "interval", ms: completedWorkMaxAgeMs },
+      { kind: "interval", ms: ttl },
       api.lib.cleanup,
-      { maxAgeMs: completedWorkMaxAgeMs },
+      { maxAgeMs: ttl },
       CLEANUP_CRON_NAME
     );
   }

@@ -44,7 +44,7 @@ export default defineSchema({
     debounceMs: v.number(),
     fastHeartbeatMs: v.number(),
     slowHeartbeatMs: v.number(),
-    completedWorkMaxAgeMs: v.number(),
+    ttl: v.number(),
     logLevel,
   }),
 
@@ -61,7 +61,7 @@ export default defineSchema({
       v.literal("mutation"),
       v.literal("unknown")
     ),
-    handle: v.string(),
+    fnHandle: v.string(),
     fnArgs: v.any(),
     runAtTime: v.number(),
   }).index("runAtTime", ["runAtTime"]),

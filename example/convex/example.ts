@@ -6,13 +6,13 @@ import { v } from "convex/values";
 const pool = new WorkPool(components.workpool, {
   maxParallelism: 3,
   // For tests, disable completed work cleanup.
-  completedWorkMaxAgeMs: Number.POSITIVE_INFINITY,
+  ttl: Number.POSITIVE_INFINITY,
   logLevel: "DEBUG",
 });
 const lowpriPool = new WorkPool(components.lowpriWorkpool, {
   maxParallelism: 1,
   // For tests, disable completed work cleanup.
-  completedWorkMaxAgeMs: Number.POSITIVE_INFINITY,
+  ttl: Number.POSITIVE_INFINITY,
   logLevel: "INFO",
 });
 

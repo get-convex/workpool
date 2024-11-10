@@ -37,17 +37,17 @@ export type Mounts = {
       "public",
       {
         fnArgs: any;
+        fnHandle: string;
         fnType: "action" | "mutation" | "unknown";
-        handle: string;
         options: {
           actionTimeoutMs?: number;
-          completedWorkMaxAgeMs?: number;
           debounceMs?: number;
           fastHeartbeatMs?: number;
           logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
           maxParallelism: number;
           mutationTimeoutMs?: number;
           slowHeartbeatMs?: number;
+          ttl?: number;
           unknownTimeoutMs?: number;
         };
         runAtTime: number;

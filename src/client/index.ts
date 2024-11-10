@@ -20,41 +20,50 @@ export class WorkPool {
   constructor(
     private component: UseApi<typeof api>,
     private options: {
-      // How many actions/mutations can be running at once within this pool.
-      // Min 1, Max 300.
+      /** How many actions/mutations can be running at once within this pool.
+       * Min 1, Max 300.
+       */
       maxParallelism: number;
-      // How long an action can run before the pool considers it to be timed out.
-      // The action itself might time out earlier.
-      // Default 15 minutes.
+      /** How long an action can run before the pool considers it to be timed out.
+       * The action itself might time out earlier.
+       * Default 15 minutes.
+       */
       actionTimeoutMs?: number;
-      // How long a mutation can run before the pool considers it to be timed out.
-      // The mutation itself might time out earlier.
-      // Default 30 seconds.
+      /** How long a mutation can run before the pool considers it to be timed out.
+       * The mutation itself might time out earlier.
+       * Default 30 seconds.
+       */
       mutationTimeoutMs?: number;
-      // How long a function started by `enqueueUnknown` or `runAt` or `runAfter`
-      // can run before the pool considers it to be timed out.
-      // The function itself might time out earlier.
-      // Default 15 minutes.
+      /** How long a function started by `enqueueUnknown` or `runAt` or `runAfter`
+       * can run before the pool considers it to be timed out.
+       * The function itself might time out earlier.
+       * Default 15 minutes.
+       */
       unknownTimeoutMs?: number;
-      // When there is something to do, wait this long between loop iterations,
-      // to allow more work to accumulate.
-      // Default 50ms.
+      /** When there is something to do, wait this long between loop iterations,
+       * to allow more work to accumulate.
+       * Default 50ms.
+       */
       debounceMs?: number;
-      // When something is running, wait this long to check if anything has
-      // been canceled or failed unexpectedly.
-      // Default 10s.
+      /** When something is running, wait this long to check if anything has
+       * been canceled or failed unexpectedly.
+       * Default 10s.
+       */
       fastHeartbeatMs?: number;
-      // When nothing is happening, wait this long to check if there is new work
-      // that we missed.
-      // Default 2 hours.
+      /** When nothing is happening, wait this long to check if there is new work
+       * that we missed.
+       * Default 2 hours.
+       */
       slowHeartbeatMs?: number;
-      // How much to log.
-      // Default WARN.
+      /** How much to log.
+       * Default WARN.
+       */
       logLevel?: LogLevel;
-      // How long to keep completed work in the database, for access by `status`,
-      // `tryResult`, and `pollResult`.
-      // Default 1 day.
-      completedWorkMaxAgeMs?: number;
+      /** How long to keep completed work in the database, for access by `status`,
+       * `tryResult`, and `pollResult`.
+       * Default 1 day.
+       */
+      ttl?: number;
     }
   ) {}
   async enqueueAction<Args extends DefaultFunctionArgs, ReturnType>(
@@ -62,13 +71,13 @@ export class WorkPool {
     fn: FunctionReference<"action", FunctionVisibility, Args, ReturnType>,
     fnArgs: Args
   ): Promise<WorkId<ReturnType>> {
-    const handle = await createFunctionHandle(fn);
+    const fnHandle = await createFunctionHandle(fn);
     const id = await ctx.runMutation(this.component.lib.enqueue, {
-      handle,
-      options: this.options,
+      fnHandle,
       fnArgs,
       fnType: "action",
       runAtTime: Date.now(),
+      options: this.options,
     });
     return id as WorkId<ReturnType>;
   }
@@ -77,13 +86,13 @@ export class WorkPool {
     fn: FunctionReference<"mutation", FunctionVisibility, Args, ReturnType>,
     fnArgs: Args
   ): Promise<WorkId<ReturnType>> {
-    const handle = await createFunctionHandle(fn);
+    const fnHandle = await createFunctionHandle(fn);
     const id = await ctx.runMutation(this.component.lib.enqueue, {
-      handle,
-      options: this.options,
+      fnHandle,
       fnArgs,
       fnType: "mutation",
       runAtTime: Date.now(),
+      options: this.options,
     });
     return id as WorkId<ReturnType>;
   }
@@ -100,13 +109,13 @@ export class WorkPool {
     fnArgs: Args,
     runAtTime: number
   ): Promise<WorkId<null>> {
-    const handle = await createFunctionHandle(fn);
+    const fnHandle = await createFunctionHandle(fn);
     const id = await ctx.runMutation(this.component.lib.enqueue, {
-      handle,
-      options: this.options,
+      fnHandle,
       fnArgs,
       fnType: "unknown",
       runAtTime,
+      options: this.options,
     });
     return id as WorkId<null>;
   }
@@ -167,15 +176,11 @@ export class WorkPool {
         return this.pollResult(ctx, workId, 30 * 1000);
       }) as any,
       scheduler: {
-        runAfter: async (delay: number, fn: any, args: any) => {
-          await this.enqueueUnknown(ctx, fn, args, Date.now() + delay);
-        },
-        runAt: async (time: number, fn: any, args: any) => {
-          await this.enqueueUnknown(ctx, fn, args, time);
-        },
-        cancel: async (id: any) => {
-          await this.cancel(ctx, id);
-        },
+        runAfter: async (delay: number, fn: any, args: any) =>
+          this.enqueueUnknown(ctx, fn, args, Date.now() + delay),
+        runAt: async (time: number, fn: any, args: any) =>
+          this.enqueueUnknown(ctx, fn, args, time),
+        cancel: async (id: any) => this.cancel(ctx, id),
       } as any,
       auth: ctx.auth,
       storage: ctx.storage,
