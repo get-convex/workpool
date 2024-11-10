@@ -344,10 +344,17 @@ export const runActionWrapper = internalAction({
     fnHandle: v.string(),
     fnArgs: v.any(),
   },
+<<<<<<< HEAD
   handler: async (ctx, { workId, fnHandle: handleStr, fnArgs }) => {
     const fnHandle = handleStr as FunctionHandle<"action">;
     try {
       const retval = await ctx.runAction(fnHandle, fnArgs);
+=======
+  handler: async (ctx, { workId, handle: handleStr, fnArgs }) => {
+    const handle = handleStr as FunctionHandle<"action">;
+    try {
+      const retval = await ctx.runAction(handle, fnArgs);
+>>>>>>> main
       await ctx.runMutation(internal.lib.saveResult, {
         workId,
         result: retval,
@@ -416,7 +423,11 @@ async function startMainLoopHandler(ctx: MutationCtx) {
   const mainLoop = await ctx.db.query("mainLoop").unique();
   const console_ = await console(ctx);
   if (!mainLoop) {
+<<<<<<< HEAD
     console_.debug("starting mainLoop");
+=======
+    (await console(ctx)).debug("starting mainLoop");
+>>>>>>> main
     const fn = await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {
       generation: 0,
     });
