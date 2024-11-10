@@ -39,7 +39,7 @@ export declare const internal: FilterApi<
 
 export declare const components: {
   workpool: {
-    public: {
+    lib: {
       cancel: FunctionReference<"mutation", "internal", { id: string }, any>;
       cleanup: FunctionReference<
         "mutation",
@@ -84,7 +84,7 @@ export declare const components: {
     };
   };
   lowpriWorkpool: {
-    public: {
+    lib: {
       cancel: FunctionReference<"mutation", "internal", { id: string }, any>;
       cleanup: FunctionReference<
         "mutation",

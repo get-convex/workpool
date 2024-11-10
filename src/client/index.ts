@@ -63,7 +63,7 @@ export class WorkPool {
     fnArgs: Args
   ): Promise<WorkId<ReturnType>> {
     const handle = await createFunctionHandle(fn);
-    const id = await ctx.runMutation(this.component.public.enqueue, {
+    const id = await ctx.runMutation(this.component.lib.enqueue, {
       handle,
       options: this.options,
       fnArgs,
@@ -78,7 +78,7 @@ export class WorkPool {
     fnArgs: Args
   ): Promise<WorkId<ReturnType>> {
     const handle = await createFunctionHandle(fn);
-    const id = await ctx.runMutation(this.component.public.enqueue, {
+    const id = await ctx.runMutation(this.component.lib.enqueue, {
       handle,
       options: this.options,
       fnArgs,
@@ -101,7 +101,7 @@ export class WorkPool {
     runAtTime: number
   ): Promise<WorkId<null>> {
     const handle = await createFunctionHandle(fn);
-    const id = await ctx.runMutation(this.component.public.enqueue, {
+    const id = await ctx.runMutation(this.component.lib.enqueue, {
       handle,
       options: this.options,
       fnArgs,
@@ -111,7 +111,7 @@ export class WorkPool {
     return id as WorkId<null>;
   }
   async cancel(ctx: RunMutationCtx, id: WorkId<any>): Promise<void> {
-    await ctx.runMutation(this.component.public.cancel, { id });
+    await ctx.runMutation(this.component.lib.cancel, { id });
   }
   async status<ReturnType>(
     ctx: RunQueryCtx,
@@ -122,7 +122,7 @@ export class WorkPool {
     | { kind: "success"; result: ReturnType }
     | { kind: "error"; error: string }
   > {
-    return await ctx.runQuery(this.component.public.status, { id });
+    return await ctx.runQuery(this.component.lib.status, { id });
   }
   async tryResult<ReturnType>(
     ctx: RunQueryCtx,

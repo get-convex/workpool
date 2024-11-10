@@ -8,8 +8,8 @@
  * @module
  */
 
+import type * as lib from "../lib.js";
 import type * as logging from "../logging.js";
-import type * as public from "../public.js";
 
 import type {
   ApiFromModules,
@@ -25,11 +25,11 @@ import type {
  * ```
  */
 declare const fullApi: ApiFromModules<{
+  lib: typeof lib;
   logging: typeof logging;
-  public: typeof public;
 }>;
 export type Mounts = {
-  public: {
+  lib: {
     cancel: FunctionReference<"mutation", "public", { id: string }, any>;
     cleanup: FunctionReference<"mutation", "public", { maxAgeMs: number }, any>;
     enqueue: FunctionReference<

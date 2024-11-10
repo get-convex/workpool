@@ -26,7 +26,7 @@ describe("workpool", () => {
   async function runToCompletion() {
     // We don't want to advance time so far that the cleanup runs and deletes
     // the work before we can check the status. So stop cleanup altogether.
-    await t.mutation(components.workpool.public.stopCleanup, {});
+    await t.mutation(components.workpool.lib.stopCleanup, {});
     // Run a few loops of the mainLoop to process the work.
     // Note we can't call `t.finishAllScheduledFunctions` here because that
     // would loop forever.
@@ -39,11 +39,11 @@ describe("workpool", () => {
   beforeEach(async () => {
     vi.useFakeTimers();
     t = await setupTest();
-    await t.mutation(components.workpool.public.startMainLoop, {});
+    await t.mutation(components.workpool.lib.startMainLoop, {});
   });
 
   afterEach(async () => {
-    await t.mutation(components.workpool.public.stopMainLoop, {});
+    await t.mutation(components.workpool.lib.stopMainLoop, {});
     await t.finishAllScheduledFunctions(vi.runAllTimers);
     vi.useRealTimers();
   });
