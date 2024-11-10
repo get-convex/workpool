@@ -8,7 +8,11 @@ import {
   query,
   QueryCtx,
 } from "./_generated/server";
+<<<<<<< HEAD:src/component/lib.ts
 import { FunctionHandle, WithoutSystemFields } from "convex/server";
+=======
+import { FunctionHandle } from "convex/server";
+>>>>>>> main:src/component/public.ts
 import { Doc, Id } from "./_generated/dataModel";
 import { api, internal } from "./_generated/api";
 import { createLogger, logLevel } from "./logging";
@@ -38,6 +42,16 @@ export const enqueue = mutation({
       logLevel: v.optional(logLevel),
       ttl: v.optional(v.number()),
     }),
+<<<<<<< HEAD:src/component/lib.ts
+=======
+    fnArgs: v.any(),
+    fnType: v.union(
+      v.literal("action"),
+      v.literal("mutation"),
+      v.literal("unknown")
+    ),
+    runAtTime: v.number(),
+>>>>>>> main:src/component/public.ts
   },
   returns: v.id("pendingWork"),
   handler: async (ctx, { fnHandle, options, fnArgs, fnType, runAtTime }) => {
@@ -50,7 +64,12 @@ export const enqueue = mutation({
       debounceMs,
       fastHeartbeatMs: options.fastHeartbeatMs ?? 10 * 1000,
       slowHeartbeatMs: options.slowHeartbeatMs ?? 2 * 60 * 60 * 1000,
+<<<<<<< HEAD:src/component/lib.ts
       ttl: options.ttl ?? 24 * 60 * 60 * 1000,
+=======
+      completedWorkMaxAgeMs:
+        options.completedWorkMaxAgeMs ?? 24 * 60 * 60 * 1000,
+>>>>>>> main:src/component/public.ts
       logLevel: options.logLevel ?? "WARN",
     });
     const workId = await ctx.db.insert("pendingWork", {
@@ -117,6 +136,7 @@ export const mainLoop = internalMutation({
 
     const options = await getOptions(ctx.db);
     if (!options) {
+      console_.info("no pool, skipping mainLoop");
       await kickMainLoop(ctx, 60 * 60 * 1000, true);
       return;
     }
@@ -276,10 +296,17 @@ async function beginWork(
     return {
       scheduledId: await ctx.scheduler.runAfter(
         0,
+<<<<<<< HEAD:src/component/lib.ts
         internal.lib.runActionWrapper,
         {
           workId: work._id,
           fnHandle: work.fnHandle,
+=======
+        internal.public.runActionWrapper,
+        {
+          workId: work._id,
+          handle: work.handle,
+>>>>>>> main:src/component/public.ts
           fnArgs: work.fnArgs,
         }
       ),
@@ -289,17 +316,34 @@ async function beginWork(
     return {
       scheduledId: await ctx.scheduler.runAfter(
         0,
+<<<<<<< HEAD:src/component/lib.ts
         internal.lib.runMutationWrapper,
         {
           workId: work._id,
           fnHandle: work.fnHandle,
+=======
+        internal.public.runMutationWrapper,
+        {
+          workId: work._id,
+          handle: work.handle,
+>>>>>>> main:src/component/public.ts
           fnArgs: work.fnArgs,
         }
       ),
       timeoutMs: mutationTimeoutMs,
     };
   } else if (work.fnType === "unknown") {
+<<<<<<< HEAD:src/component/lib.ts
     const fnHandle = work.fnHandle as FunctionHandle<"action" | "mutation">;
+=======
+    const handle = work.handle as FunctionHandle<
+      "action" | "mutation",
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      any
+    >;
+>>>>>>> main:src/component/public.ts
     return {
       scheduledId: await ctx.scheduler.runAfter(0, fnHandle, work.fnArgs),
       timeoutMs: unknownTimeoutMs,
@@ -343,16 +387,29 @@ export const runActionWrapper = internalAction({
     fnHandle: v.string(),
     fnArgs: v.any(),
   },
+<<<<<<< HEAD:src/component/lib.ts
   handler: async (ctx, { workId, fnHandle: handleStr, fnArgs }) => {
     const fnHandle = handleStr as FunctionHandle<"action">;
     try {
       const retval = await ctx.runAction(fnHandle, fnArgs);
       await ctx.runMutation(internal.lib.saveResult, {
+=======
+  handler: async (ctx, { workId, handle: handleStr, fnArgs }) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const handle = handleStr as FunctionHandle<"action", any, any>;
+    try {
+      const retval = await ctx.runAction(handle, fnArgs);
+      await ctx.runMutation(internal.public.saveResult, {
+>>>>>>> main:src/component/public.ts
         workId,
         result: retval,
       });
     } catch (e: unknown) {
+<<<<<<< HEAD:src/component/lib.ts
       await ctx.runMutation(internal.lib.saveResult, {
+=======
+      await ctx.runMutation(internal.public.saveResult, {
+>>>>>>> main:src/component/public.ts
         workId,
         error: (e as Error).message,
       });
@@ -400,8 +457,14 @@ export const runMutationWrapper = internalMutation({
     fnHandle: v.string(),
     fnArgs: v.any(),
   },
+<<<<<<< HEAD:src/component/lib.ts
   handler: async (ctx, { workId, fnHandle: handleStr, fnArgs }) => {
     const fnHandle = handleStr as FunctionHandle<"mutation">;
+=======
+  handler: async (ctx, { workId, handle: handleStr, fnArgs }) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const handle = handleStr as FunctionHandle<"mutation", any, any>;
+>>>>>>> main:src/component/public.ts
     try {
       const retval = await ctx.runMutation(fnHandle, fnArgs);
       await saveResultHandler(ctx, { workId, result: retval });
@@ -415,8 +478,13 @@ async function startMainLoopHandler(ctx: MutationCtx) {
   const mainLoop = await ctx.db.query("mainLoop").unique();
   const console_ = await console(ctx);
   if (!mainLoop) {
+<<<<<<< HEAD:src/component/lib.ts
     console_.debug("starting mainLoop");
     const fn = await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {
+=======
+    (await console(ctx)).debug("starting mainLoop");
+    const fn = await ctx.scheduler.runAfter(0, internal.public.mainLoop, {
+>>>>>>> main:src/component/public.ts
       generation: 0,
     });
     await ctx.db.insert("mainLoop", {
@@ -429,7 +497,11 @@ async function startMainLoopHandler(ctx: MutationCtx) {
   const existingFn = mainLoop.fn ? await ctx.db.system.get(mainLoop.fn) : null;
   if (existingFn === null || existingFn.completedTime) {
     // mainLoop stopped, so we restart it.
+<<<<<<< HEAD:src/component/lib.ts
     const fn = await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {
+=======
+    const fn = await ctx.scheduler.runAfter(0, internal.public.mainLoop, {
+>>>>>>> main:src/component/public.ts
       generation: mainLoop.generation,
     });
     await ctx.db.patch(mainLoop._id, { fn });
@@ -490,7 +562,11 @@ async function kickMainLoop(
     // 2. The main loop is scheduled to run soon, so we don't need to do anything.
     // Unfortunately, we can't tell the difference between those cases without taking
     // a read dependency on soon-to-be-run mainLoop documents, so we assume the latter.
+<<<<<<< HEAD:src/component/lib.ts
     console_.debug(
+=======
+    (await console(ctx)).debug(
+>>>>>>> main:src/component/public.ts
       "mainLoop already scheduled to run soon (or doesn't exist, in which case you should call `startMainLoop`)"
     );
     return;
@@ -499,11 +575,19 @@ async function kickMainLoop(
   if (!isCurrentlyExecuting && mainLoop.fn) {
     await ctx.scheduler.cancel(mainLoop.fn);
   }
+<<<<<<< HEAD:src/component/lib.ts
   const fn = await ctx.scheduler.runAt(runAtTime, internal.lib.mainLoop, {
     generation: mainLoop.generation,
   });
   await ctx.db.patch(mainLoop._id, { fn, runAtTime });
   console_.debug(
+=======
+  const fn = await ctx.scheduler.runAt(runAtTime, internal.public.mainLoop, {
+    generation: mainLoop.generation,
+  });
+  await ctx.db.patch(mainLoop._id, { fn, runAtTime });
+  (await console(ctx)).debug(
+>>>>>>> main:src/component/public.ts
     "mainLoop was scheduled later, so reschedule it to run sooner"
   );
 }
@@ -569,7 +653,31 @@ const CLEANUP_CRON_NAME = "cleanup";
 
 async function ensurePoolExists(
   ctx: MutationCtx,
+<<<<<<< HEAD:src/component/lib.ts
   opts: WithoutSystemFields<Doc<"pools">>
+=======
+  {
+    maxParallelism,
+    actionTimeoutMs,
+    mutationTimeoutMs,
+    unknownTimeoutMs,
+    debounceMs,
+    fastHeartbeatMs,
+    slowHeartbeatMs,
+    completedWorkMaxAgeMs,
+    logLevel,
+  }: {
+    maxParallelism: number;
+    actionTimeoutMs: number;
+    mutationTimeoutMs: number;
+    unknownTimeoutMs: number;
+    debounceMs: number;
+    fastHeartbeatMs: number;
+    slowHeartbeatMs: number;
+    completedWorkMaxAgeMs: number;
+    logLevel: LogLevel;
+  }
+>>>>>>> main:src/component/public.ts
 ) {
   if (opts.maxParallelism > MAX_POSSIBLE_PARALLELISM) {
     throw new Error(`maxParallelism must be <= ${MAX_POSSIBLE_PARALLELISM}`);
@@ -599,8 +707,17 @@ async function ensurePoolExists(
   await ensureCleanupCron(ctx, opts.ttl);
 }
 
+<<<<<<< HEAD:src/component/lib.ts
 async function ensureCleanupCron(ctx: MutationCtx, ttl: number) {
   if (ttl === Number.POSITIVE_INFINITY) {
+=======
+async function ensureCleanupCron(
+  ctx: MutationCtx,
+  completedWorkMaxAgeMs: number
+) {
+  if (completedWorkMaxAgeMs === Number.POSITIVE_INFINITY) {
+    (await console(ctx)).info("completedWorkMaxAgeMs is Infinity, so we won't schedule cleanup");
+>>>>>>> main:src/component/public.ts
     return;
   }
   const cronFrequencyMs = Math.min(ttl, 24 * 60 * 60 * 1000);
@@ -618,9 +735,15 @@ async function ensureCleanupCron(ctx: MutationCtx, ttl: number) {
   if (cleanupCron === null) {
     await crons.register(
       ctx,
+<<<<<<< HEAD:src/component/lib.ts
       { kind: "interval", ms: ttl },
       api.lib.cleanup,
       { maxAgeMs: ttl },
+=======
+      { kind: "interval", ms: completedWorkMaxAgeMs },
+      api.public.cleanup,
+      { maxAgeMs: completedWorkMaxAgeMs },
+>>>>>>> main:src/component/public.ts
       CLEANUP_CRON_NAME
     );
   }
