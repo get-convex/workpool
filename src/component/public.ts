@@ -8,10 +8,10 @@ import {
   query,
   QueryCtx,
 } from "./_generated/server";
-import { FunctionHandle } from "convex/server";
+import { FunctionHandle, WithoutSystemFields } from "convex/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { api, internal } from "./_generated/api";
-import { createLogger, logLevel, LogLevel } from "./logging";
+import { createLogger, logLevel } from "./logging";
 import { components } from "./_generated/api";
 import { Crons } from "@convex-dev/crons";
 
@@ -589,82 +589,34 @@ const CLEANUP_CRON_NAME = "cleanup";
 
 async function ensurePoolExists(
   ctx: MutationCtx,
-  {
-    maxParallelism,
-    actionTimeoutMs,
-    mutationTimeoutMs,
-    unknownTimeoutMs,
-    debounceMs,
-    fastHeartbeatMs,
-    slowHeartbeatMs,
-    completedWorkMaxAgeMs,
-    logLevel,
-  }: {
-    maxParallelism: number;
-    actionTimeoutMs: number;
-    mutationTimeoutMs: number;
-    unknownTimeoutMs: number;
-    debounceMs: number;
-    fastHeartbeatMs: number;
-    slowHeartbeatMs: number;
-    completedWorkMaxAgeMs: number;
-    logLevel: LogLevel;
-  }
+  opts: WithoutSystemFields<Doc<"pools">>
 ) {
-  if (maxParallelism > MAX_POSSIBLE_PARALLELISM) {
+  if (opts.maxParallelism > MAX_POSSIBLE_PARALLELISM) {
     throw new Error(`maxParallelism must be <= ${MAX_POSSIBLE_PARALLELISM}`);
   }
-  if (maxParallelism < 1) {
+  if (opts.maxParallelism < 1) {
     throw new Error("maxParallelism must be >= 1");
   }
-  if (debounceMs < 10) {
+  if (opts.debounceMs < 10) {
     throw new Error("debounceMs must be >= 10 to prevent OCCs");
   }
   const pool = await ctx.db.query("pools").unique();
   if (pool) {
-    if (pool.maxParallelism !== maxParallelism) {
-      await ctx.db.patch(pool._id, { maxParallelism });
+    let update = false;
+    for (const key in opts) {
+      if (pool[key as keyof typeof opts] !== opts[key as keyof typeof opts]) {
+        update = true;
+      }
     }
-    if (pool.actionTimeoutMs !== actionTimeoutMs) {
-      await ctx.db.patch(pool._id, { actionTimeoutMs });
-    }
-    if (pool.mutationTimeoutMs !== mutationTimeoutMs) {
-      await ctx.db.patch(pool._id, { mutationTimeoutMs });
-    }
-    if (pool.unknownTimeoutMs !== unknownTimeoutMs) {
-      await ctx.db.patch(pool._id, { unknownTimeoutMs });
-    }
-    if (pool.debounceMs !== debounceMs) {
-      await ctx.db.patch(pool._id, { debounceMs });
-    }
-    if (pool.fastHeartbeatMs !== fastHeartbeatMs) {
-      await ctx.db.patch(pool._id, { fastHeartbeatMs });
-    }
-    if (pool.slowHeartbeatMs !== slowHeartbeatMs) {
-      await ctx.db.patch(pool._id, { slowHeartbeatMs });
-    }
-    if (pool.completedWorkMaxAgeMs !== completedWorkMaxAgeMs) {
-      await ctx.db.patch(pool._id, { completedWorkMaxAgeMs });
-    }
-    if (pool.logLevel !== logLevel) {
-      await ctx.db.patch(pool._id, { logLevel });
+    if (update) {
+      await ctx.db.patch(pool._id, opts);
     }
   }
   if (!pool) {
-    await ctx.db.insert("pools", {
-      maxParallelism,
-      actionTimeoutMs,
-      mutationTimeoutMs,
-      unknownTimeoutMs,
-      debounceMs,
-      fastHeartbeatMs,
-      slowHeartbeatMs,
-      completedWorkMaxAgeMs,
-      logLevel,
-    });
+    await ctx.db.insert("pools", opts);
     await startMainLoopHandler(ctx);
   }
-  await ensureCleanupCron(ctx, completedWorkMaxAgeMs);
+  await ensureCleanupCron(ctx, opts.completedWorkMaxAgeMs);
 }
 
 async function ensureCleanupCron(
