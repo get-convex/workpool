@@ -56,7 +56,11 @@ export default defineSchema({
   }).index("runAtTime", ["runAtTime"]),
 
   pendingWork: defineTable({
-    fnType: v.union(v.literal("action"), v.literal("mutation"), v.literal("unknown")),
+    fnType: v.union(
+      v.literal("action"),
+      v.literal("mutation"),
+      v.literal("unknown")
+    ),
     handle: v.string(),
     fnArgs: v.any(),
     runAtTime: v.number(),
@@ -75,7 +79,7 @@ export default defineSchema({
     timeoutMs: v.number(),
     workId: v.id("pendingWork"),
   }).index("workId", ["workId"]),
-  
+
   completedWork: defineTable({
     result: v.optional(v.any()),
     error: v.optional(v.string()),
