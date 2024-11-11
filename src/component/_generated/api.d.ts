@@ -10,6 +10,7 @@
 
 import type * as lib from "../lib.js";
 import type * as logging from "../logging.js";
+import type * as stats from "../stats.js";
 
 import type {
   ApiFromModules,
@@ -27,6 +28,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   lib: typeof lib;
   logging: typeof logging;
+  stats: typeof stats;
 }>;
 export type Mounts = {
   lib: {
@@ -38,6 +40,7 @@ export type Mounts = {
       {
         fnArgs: any;
         fnHandle: string;
+        fnName: string;
         fnType: "action" | "mutation" | "unknown";
         options: {
           actionTimeoutMs?: number;

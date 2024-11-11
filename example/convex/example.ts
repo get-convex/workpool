@@ -1,5 +1,5 @@
-import { mutation, action, query, ActionCtx } from "./_generated/server";
-import { api, components } from "./_generated/api";
+import { mutation, action, query, internalMutation, internalAction } from "./_generated/server";
+import { api, components, internal } from "./_generated/api";
 import { WorkId, WorkPool } from "@convex-dev/workpool";
 import { v } from "convex/values";
 
@@ -91,17 +91,44 @@ export const enqueueAndWait = action({
   },
 });
 
-export const doSomethingInPool = action({
+async function sampleWork() {
+  const index = Math.floor(Math.random() * 3000) + 1;
+  const url = `https://xkcd.com/${index}`;
+  const response = await fetch(url);
+  const text = await response.text();
+  const titleMatch = text.match(/<title>(.*)<\/title>/);
+  console.log(`xkcd ${index} title: ${titleMatch?.[1]}`);
+}
+
+// Example background work: scraping from a website.
+export const backgroundWork = internalAction({
   args: {},
-  handler: async (ctx, _args): Promise<number> => {
-    // poolCtx is a drop-in replacement for ctx that does all work in the pool.
-    const poolCtx = pool.ctx(ctx);
-    return await doSomething(poolCtx);
+  handler: async () => {
+    await sampleWork();
   },
 });
 
-async function doSomething(ctx: ActionCtx): Promise<number> {
-  const data1 = await ctx.runMutation(api.example.addMutation, { data: 1 });
-  const data2 = await ctx.runAction(api.example.addAction, { data: 2 });
-  return data1 + data2;
-}
+export const startBackgroundWork = internalMutation({
+  args: {},
+  handler: async (ctx, _args) => {
+    for (let i = 0; i < 20; i++) {
+      await lowpriPool.enqueueAction(ctx, internal.example.backgroundWork, {});
+    }
+  },
+});
+
+// Example foreground work: calling an API on behalf of a user.
+export const foregroundWork = internalAction({
+  args: {},
+  handler: async () => {
+    await sampleWork();
+  },
+});
+
+export const startForegroundWork = internalMutation({
+  args: {},
+  handler: async (ctx, _args) => {
+    await pool.enqueueAction(ctx, internal.example.foregroundWork, {});
+  },
+});
+
