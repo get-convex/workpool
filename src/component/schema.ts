@@ -44,7 +44,7 @@ export default defineSchema({
     debounceMs: v.number(),
     fastHeartbeatMs: v.number(),
     slowHeartbeatMs: v.number(),
-    completedWorkMaxAgeMs: v.number(),
+    ttl: v.number(),
     logLevel,
   }),
 
@@ -56,8 +56,12 @@ export default defineSchema({
   }).index("runAtTime", ["runAtTime"]),
 
   pendingWork: defineTable({
-    fnType: v.union(v.literal("action"), v.literal("mutation"), v.literal("unknown")),
-    handle: v.string(),
+    fnType: v.union(
+      v.literal("action"),
+      v.literal("mutation"),
+      v.literal("unknown")
+    ),
+    fnHandle: v.string(),
     fnArgs: v.any(),
     runAtTime: v.number(),
   }).index("runAtTime", ["runAtTime"]),
@@ -75,7 +79,7 @@ export default defineSchema({
     timeoutMs: v.number(),
     workId: v.id("pendingWork"),
   }).index("workId", ["workId"]),
-  
+
   completedWork: defineTable({
     result: v.optional(v.any()),
     error: v.optional(v.string()),

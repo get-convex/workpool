@@ -8,8 +8,8 @@
  * @module
  */
 
+import type * as lib from "../lib.js";
 import type * as logging from "../logging.js";
-import type * as public from "../public.js";
 
 import type {
   ApiFromModules,
@@ -25,11 +25,11 @@ import type {
  * ```
  */
 declare const fullApi: ApiFromModules<{
+  lib: typeof lib;
   logging: typeof logging;
-  public: typeof public;
 }>;
 export type Mounts = {
-  public: {
+  lib: {
     cancel: FunctionReference<"mutation", "public", { id: string }, any>;
     cleanup: FunctionReference<"mutation", "public", { maxAgeMs: number }, any>;
     enqueue: FunctionReference<
@@ -37,17 +37,17 @@ export type Mounts = {
       "public",
       {
         fnArgs: any;
+        fnHandle: string;
         fnType: "action" | "mutation" | "unknown";
-        handle: string;
         options: {
           actionTimeoutMs?: number;
-          completedWorkMaxAgeMs?: number;
           debounceMs?: number;
           fastHeartbeatMs?: number;
           logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
           maxParallelism: number;
           mutationTimeoutMs?: number;
           slowHeartbeatMs?: number;
+          ttl?: number;
           unknownTimeoutMs?: number;
         };
         runAtTime: number;
