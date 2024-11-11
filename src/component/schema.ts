@@ -49,6 +49,11 @@ export default defineSchema({
   }),
 
   // State across all pools.
+  // TODO(emma) change this to use a boolean or enum of statuses, instead of using runAtTime.
+  // Status like "running", "waitingForJobCompletion", "idle".
+  // Currently there's a problem if enqueue is called from a mutation that takes longer than
+  // debounceMs to complete, and a mainLoop finishes and restarts in that time window. Then the enqueue will OCC with the mainLoop.
+  // But if we have fixed statuses, we don't need to write it so frequently so it won't OCC. Chat with @ian about details.
   mainLoop: defineTable({
     fn: v.optional(v.id("_scheduled_functions")),
     generation: v.number(),
@@ -62,6 +67,7 @@ export default defineSchema({
       v.literal("unknown")
     ),
     fnHandle: v.string(),
+    fnName: v.string(),
     fnArgs: v.any(),
     runAtTime: v.number(),
   }).index("runAtTime", ["runAtTime"]),

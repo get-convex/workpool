@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as crons from "../crons.js";
 import type * as example from "../example.js";
 
 import type {
@@ -24,6 +25,7 @@ import type {
  * ```
  */
 declare const fullApi: ApiFromModules<{
+  crons: typeof crons;
   example: typeof example;
 }>;
 declare const fullApiWithMounts: typeof fullApi;
@@ -53,6 +55,7 @@ export declare const components: {
         {
           fnArgs: any;
           fnHandle: string;
+          fnName: string;
           fnType: "action" | "mutation" | "unknown";
           options: {
             actionTimeoutMs?: number;
@@ -98,6 +101,7 @@ export declare const components: {
         {
           fnArgs: any;
           fnHandle: string;
+          fnName: string;
           fnType: "action" | "mutation" | "unknown";
           options: {
             actionTimeoutMs?: number;

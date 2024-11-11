@@ -9,6 +9,7 @@ import {
   GenericDataModel,
   GenericMutationCtx,
   GenericQueryCtx,
+  getFunctionName,
 } from "convex/server";
 import { GenericId } from "convex/values";
 import { api } from "../component/_generated/api";
@@ -19,6 +20,8 @@ export type WorkId<ReturnType> = string & { __returnType: ReturnType };
 export class WorkPool {
   constructor(
     private component: UseApi<typeof api>,
+    // TODO(emma) reduce the number of options. consider removing the timeout options.
+    // consider removing the debounceMs option and the heartbeats.
     private options: {
       /** How many actions/mutations can be running at once within this pool.
        * Min 1, Max 300.
@@ -74,6 +77,7 @@ export class WorkPool {
     const fnHandle = await createFunctionHandle(fn);
     const id = await ctx.runMutation(this.component.lib.enqueue, {
       fnHandle,
+      fnName: getFunctionName(fn),
       fnArgs,
       fnType: "action",
       runAtTime: Date.now(),
@@ -89,6 +93,7 @@ export class WorkPool {
     const fnHandle = await createFunctionHandle(fn);
     const id = await ctx.runMutation(this.component.lib.enqueue, {
       fnHandle,
+      fnName: getFunctionName(fn),
       fnArgs,
       fnType: "mutation",
       runAtTime: Date.now(),
@@ -112,6 +117,7 @@ export class WorkPool {
     const fnHandle = await createFunctionHandle(fn);
     const id = await ctx.runMutation(this.component.lib.enqueue, {
       fnHandle,
+      fnName: getFunctionName(fn),
       fnArgs,
       fnType: "unknown",
       runAtTime,
@@ -146,6 +152,7 @@ export class WorkPool {
     }
     return undefined;
   }
+  // TODO(emma) consider removing. Apps can do this with `tryResult` if they want, and this is a tight resource-intensive loop.
   async pollResult<ReturnType>(
     ctx: RunQueryCtx & RunActionCtx,
     id: WorkId<ReturnType>,
@@ -163,6 +170,10 @@ export class WorkPool {
       await new Promise<void>((resolve) => setTimeout(resolve, 50));
     }
   }
+  // TODO(emma): just make this a wrapper around the scheduler.
+  // don't need to do the runAction/runMutation here.
+  // Also we can consider deleting this method entirely; just make them use
+  // enqueueMutation and enqueueAction.
   ctx<DataModel extends GenericDataModel>(
     ctx: GenericActionCtx<DataModel>
   ): GenericActionCtx<DataModel> {

@@ -14,12 +14,14 @@ import { api, internal } from "./_generated/api";
 import { createLogger, logLevel } from "./logging";
 import { components } from "./_generated/api";
 import { Crons } from "@convex-dev/crons";
+import { recordCompleted, recordStarted } from "./stats";
 
 const crons = new Crons(components.crons);
 
 export const enqueue = mutation({
   args: {
     fnHandle: v.string(),
+    fnName: v.string(),
     fnArgs: v.any(),
     fnType: v.union(
       v.literal("action"),
@@ -40,7 +42,7 @@ export const enqueue = mutation({
     }),
   },
   returns: v.id("pendingWork"),
-  handler: async (ctx, { fnHandle, options, fnArgs, fnType, runAtTime }) => {
+  handler: async (ctx, { fnHandle, fnName, options, fnArgs, fnType, runAtTime }) => {
     const debounceMs = options.debounceMs ?? 50;
     await ensurePoolExists(ctx, {
       maxParallelism: options.maxParallelism,
@@ -55,6 +57,7 @@ export const enqueue = mutation({
     });
     const workId = await ctx.db.insert("pendingWork", {
       fnHandle,
+      fnName,
       fnArgs,
       fnType,
       runAtTime,
@@ -179,6 +182,7 @@ export const mainLoop = internalMutation({
           error: work.error,
           workId: work.workId,
         });
+        recordCompleted(work.workId, work.error ? "failure" : "success");
         didSomething = true;
       })
     );
@@ -200,6 +204,7 @@ export const mainLoop = internalMutation({
             workId: work.workId,
             error: "Canceled",
           });
+          recordCompleted(work.workId, "canceled");
         }
         await ctx.db.delete(work._id);
         didSomething = true;
@@ -227,6 +232,7 @@ export const mainLoop = internalMutation({
               workId: work.workId,
               ...result,
             });
+            recordCompleted(work.workId, result.error ? "failure" : "success");
             didSomething = true;
           }
         })
@@ -272,6 +278,7 @@ async function beginWork(
   if (!options) {
     throw new Error("cannot begin work with no pool");
   }
+  recordStarted(work._id, work.fnName, work._creationTime, work.runAtTime);
   const { mutationTimeoutMs, actionTimeoutMs, unknownTimeoutMs } = options;
   if (work.fnType === "action") {
     return {
