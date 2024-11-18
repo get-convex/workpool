@@ -3,18 +3,22 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
 
 function App() {
-  const count = useQuery(api.app.getCount);
-  const addOne = useMutation(api.app.addOne);
+  const list = useQuery(api.example.list);
+  const addNow = useMutation(api.example.addNow);
+  const addLater = useMutation(api.example.addLater);
 
   return (
     <>
-      <h1>Convex Counter Component Example</h1>
+      <h1>Convex Workpool Component Example</h1>
       <div className="card">
-        <button onClick={() => addOne()}>count is {count}</button>
-        <p>
-          See <code>example/convex/example.ts</code> for all the ways to use
-          this component
-        </p>
+        <button onClick={() => addNow({})}>add some now yo</button>
+        <button onClick={() => addLater({})}>add some whenever dogg</button>
+        <div>
+          <h3>This is the stuff:</h3>
+          <div style={{ listStyle: "none" }}>
+            {list?.map((item) => <div key={item._id}>{item.data}</div>)}
+          </div>
+        </div>
       </div>
     </>
   );

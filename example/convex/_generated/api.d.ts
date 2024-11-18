@@ -8,7 +8,6 @@
  * @module
  */
 
-import type * as crons from "../crons.js";
 import type * as example from "../example.js";
 
 import type {
@@ -25,7 +24,6 @@ import type {
  * ```
  */
 declare const fullApi: ApiFromModules<{
-  crons: typeof crons;
   example: typeof example;
 }>;
 declare const fullApiWithMounts: typeof fullApi;
@@ -61,7 +59,6 @@ export declare const components: {
             actionTimeoutMs?: number;
             debounceMs?: number;
             fastHeartbeatMs?: number;
-            logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
             maxParallelism: number;
             mutationTimeoutMs?: number;
             slowHeartbeatMs?: number;
@@ -107,7 +104,6 @@ export declare const components: {
             actionTimeoutMs?: number;
             debounceMs?: number;
             fastHeartbeatMs?: number;
-            logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
             maxParallelism: number;
             mutationTimeoutMs?: number;
             slowHeartbeatMs?: number;

@@ -1,4 +1,10 @@
-import { mutation, action, query, internalMutation, internalAction } from "./_generated/server";
+import {
+  mutation,
+  action,
+  query,
+  internalMutation,
+  internalAction,
+} from "./_generated/server";
 import { api, components, internal } from "./_generated/api";
 import { WorkId, WorkPool } from "@convex-dev/workpool";
 import { v } from "convex/values";
@@ -7,35 +13,33 @@ const pool = new WorkPool(components.workpool, {
   maxParallelism: 3,
   // For tests, disable completed work cleanup.
   ttl: Number.POSITIVE_INFINITY,
-  logLevel: "DEBUG",
 });
 const lowpriPool = new WorkPool(components.lowpriWorkpool, {
   maxParallelism: 1,
   // For tests, disable completed work cleanup.
   ttl: Number.POSITIVE_INFINITY,
-  logLevel: "INFO",
 });
 
-export const addMutation = mutation({
+export const addNow = mutation({
   args: { data: v.optional(v.number()) },
   handler: async (ctx, { data }) => {
     const d = data ?? Math.random();
     await ctx.db.insert("data", { data: d });
-    return d;
   },
 });
 
-export const addAction = action({
+export const addLater = mutation({
   args: { data: v.optional(v.number()) },
-  handler: async (ctx, { data }): Promise<number> => {
-    return await ctx.runMutation(api.example.addMutation, { data });
+  handler: async (ctx, { data }) => {
+    // XXX make work with actions too
+    await pool.enqueueMutation(ctx, api.example.addNow, { data });
   },
 });
 
-export const enqueueOneMutation = mutation({
-  args: { data: v.number() },
-  handler: async (ctx, { data }): Promise<string> => {
-    return await pool.enqueueMutation(ctx, api.example.addMutation, { data });
+export const list = query({
+  args: {},
+  handler: async (ctx, {}) => {
+    return ctx.db.query("data").collect();
   },
 });
 
@@ -50,7 +54,7 @@ export const enqueueABunchOfMutations = mutation({
   args: {},
   handler: async (ctx, _args) => {
     for (let i = 0; i < 30; i++) {
-      await pool.enqueueMutation(ctx, api.example.addMutation, {});
+      await pool.enqueueMutation(ctx, api.example.addNow, {});
     }
   },
 });
@@ -70,24 +74,6 @@ export const enqueueLowPriMutations = mutation({
     for (let i = 0; i < 30; i++) {
       await lowpriPool.enqueueMutation(ctx, api.example.addLowPri, {});
     }
-  },
-});
-
-export const enqueueABunchOfActions = mutation({
-  args: {},
-  handler: async (ctx, _args) => {
-    for (let i = 0; i < 30; i++) {
-      await pool.enqueueAction(ctx, api.example.addAction, {});
-    }
-  },
-});
-
-export const enqueueAndWait = action({
-  args: {},
-  handler: async (ctx, _args): Promise<number> => {
-    const work = await pool.enqueueAction(ctx, api.example.addAction, {});
-    const result = await pool.pollResult(ctx, work, 30 * 1000);
-    return result;
   },
 });
 
@@ -131,4 +117,3 @@ export const startForegroundWork = internalMutation({
     await pool.enqueueAction(ctx, internal.example.foregroundWork, {});
   },
 });
-

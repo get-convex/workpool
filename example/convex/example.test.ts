@@ -48,12 +48,12 @@ describe("workpool", () => {
     vi.useRealTimers();
   });
 
-  test("enqueue and get status", async () => {
-    const id = await t.mutation(api.example.enqueueOneMutation, { data: 1 });
-    await runToCompletion();
-    expect(await t.query(api.example.status, { id })).toEqual({
-      kind: "success",
-      result: 1,
-    });
-  });
+  // test("enqueue and get status", async () => {
+  //   const id = await t.mutation(api.example.enqueueOneMutation, { data: 1 });
+  //   await runToCompletion();
+  //   expect(await t.query(api.example.status, { id })).toEqual({
+  //     kind: "success",
+  //     result: 1,
+  //   });
+  // });
 });
