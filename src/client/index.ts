@@ -13,7 +13,6 @@ import {
 } from "convex/server";
 import { GenericId } from "convex/values";
 import { api } from "../component/_generated/api";
-import { LogLevel } from "../component/logging";
 
 export type WorkId<ReturnType> = string & { __returnType: ReturnType };
 
@@ -58,10 +57,6 @@ export class WorkPool {
        * Default 2 hours.
        */
       slowHeartbeatMs?: number;
-      /** How much to log.
-       * Default WARN.
-       */
-      logLevel?: LogLevel;
       /** How long to keep completed work in the database, for access by `status`,
        * `tryResult`, and `pollResult`.
        * Default 1 day.

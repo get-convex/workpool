@@ -9,7 +9,7 @@
  */
 
 import type * as lib from "../lib.js";
-import type * as logging from "../logging.js";
+import type * as newSchema from "../newSchema.js";
 import type * as stats from "../stats.js";
 
 import type {
@@ -27,7 +27,7 @@ import type {
  */
 declare const fullApi: ApiFromModules<{
   lib: typeof lib;
-  logging: typeof logging;
+  newSchema: typeof newSchema;
   stats: typeof stats;
 }>;
 export type Mounts = {
@@ -46,7 +46,6 @@ export type Mounts = {
           actionTimeoutMs?: number;
           debounceMs?: number;
           fastHeartbeatMs?: number;
-          logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
           maxParallelism: number;
           mutationTimeoutMs?: number;
           slowHeartbeatMs?: number;

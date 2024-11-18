@@ -1,6 +1,5 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import { logLevel } from "./logging";
 
 /**
 Data flow:
@@ -45,7 +44,6 @@ export default defineSchema({
     fastHeartbeatMs: v.number(),
     slowHeartbeatMs: v.number(),
     ttl: v.number(),
-    logLevel,
   }),
 
   // State across all pools.
