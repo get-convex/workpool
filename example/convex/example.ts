@@ -5,8 +5,6 @@ import { v } from "convex/values";
 
 const pool = new WorkPool(components.workpool, {
   maxParallelism: 3,
-  // For tests, disable completed work cleanup.
-  ttl: Number.POSITIVE_INFINITY,
 });
 
 export const addNow = mutation({

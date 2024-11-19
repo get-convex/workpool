@@ -41,12 +41,7 @@ export declare const components: {
   workpool: {
     lib: {
       cancel: FunctionReference<"mutation", "internal", { id: string }, any>;
-      cleanup: FunctionReference<
-        "mutation",
-        "internal",
-        { maxAgeMs: number },
-        any
-      >;
+      cleanup: FunctionReference<"mutation", "internal", {}, any>;
       enqueue: FunctionReference<
         "mutation",
         "internal",
@@ -59,7 +54,6 @@ export declare const components: {
             fastHeartbeatMs?: number;
             maxParallelism: number;
             slowHeartbeatMs?: number;
-            ttl?: number;
           };
           runAtTime: number;
         },
@@ -82,12 +76,7 @@ export declare const components: {
   lowpriWorkpool: {
     lib: {
       cancel: FunctionReference<"mutation", "internal", { id: string }, any>;
-      cleanup: FunctionReference<
-        "mutation",
-        "internal",
-        { maxAgeMs: number },
-        any
-      >;
+      cleanup: FunctionReference<"mutation", "internal", {}, any>;
       enqueue: FunctionReference<
         "mutation",
         "internal",
@@ -100,7 +89,6 @@ export declare const components: {
             fastHeartbeatMs?: number;
             maxParallelism: number;
             slowHeartbeatMs?: number;
-            ttl?: number;
           };
           runAtTime: number;
         },

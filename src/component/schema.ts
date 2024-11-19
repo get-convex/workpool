@@ -39,7 +39,6 @@ export default defineSchema({
     maxParallelism: v.number(),
     fastHeartbeatMs: v.number(),
     slowHeartbeatMs: v.number(),
-    ttl: v.number(),
   }),
 
   // State across all pools.

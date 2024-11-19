@@ -31,7 +31,7 @@ declare const fullApi: ApiFromModules<{
 export type Mounts = {
   lib: {
     cancel: FunctionReference<"mutation", "public", { id: string }, any>;
-    cleanup: FunctionReference<"mutation", "public", { maxAgeMs: number }, any>;
+    cleanup: FunctionReference<"mutation", "public", {}, any>;
     enqueue: FunctionReference<
       "mutation",
       "public",
@@ -44,7 +44,6 @@ export type Mounts = {
           fastHeartbeatMs?: number;
           maxParallelism: number;
           slowHeartbeatMs?: number;
-          ttl?: number;
         };
         runAtTime: number;
       },

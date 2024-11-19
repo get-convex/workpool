@@ -32,7 +32,6 @@ export const enqueue = mutation({
       maxParallelism: v.number(),
       fastHeartbeatMs: v.optional(v.number()),
       slowHeartbeatMs: v.optional(v.number()),
-      ttl: v.optional(v.number()),
     }),
   },
   returns: v.id("pendingWork"),
@@ -44,7 +43,6 @@ export const enqueue = mutation({
       maxParallelism: options.maxParallelism,
       fastHeartbeatMs: options.fastHeartbeatMs ?? 10 * 1000,
       slowHeartbeatMs: options.slowHeartbeatMs ?? 2 * 60 * 60 * 1000,
-      ttl: options.ttl ?? 24 * 60 * 60 * 1000,
     });
     const workId = await ctx.db.insert("pendingWork", {
       fnHandle,
@@ -523,11 +521,9 @@ export const status = query({
 });
 
 export const cleanup = mutation({
-  args: {
-    maxAgeMs: v.number(),
-  },
-  handler: async (ctx, { maxAgeMs }) => {
-    const old = Date.now() - maxAgeMs;
+  args: {},
+  handler: async (ctx) => {
+    const old = Date.now() - 24 * 60 * 60 * 1000;
     const docs = await ctx.db
       .query("completedWork")
       .withIndex("by_creation_time", (q) => q.lt("_creationTime", old))
@@ -565,17 +561,11 @@ async function ensurePoolExists(
     await ctx.db.insert("pools", opts);
     await startMainLoopHandler(ctx);
   }
-  await ensureCleanupCron(ctx, opts.ttl);
+  await ensureCleanupCron(ctx);
 }
 
-async function ensureCleanupCron(ctx: MutationCtx, ttl: number) {
-  if (ttl === Number.POSITIVE_INFINITY) {
-    // (await console(ctx)).info(
-    //   "completedWorkMaxAgeMs is Infinity, so we won't schedule cleanup"
-    // );
-    return;
-  }
-  const cronFrequencyMs = Math.min(ttl, 24 * 60 * 60 * 1000);
+async function ensureCleanupCron(ctx: MutationCtx) {
+  const cronFrequencyMs = 24 * 60 * 60 * 1000;
   let cleanupCron = await crons.get(ctx, { name: CLEANUP_CRON_NAME });
   if (
     cleanupCron !== null &&
@@ -590,9 +580,9 @@ async function ensureCleanupCron(ctx: MutationCtx, ttl: number) {
   if (cleanupCron === null) {
     await crons.register(
       ctx,
-      { kind: "interval", ms: ttl },
+      { kind: "interval", ms: cronFrequencyMs },
       api.lib.cleanup,
-      { maxAgeMs: ttl },
+      {},
       CLEANUP_CRON_NAME
     );
   }

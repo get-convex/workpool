@@ -36,11 +36,6 @@ export class WorkPool {
        * Default 2 hours.
        */
       slowHeartbeatMs?: number;
-      /** How long to keep completed work in the database, for access by `status`,
-       * `tryResult`, and `pollResult`.
-       * Default 1 day.
-       */
-      ttl?: number;
     }
   ) {}
   async enqueueAction<Args extends DefaultFunctionArgs, ReturnType>(
