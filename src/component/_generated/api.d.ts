@@ -40,11 +40,7 @@ export type Mounts = {
         fnHandle: string;
         fnName: string;
         fnType: "action" | "mutation" | "unknown";
-        options: {
-          fastHeartbeatMs?: number;
-          maxParallelism: number;
-          slowHeartbeatMs?: number;
-        };
+        options: { maxParallelism: number };
         runAtTime: number;
       },
       string

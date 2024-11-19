@@ -37,8 +37,6 @@ export default defineSchema({
   // Statically configured.
   pools: defineTable({
     maxParallelism: v.number(),
-    fastHeartbeatMs: v.number(),
-    slowHeartbeatMs: v.number(),
   }),
 
   // State across all pools.

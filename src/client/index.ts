@@ -19,23 +19,11 @@ export type WorkId<ReturnType> = string & { __returnType: ReturnType };
 export class WorkPool {
   constructor(
     private component: UseApi<typeof api>,
-    // TODO(emma) reduce the number of options. consider removing the timeout options.
-    // consider removing the heartbeats.
     private options: {
       /** How many actions/mutations can be running at once within this pool.
        * Min 1, Max 300.
        */
       maxParallelism: number;
-      /** When something is running, wait this long to check if anything has
-       * been canceled or failed unexpectedly.
-       * Default 10s.
-       */
-      fastHeartbeatMs?: number;
-      /** When nothing is happening, wait this long to check if there is new work
-       * that we missed.
-       * Default 2 hours.
-       */
-      slowHeartbeatMs?: number;
     }
   ) {}
   async enqueueAction<Args extends DefaultFunctionArgs, ReturnType>(

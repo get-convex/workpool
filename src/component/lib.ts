@@ -30,8 +30,6 @@ export const enqueue = mutation({
     runAtTime: v.number(),
     options: v.object({
       maxParallelism: v.number(),
-      fastHeartbeatMs: v.optional(v.number()),
-      slowHeartbeatMs: v.optional(v.number()),
     }),
   },
   returns: v.id("pendingWork"),
@@ -41,8 +39,6 @@ export const enqueue = mutation({
   ) => {
     await ensurePoolExists(ctx, {
       maxParallelism: options.maxParallelism,
-      fastHeartbeatMs: options.fastHeartbeatMs ?? 10 * 1000,
-      slowHeartbeatMs: options.slowHeartbeatMs ?? 2 * 60 * 60 * 1000,
     });
     const workId = await ctx.db.insert("pendingWork", {
       fnHandle,
@@ -103,7 +99,7 @@ export const mainLoop = internalMutation({
       await kickMainLoop(ctx, 60 * 60 * 1000, true);
       return;
     }
-    const { maxParallelism, fastHeartbeatMs, slowHeartbeatMs } = options;
+    const { maxParallelism } = options;
 
     // console_.time("inProgress count");
     // This is the only function reading and writing inProgressWork,
@@ -230,11 +226,11 @@ export const mainLoop = internalMutation({
         .first();
       const nextPendingTime = nextPending
         ? nextPending.runAtTime
-        : slowHeartbeatMs + Date.now();
+        : 2 * 60 * 60 * 1000 + Date.now();
       // XXX custom timeout per mutation/action
       const nextInProgress = allInProgressWork.length
         ? Math.min(
-            fastHeartbeatMs + Date.now(),
+            10 * 1000 + Date.now(),
             ...allInProgressWork.map((w) => w._creationTime + 15 * 60 * 1000)
           )
         : Number.POSITIVE_INFINITY;
