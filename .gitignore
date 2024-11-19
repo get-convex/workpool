@@ -16,3 +16,5 @@ package-lock.json
 react/package.json
 # npm pack output
 *.tgz
+
+TODO.txt
