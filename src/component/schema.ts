@@ -52,11 +52,7 @@ export default defineSchema({
   }).index("runAtTime", ["runAtTime"]),
 
   pendingWork: defineTable({
-    fnType: v.union(
-      v.literal("action"),
-      v.literal("mutation"),
-      v.literal("unknown")
-    ),
+    fnType: v.union(v.literal("action"), v.literal("mutation")),
     fnHandle: v.string(),
     fnName: v.string(),
     fnArgs: v.any(),

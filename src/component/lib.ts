@@ -1,6 +1,5 @@
 import { v } from "convex/values";
 import {
-  DatabaseReader,
   internalAction,
   internalMutation,
   mutation,
@@ -22,11 +21,7 @@ export const enqueue = mutation({
     fnHandle: v.string(),
     fnName: v.string(),
     fnArgs: v.any(),
-    fnType: v.union(
-      v.literal("action"),
-      v.literal("mutation"),
-      v.literal("unknown")
-    ),
+    fnType: v.union(v.literal("action"), v.literal("mutation")),
     workers: v.number(),
   },
   returns: v.id("pendingWork"),
@@ -231,6 +226,8 @@ async function beginWork(
   scheduledId: Id<"_scheduled_functions">;
 }> {
   recordStarted(work._id, work.fnName, work._creationTime, work.runAtTime);
+
+  // XXX can we infer the type instead of reading it from the db?
   if (work.fnType === "action") {
     return {
       scheduledId: await ctx.scheduler.runAfter(
@@ -254,11 +251,6 @@ async function beginWork(
           fnArgs: work.fnArgs,
         }
       ),
-    };
-  } else if (work.fnType === "unknown") {
-    const fnHandle = work.fnHandle as FunctionHandle<"action" | "mutation">;
-    return {
-      scheduledId: await ctx.scheduler.runAfter(0, fnHandle, work.fnArgs),
     };
   } else {
     throw new Error(`Unexpected fnType ${work.fnType}`);

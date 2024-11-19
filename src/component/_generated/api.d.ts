@@ -39,7 +39,7 @@ export type Mounts = {
         fnArgs: any;
         fnHandle: string;
         fnName: string;
-        fnType: "action" | "mutation" | "unknown";
+        fnType: "action" | "mutation";
         workers: number;
       },
       string
