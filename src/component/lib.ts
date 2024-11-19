@@ -25,7 +25,7 @@ export const enqueue = mutation({
     workers: v.number(),
   },
   returns: v.id("pendingWork"),
-  handler: async (ctx, { fnHandle, fnName, workers, fnArgs, fnType }) => {
+  handler: async (ctx, { fnHandle, fnName, fnArgs, fnType, workers }) => {
     await ensurePoolExists(ctx, workers);
     const workId = await ctx.db.insert("pendingWork", {
       fnHandle,
@@ -447,6 +447,8 @@ async function kickMainLoop(
   // );
 }
 
+// XXX red flag that the status function has to actually figure out the status,
+// instead of already knowing it as part of the state machine
 export const status = query({
   args: {
     id: v.id("pendingWork"),

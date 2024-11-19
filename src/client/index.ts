@@ -30,13 +30,12 @@ export class WorkPool {
     fnArgs: Args
   ): Promise<string> {
     const fnHandle = await createFunctionHandle(fn);
-    // XXX ideally we could just look it up from the string fnHandle
-    const fnType = fnHandle._type;
     return await ctx.runMutation(this.component.lib.enqueue, {
       fnHandle,
       fnName: getFunctionName(fn),
       fnArgs,
-      fnType,
+      // XXX we should be able to infer this from the function reference
+      fnType: "mutation",
       workers: this.workers,
     });
   }
