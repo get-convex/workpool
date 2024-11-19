@@ -17,7 +17,7 @@ export const addLater = mutation({
   args: { data: v.optional(v.number()) },
   handler: async (ctx, { data }) => {
     // XXX make work with actions too
-    await pool.enqueueMutation(ctx, api.example.addNow, { data });
+    await pool.enqueue(ctx, api.example.addNow, { data });
   },
 });
 

@@ -27,24 +27,19 @@ export const enqueue = mutation({
       v.literal("mutation"),
       v.literal("unknown")
     ),
-    runAtTime: v.number(),
     workers: v.number(),
   },
   returns: v.id("pendingWork"),
-  handler: async (
-    ctx,
-    { fnHandle, fnName, workers, fnArgs, fnType, runAtTime }
-  ) => {
+  handler: async (ctx, { fnHandle, fnName, workers, fnArgs, fnType }) => {
     await ensurePoolExists(ctx, workers);
     const workId = await ctx.db.insert("pendingWork", {
       fnHandle,
       fnName,
       fnArgs,
       fnType,
-      runAtTime,
+      runAtTime: Date.now(),
     });
-    const delay = Math.max(runAtTime - Date.now(), 50);
-    await kickMainLoop(ctx, delay, false);
+    await kickMainLoop(ctx, 50, false);
     return workId;
   },
 });

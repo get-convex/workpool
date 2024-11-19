@@ -50,7 +50,6 @@ export declare const components: {
           fnHandle: string;
           fnName: string;
           fnType: "action" | "mutation" | "unknown";
-          runAtTime: number;
           workers: number;
         },
         string

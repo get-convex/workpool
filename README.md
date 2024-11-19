@@ -120,8 +120,7 @@ Then you have the following interface on `pool`:
 
 ```ts
 // Schedule functions to run in the background.
-const id = await pool.enqueueMutation(api.foo.bar, args);
-const id = await pool.enqueueAction(api.foo.bar, args);
+const id = await pool.enqueue(api.foo.bar, args);
 
 // Is it done yet?
 const status = await pool.status(id);
