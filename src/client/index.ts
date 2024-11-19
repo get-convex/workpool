@@ -20,7 +20,7 @@ export class WorkPool {
   constructor(
     private component: UseApi<typeof api>,
     // TODO(emma) reduce the number of options. consider removing the timeout options.
-    // consider removing the debounceMs option and the heartbeats.
+    // consider removing the heartbeats.
     private options: {
       /** How many actions/mutations can be running at once within this pool.
        * Min 1, Max 300.
@@ -42,11 +42,6 @@ export class WorkPool {
        * Default 15 minutes.
        */
       unknownTimeoutMs?: number;
-      /** When there is something to do, wait this long between loop iterations,
-       * to allow more work to accumulate.
-       * Default 50ms.
-       */
-      debounceMs?: number;
       /** When something is running, wait this long to check if anything has
        * been canceled or failed unexpectedly.
        * Default 10s.

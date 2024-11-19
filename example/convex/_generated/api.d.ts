@@ -57,7 +57,6 @@ export declare const components: {
           fnType: "action" | "mutation" | "unknown";
           options: {
             actionTimeoutMs?: number;
-            debounceMs?: number;
             fastHeartbeatMs?: number;
             maxParallelism: number;
             mutationTimeoutMs?: number;
@@ -102,7 +101,6 @@ export declare const components: {
           fnType: "action" | "mutation" | "unknown";
           options: {
             actionTimeoutMs?: number;
-            debounceMs?: number;
             fastHeartbeatMs?: number;
             maxParallelism: number;
             mutationTimeoutMs?: number;

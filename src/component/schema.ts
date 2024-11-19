@@ -40,7 +40,6 @@ export default defineSchema({
     actionTimeoutMs: v.number(),
     mutationTimeoutMs: v.number(),
     unknownTimeoutMs: v.number(),
-    debounceMs: v.number(),
     fastHeartbeatMs: v.number(),
     slowHeartbeatMs: v.number(),
     ttl: v.number(),

@@ -6,7 +6,6 @@ import {
   mutation,
   MutationCtx,
   query,
-  QueryCtx,
 } from "./_generated/server";
 import { FunctionHandle, WithoutSystemFields } from "convex/server";
 import { Doc, Id } from "./_generated/dataModel";
@@ -17,6 +16,7 @@ import { recordCompleted, recordStarted } from "./stats";
 
 const crons = new Crons(components.crons);
 
+// XXX make this have a symmetric API with action retrier
 export const enqueue = mutation({
   args: {
     fnHandle: v.string(),
@@ -33,7 +33,6 @@ export const enqueue = mutation({
       actionTimeoutMs: v.optional(v.number()),
       mutationTimeoutMs: v.optional(v.number()),
       unknownTimeoutMs: v.optional(v.number()),
-      debounceMs: v.optional(v.number()),
       fastHeartbeatMs: v.optional(v.number()),
       slowHeartbeatMs: v.optional(v.number()),
       ttl: v.optional(v.number()),
@@ -44,13 +43,11 @@ export const enqueue = mutation({
     ctx,
     { fnHandle, fnName, options, fnArgs, fnType, runAtTime }
   ) => {
-    const debounceMs = options.debounceMs ?? 50;
     await ensurePoolExists(ctx, {
       maxParallelism: options.maxParallelism,
       actionTimeoutMs: options.actionTimeoutMs ?? 15 * 60 * 1000,
       mutationTimeoutMs: options.mutationTimeoutMs ?? 30 * 1000,
       unknownTimeoutMs: options.unknownTimeoutMs ?? 15 * 60 * 1000,
-      debounceMs,
       fastHeartbeatMs: options.fastHeartbeatMs ?? 10 * 1000,
       slowHeartbeatMs: options.slowHeartbeatMs ?? 2 * 60 * 60 * 1000,
       ttl: options.ttl ?? 24 * 60 * 60 * 1000,
@@ -62,7 +59,7 @@ export const enqueue = mutation({
       fnType,
       runAtTime,
     });
-    const delay = Math.max(runAtTime - Date.now(), debounceMs);
+    const delay = Math.max(runAtTime - Date.now(), 50);
     await kickMainLoop(ctx, delay, false);
     return workId;
   },
@@ -114,8 +111,7 @@ export const mainLoop = internalMutation({
       await kickMainLoop(ctx, 60 * 60 * 1000, true);
       return;
     }
-    const { maxParallelism, debounceMs, fastHeartbeatMs, slowHeartbeatMs } =
-      options;
+    const { maxParallelism, fastHeartbeatMs, slowHeartbeatMs } = options;
 
     // console_.time("inProgress count");
     // This is the only function reading and writing inProgressWork,
@@ -233,7 +229,7 @@ export const mainLoop = internalMutation({
     // console_.time("kickMainLoop");
     if (didSomething) {
       // There might be more to do.
-      await kickMainLoop(ctx, debounceMs, true);
+      await kickMainLoop(ctx, 50, true);
     } else {
       // Decide when to wake up.
       const allInProgressWork = await ctx.db.query("inProgressWork").collect();
@@ -379,17 +375,12 @@ async function saveResultHandler(
     error?: string;
   }
 ): Promise<void> {
-  const options = await getOptions(ctx.db);
-  if (!options) {
-    throw new Error("cannot save result with no pool");
-  }
-  const { debounceMs } = options;
   await ctx.db.insert("pendingCompletion", {
     result,
     error,
     workId,
   });
-  await kickMainLoop(ctx, debounceMs, false);
+  await kickMainLoop(ctx, 50, false);
 }
 
 export const runMutationWrapper = internalMutation({
@@ -467,8 +458,7 @@ async function kickMainLoop(
   delayMs: number,
   isCurrentlyExecuting: boolean
 ): Promise<void> {
-  const debounceMs = (await getOptions(ctx.db))?.debounceMs ?? 50;
-  const delay = Math.max(delayMs, debounceMs);
+  const delay = Math.max(delayMs, 50);
   const runAtTime = Date.now() + delay;
   // Look for mainLoop documents that we want to reschedule.
   // If we're currently running mainLoop, we definitely want to reschedule.
@@ -572,9 +562,6 @@ async function ensurePoolExists(
   }
   if (opts.maxParallelism < 1) {
     throw new Error("maxParallelism must be >= 1");
-  }
-  if (opts.debounceMs < 10) {
-    throw new Error("debounceMs must be >= 10 to prevent OCCs");
   }
   const pool = await ctx.db.query("pools").unique();
   if (pool) {

@@ -44,7 +44,6 @@ export type Mounts = {
         fnType: "action" | "mutation" | "unknown";
         options: {
           actionTimeoutMs?: number;
-          debounceMs?: number;
           fastHeartbeatMs?: number;
           maxParallelism: number;
           mutationTimeoutMs?: number;
