@@ -1,6 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { api, components } from "./_generated/api";
-import { WorkId, WorkPool } from "@convex-dev/workpool";
+import { WorkPool } from "@convex-dev/workpool";
 import { v } from "convex/values";
 
 const pool = new WorkPool(components.workpool, 3);
@@ -31,6 +31,6 @@ export const list = query({
 export const status = query({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
-    return await pool.status(ctx, id as WorkId<null>);
+    return await pool.status(ctx, id);
   },
 });

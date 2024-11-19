@@ -14,8 +14,6 @@ import {
 import { GenericId } from "convex/values";
 import { api } from "../component/_generated/api";
 
-export type WorkId<ReturnType> = string & { __returnType: ReturnType };
-
 export class WorkPool {
   constructor(
     private component: UseApi<typeof api>,
@@ -30,27 +28,26 @@ export class WorkPool {
       null
     >,
     fnArgs: Args
-  ): Promise<WorkId<null>> {
+  ): Promise<string> {
     const fnHandle = await createFunctionHandle(fn);
-    const id = await ctx.runMutation(this.component.lib.enqueue, {
+    return await ctx.runMutation(this.component.lib.enqueue, {
       fnHandle,
       fnName: getFunctionName(fn),
       fnArgs,
       fnType: "unknown",
       workers: this.workers,
     });
-    return id as WorkId<null>;
   }
-  async cancel(ctx: RunMutationCtx, id: WorkId<any>): Promise<void> {
+  async cancel(ctx: RunMutationCtx, id: string): Promise<void> {
     await ctx.runMutation(this.component.lib.cancel, { id });
   }
-  async status<ReturnType>(
+  async status(
     ctx: RunQueryCtx,
-    id: WorkId<ReturnType>
+    id: string
   ): Promise<
     | { kind: "pending" }
     | { kind: "inProgress" }
-    | { kind: "success"; result: ReturnType }
+    | { kind: "success" }
     | { kind: "error"; error: string }
   > {
     return await ctx.runQuery(this.component.lib.status, { id });
