@@ -26,22 +26,6 @@ export class WorkPool {
        * Min 1, Max 300.
        */
       maxParallelism: number;
-      /** How long an action can run before the pool considers it to be timed out.
-       * The action itself might time out earlier.
-       * Default 15 minutes.
-       */
-      actionTimeoutMs?: number;
-      /** How long a mutation can run before the pool considers it to be timed out.
-       * The mutation itself might time out earlier.
-       * Default 30 seconds.
-       */
-      mutationTimeoutMs?: number;
-      /** How long a function started by `enqueueUnknown` or `runAt` or `runAfter`
-       * can run before the pool considers it to be timed out.
-       * The function itself might time out earlier.
-       * Default 15 minutes.
-       */
-      unknownTimeoutMs?: number;
       /** When something is running, wait this long to check if anything has
        * been canceled or failed unexpectedly.
        * Default 10s.
@@ -145,17 +129,13 @@ export class WorkPool {
   // TODO(emma) consider removing. Apps can do this with `tryResult` if they want, and this is a tight resource-intensive loop.
   async pollResult<ReturnType>(
     ctx: RunQueryCtx & RunActionCtx,
-    id: WorkId<ReturnType>,
-    timeoutMs: number
+    id: WorkId<ReturnType>
   ): Promise<ReturnType> {
     const start = Date.now();
     while (true) {
       const result = await this.tryResult(ctx, id);
       if (result !== undefined) {
         return result;
-      }
-      if (Date.now() - start > timeoutMs) {
-        throw new Error(`Timeout waiting for result of work ${id}`);
       }
       await new Promise<void>((resolve) => setTimeout(resolve, 50));
     }
@@ -170,11 +150,11 @@ export class WorkPool {
     return {
       runAction: (async (action: any, args: any) => {
         const workId = await this.enqueueAction(ctx, action, args);
-        return this.pollResult(ctx, workId, 30 * 1000);
+        return this.pollResult(ctx, workId);
       }) as any,
       runMutation: (async (mutation: any, args: any) => {
         const workId = await this.enqueueMutation(ctx, mutation, args);
-        return this.pollResult(ctx, workId, 30 * 1000);
+        return this.pollResult(ctx, workId);
       }) as any,
       scheduler: {
         runAfter: async (delay: number, fn: any, args: any) =>

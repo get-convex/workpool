@@ -114,7 +114,6 @@ import { Workpool } from "@convex-dev/counter";
 const pool = new Workpool(components.emailWorkpool, {
   maxParallelism: 10,
   // More options available, such as:
-  actionTimeoutMs: 10 * 60 * 1000,
   ttl: 7 * 24 * 60 * 60 * 1000,
 });
 ```

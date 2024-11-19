@@ -9,7 +9,6 @@
  */
 
 import type * as lib from "../lib.js";
-import type * as newSchema from "../newSchema.js";
 import type * as stats from "../stats.js";
 
 import type {
@@ -27,7 +26,6 @@ import type {
  */
 declare const fullApi: ApiFromModules<{
   lib: typeof lib;
-  newSchema: typeof newSchema;
   stats: typeof stats;
 }>;
 export type Mounts = {
@@ -43,13 +41,10 @@ export type Mounts = {
         fnName: string;
         fnType: "action" | "mutation" | "unknown";
         options: {
-          actionTimeoutMs?: number;
           fastHeartbeatMs?: number;
           maxParallelism: number;
-          mutationTimeoutMs?: number;
           slowHeartbeatMs?: number;
           ttl?: number;
-          unknownTimeoutMs?: number;
         };
         runAtTime: number;
       },

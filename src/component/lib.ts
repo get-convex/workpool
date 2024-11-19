@@ -30,9 +30,6 @@ export const enqueue = mutation({
     runAtTime: v.number(),
     options: v.object({
       maxParallelism: v.number(),
-      actionTimeoutMs: v.optional(v.number()),
-      mutationTimeoutMs: v.optional(v.number()),
-      unknownTimeoutMs: v.optional(v.number()),
       fastHeartbeatMs: v.optional(v.number()),
       slowHeartbeatMs: v.optional(v.number()),
       ttl: v.optional(v.number()),
@@ -45,9 +42,6 @@ export const enqueue = mutation({
   ) => {
     await ensurePoolExists(ctx, {
       maxParallelism: options.maxParallelism,
-      actionTimeoutMs: options.actionTimeoutMs ?? 15 * 60 * 1000,
-      mutationTimeoutMs: options.mutationTimeoutMs ?? 30 * 1000,
-      unknownTimeoutMs: options.unknownTimeoutMs ?? 15 * 60 * 1000,
       fastHeartbeatMs: options.fastHeartbeatMs ?? 10 * 1000,
       slowHeartbeatMs: options.slowHeartbeatMs ?? 2 * 60 * 60 * 1000,
       ttl: options.ttl ?? 24 * 60 * 60 * 1000,
@@ -135,10 +129,9 @@ export const mainLoop = internalMutation({
     // console_.debug(`scheduling ${pending.length} pending work`);
     await Promise.all(
       pending.map(async (work) => {
-        const { scheduledId, timeoutMs } = await beginWork(ctx, work);
+        const { scheduledId } = await beginWork(ctx, work);
         await ctx.db.insert("inProgressWork", {
           running: scheduledId,
-          timeoutMs,
           workId: work._id,
         });
         await ctx.db.delete(work._id);
@@ -240,10 +233,11 @@ export const mainLoop = internalMutation({
       const nextPendingTime = nextPending
         ? nextPending.runAtTime
         : slowHeartbeatMs + Date.now();
+      // XXX custom timeout per mutation/action
       const nextInProgress = allInProgressWork.length
         ? Math.min(
             fastHeartbeatMs + Date.now(),
-            ...allInProgressWork.map((w) => w._creationTime + w.timeoutMs)
+            ...allInProgressWork.map((w) => w._creationTime + 15 * 60 * 1000)
           )
         : Number.POSITIVE_INFINITY;
       const nextTime = Math.min(nextPendingTime, nextInProgress);
@@ -258,14 +252,8 @@ async function beginWork(
   work: Doc<"pendingWork">
 ): Promise<{
   scheduledId: Id<"_scheduled_functions">;
-  timeoutMs: number;
 }> {
-  const options = await getOptions(ctx.db);
-  if (!options) {
-    throw new Error("cannot begin work with no pool");
-  }
   recordStarted(work._id, work.fnName, work._creationTime, work.runAtTime);
-  const { mutationTimeoutMs, actionTimeoutMs, unknownTimeoutMs } = options;
   if (work.fnType === "action") {
     return {
       scheduledId: await ctx.scheduler.runAfter(
@@ -277,7 +265,6 @@ async function beginWork(
           fnArgs: work.fnArgs,
         }
       ),
-      timeoutMs: actionTimeoutMs,
     };
   } else if (work.fnType === "mutation") {
     return {
@@ -290,13 +277,11 @@ async function beginWork(
           fnArgs: work.fnArgs,
         }
       ),
-      timeoutMs: mutationTimeoutMs,
     };
   } else if (work.fnType === "unknown") {
     const fnHandle = work.fnHandle as FunctionHandle<"action" | "mutation">;
     return {
       scheduledId: await ctx.scheduler.runAfter(0, fnHandle, work.fnArgs),
-      timeoutMs: unknownTimeoutMs,
     };
   } else {
     throw new Error(`Unexpected fnType ${work.fnType}`);
@@ -314,7 +299,8 @@ async function checkInProgressWork(
     workStatus.state.kind === "pending" ||
     workStatus.state.kind === "inProgress"
   ) {
-    if (Date.now() - workStatus._creationTime > doc.timeoutMs) {
+    // XXX custom timeout per action/mutation
+    if (Date.now() - workStatus._creationTime > 15 * 60 * 1000) {
       await ctx.scheduler.cancel(doc.running);
       return { error: "Timeout" };
     }

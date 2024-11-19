@@ -56,13 +56,10 @@ export declare const components: {
           fnName: string;
           fnType: "action" | "mutation" | "unknown";
           options: {
-            actionTimeoutMs?: number;
             fastHeartbeatMs?: number;
             maxParallelism: number;
-            mutationTimeoutMs?: number;
             slowHeartbeatMs?: number;
             ttl?: number;
-            unknownTimeoutMs?: number;
           };
           runAtTime: number;
         },
@@ -100,13 +97,10 @@ export declare const components: {
           fnName: string;
           fnType: "action" | "mutation" | "unknown";
           options: {
-            actionTimeoutMs?: number;
             fastHeartbeatMs?: number;
             maxParallelism: number;
-            mutationTimeoutMs?: number;
             slowHeartbeatMs?: number;
             ttl?: number;
-            unknownTimeoutMs?: number;
           };
           runAtTime: number;
         },
