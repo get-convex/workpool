@@ -50,8 +50,8 @@ export declare const components: {
           fnHandle: string;
           fnName: string;
           fnType: "action" | "mutation" | "unknown";
-          maxParallelism: number;
           runAtTime: number;
+          workers: number;
         },
         string
       >;

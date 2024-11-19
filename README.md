@@ -18,10 +18,10 @@ To resolve this problem, you can separate work into different pools.
 
 ```ts
 const emailPool = new Workpool(components.emailWorkpool, {
-  maxParallelism: 5,
+  workers: 5,
 });
 const scrapePool = new Workpool(components.scrapeWorkpool, {
-  maxParallelism: 1,
+  workers: 1,
 });
 
 export const signUp = mutation({
@@ -51,12 +51,12 @@ And you can use a Workpool's `ctx` method to make sure `runMutation`,
 `runAction`, and `scheduler` all use the pool.
 
 Consider this action that calls a mutation to increment a singleton counter.
-By calling the mutation on a workpool with `maxParallelism: 1`, it will never
+By calling the mutation on a workpool with `workers: 1`, it will never
 throw an error due to conflicts with parallel mutations.
 
 ```ts
 const counterPool = new Workpool(components.counterWorkpool, {
-  maxParallelism: 1,
+  workers: 1,
 });
 export const doSomethingAndCount = action({
   handler: async (ctx) => {
@@ -112,7 +112,7 @@ import { components } from "./_generated/api";
 import { Workpool } from "@convex-dev/counter";
 
 const pool = new Workpool(components.emailWorkpool, {
-  maxParallelism: 10,
+  workers: 10,
 });
 ```
 

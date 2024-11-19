@@ -7,7 +7,7 @@ import {
   MutationCtx,
   query,
 } from "./_generated/server";
-import { FunctionHandle, WithoutSystemFields } from "convex/server";
+import { FunctionHandle } from "convex/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { api, internal } from "./_generated/api";
 import { components } from "./_generated/api";
@@ -28,14 +28,14 @@ export const enqueue = mutation({
       v.literal("unknown")
     ),
     runAtTime: v.number(),
-    maxParallelism: v.number(),
+    workers: v.number(),
   },
   returns: v.id("pendingWork"),
   handler: async (
     ctx,
-    { fnHandle, fnName, maxParallelism, fnArgs, fnType, runAtTime }
+    { fnHandle, fnName, workers, fnArgs, fnType, runAtTime }
   ) => {
-    await ensurePoolExists(ctx, maxParallelism);
+    await ensurePoolExists(ctx, workers);
     const workId = await ctx.db.insert("pendingWork", {
       fnHandle,
       fnName,
@@ -57,10 +57,6 @@ export const cancel = mutation({
     await ctx.db.insert("pendingCancelation", { workId: id });
   },
 });
-
-async function getOptions(db: DatabaseReader) {
-  return db.query("pools").unique();
-}
 
 const BATCH_SIZE = 10;
 
@@ -89,13 +85,13 @@ export const mainLoop = internalMutation({
       });
     }
 
-    const options = await getOptions(ctx.db);
-    if (!options) {
+    const poolInfo = await ctx.db.query("pools").unique();
+    if (!poolInfo) {
       // console_.info("no pool, skipping mainLoop");
       await kickMainLoop(ctx, 60 * 60 * 1000, true);
       return;
     }
-    const { maxParallelism } = options;
+    const workers = poolInfo.workers;
 
     // console_.time("inProgress count");
     // This is the only function reading and writing inProgressWork,
@@ -107,10 +103,7 @@ export const mainLoop = internalMutation({
 
     // Move from pendingWork to inProgressWork.
     // console_.time("pendingWork");
-    const toSchedule = Math.min(
-      maxParallelism - inProgressBefore.length,
-      BATCH_SIZE
-    );
+    const toSchedule = Math.min(workers - inProgressBefore.length, BATCH_SIZE);
     let didSomething = false;
     const pending = await ctx.db
       .query("pendingWork")
@@ -527,21 +520,21 @@ export const cleanup = mutation({
 const MAX_POSSIBLE_PARALLELISM = 300;
 const CLEANUP_CRON_NAME = "cleanup";
 
-async function ensurePoolExists(ctx: MutationCtx, maxParallelism: number) {
-  if (maxParallelism > MAX_POSSIBLE_PARALLELISM) {
-    throw new Error(`maxParallelism must be <= ${MAX_POSSIBLE_PARALLELISM}`);
+async function ensurePoolExists(ctx: MutationCtx, workers: number) {
+  if (workers > MAX_POSSIBLE_PARALLELISM) {
+    throw new Error(`workers must be <= ${MAX_POSSIBLE_PARALLELISM}`);
   }
-  if (maxParallelism < 1) {
-    throw new Error("maxParallelism must be >= 1");
+  if (workers < 1) {
+    throw new Error("workers must be >= 1");
   }
   const pool = await ctx.db.query("pools").unique();
   if (pool) {
-    if (pool.maxParallelism != maxParallelism) {
-      await ctx.db.patch(pool._id, { maxParallelism });
+    if (pool.workers != workers) {
+      await ctx.db.patch(pool._id, { workers });
     }
   }
   if (!pool) {
-    await ctx.db.insert("pools", { maxParallelism });
+    await ctx.db.insert("pools", { workers });
     await startMainLoopHandler(ctx);
   }
   await ensureCleanupCron(ctx);

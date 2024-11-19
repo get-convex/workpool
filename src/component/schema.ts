@@ -36,7 +36,7 @@ To avoid OCCs, we restrict which mutations can read and write from each table:
 export default defineSchema({
   // Statically configured.
   pools: defineTable({
-    maxParallelism: v.number(),
+    workers: v.number(),
   }),
 
   // State across all pools.
