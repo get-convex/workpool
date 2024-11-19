@@ -51,7 +51,7 @@ export type Mounts = {
       { id: string },
       | { kind: "pending" }
       | { kind: "inProgress" }
-      | { kind: "success"; result: any }
+      | { kind: "success" }
       | { error: string; kind: "error" }
     >;
     stopCleanup: FunctionReference<"mutation", "public", {}, any>;

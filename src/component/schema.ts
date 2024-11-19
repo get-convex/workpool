@@ -63,7 +63,6 @@ export default defineSchema({
     runAtTime: v.number(),
   }).index("runAtTime", ["runAtTime"]),
   pendingCompletion: defineTable({
-    result: v.optional(v.any()),
     error: v.optional(v.string()),
     workId: v.id("pendingWork"),
   }).index("workId", ["workId"]),
@@ -76,8 +75,8 @@ export default defineSchema({
     workId: v.id("pendingWork"),
   }).index("workId", ["workId"]),
 
+  // XXX feels like these could all go in one table with an index and state machine
   completedWork: defineTable({
-    result: v.optional(v.any()),
     error: v.optional(v.string()),
     workId: v.id("pendingWork"),
   }).index("workId", ["workId"]),
