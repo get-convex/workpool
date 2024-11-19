@@ -3,9 +3,7 @@ import { api, components } from "./_generated/api";
 import { WorkId, WorkPool } from "@convex-dev/workpool";
 import { v } from "convex/values";
 
-const pool = new WorkPool(components.workpool, {
-  maxParallelism: 3,
-});
+const pool = new WorkPool(components.workpool, 3);
 
 export const addNow = mutation({
   args: { data: v.optional(v.number()) },

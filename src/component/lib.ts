@@ -28,18 +28,14 @@ export const enqueue = mutation({
       v.literal("unknown")
     ),
     runAtTime: v.number(),
-    options: v.object({
-      maxParallelism: v.number(),
-    }),
+    maxParallelism: v.number(),
   },
   returns: v.id("pendingWork"),
   handler: async (
     ctx,
-    { fnHandle, fnName, options, fnArgs, fnType, runAtTime }
+    { fnHandle, fnName, maxParallelism, fnArgs, fnType, runAtTime }
   ) => {
-    await ensurePoolExists(ctx, {
-      maxParallelism: options.maxParallelism,
-    });
+    await ensurePoolExists(ctx, maxParallelism);
     const workId = await ctx.db.insert("pendingWork", {
       fnHandle,
       fnName,
@@ -531,30 +527,21 @@ export const cleanup = mutation({
 const MAX_POSSIBLE_PARALLELISM = 300;
 const CLEANUP_CRON_NAME = "cleanup";
 
-async function ensurePoolExists(
-  ctx: MutationCtx,
-  opts: WithoutSystemFields<Doc<"pools">>
-) {
-  if (opts.maxParallelism > MAX_POSSIBLE_PARALLELISM) {
+async function ensurePoolExists(ctx: MutationCtx, maxParallelism: number) {
+  if (maxParallelism > MAX_POSSIBLE_PARALLELISM) {
     throw new Error(`maxParallelism must be <= ${MAX_POSSIBLE_PARALLELISM}`);
   }
-  if (opts.maxParallelism < 1) {
+  if (maxParallelism < 1) {
     throw new Error("maxParallelism must be >= 1");
   }
   const pool = await ctx.db.query("pools").unique();
   if (pool) {
-    let update = false;
-    for (const key in opts) {
-      if (pool[key as keyof typeof opts] !== opts[key as keyof typeof opts]) {
-        update = true;
-      }
-    }
-    if (update) {
-      await ctx.db.patch(pool._id, opts);
+    if (pool.maxParallelism != maxParallelism) {
+      await ctx.db.patch(pool._id, { maxParallelism });
     }
   }
   if (!pool) {
-    await ctx.db.insert("pools", opts);
+    await ctx.db.insert("pools", { maxParallelism });
     await startMainLoopHandler(ctx);
   }
   await ensureCleanupCron(ctx);

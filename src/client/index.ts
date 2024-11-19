@@ -19,12 +19,7 @@ export type WorkId<ReturnType> = string & { __returnType: ReturnType };
 export class WorkPool {
   constructor(
     private component: UseApi<typeof api>,
-    private options: {
-      /** How many actions/mutations can be running at once within this pool.
-       * Min 1, Max 300.
-       */
-      maxParallelism: number;
-    }
+    private maxParallelism: number
   ) {}
   async enqueueAction<Args extends DefaultFunctionArgs, ReturnType>(
     ctx: RunMutationCtx,
@@ -38,7 +33,7 @@ export class WorkPool {
       fnArgs,
       fnType: "action",
       runAtTime: Date.now(),
-      options: this.options,
+      maxParallelism: this.maxParallelism,
     });
     return id as WorkId<ReturnType>;
   }
@@ -54,7 +49,7 @@ export class WorkPool {
       fnArgs,
       fnType: "mutation",
       runAtTime: Date.now(),
-      options: this.options,
+      maxParallelism: this.maxParallelism,
     });
     return id as WorkId<ReturnType>;
   }
@@ -78,7 +73,7 @@ export class WorkPool {
       fnArgs,
       fnType: "unknown",
       runAtTime,
-      options: this.options,
+      maxParallelism: this.maxParallelism,
     });
     return id as WorkId<null>;
   }

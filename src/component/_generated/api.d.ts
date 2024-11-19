@@ -40,7 +40,7 @@ export type Mounts = {
         fnHandle: string;
         fnName: string;
         fnType: "action" | "mutation" | "unknown";
-        options: { maxParallelism: number };
+        maxParallelism: number;
         runAtTime: number;
       },
       string

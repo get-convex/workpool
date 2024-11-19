@@ -50,38 +50,7 @@ export declare const components: {
           fnHandle: string;
           fnName: string;
           fnType: "action" | "mutation" | "unknown";
-          options: { maxParallelism: number };
-          runAtTime: number;
-        },
-        string
-      >;
-      startMainLoop: FunctionReference<"mutation", "internal", {}, any>;
-      status: FunctionReference<
-        "query",
-        "internal",
-        { id: string },
-        | { kind: "pending" }
-        | { kind: "inProgress" }
-        | { kind: "success"; result: any }
-        | { error: string; kind: "error" }
-      >;
-      stopCleanup: FunctionReference<"mutation", "internal", {}, any>;
-      stopMainLoop: FunctionReference<"mutation", "internal", {}, any>;
-    };
-  };
-  lowpriWorkpool: {
-    lib: {
-      cancel: FunctionReference<"mutation", "internal", { id: string }, any>;
-      cleanup: FunctionReference<"mutation", "internal", {}, any>;
-      enqueue: FunctionReference<
-        "mutation",
-        "internal",
-        {
-          fnArgs: any;
-          fnHandle: string;
-          fnName: string;
-          fnType: "action" | "mutation" | "unknown";
-          options: { maxParallelism: number };
+          maxParallelism: number;
           runAtTime: number;
         },
         string
