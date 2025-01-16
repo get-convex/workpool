@@ -107,6 +107,8 @@ export default app;
 
 ## Usage
 
+XXX rewrite this
+
 ```ts
 import { components } from "./_generated/api";
 import { Workpool } from "@convex-dev/counter";

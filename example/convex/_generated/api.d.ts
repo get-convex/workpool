@@ -41,7 +41,6 @@ export declare const components: {
   workpool: {
     lib: {
       cancel: FunctionReference<"mutation", "internal", { id: string }, any>;
-      cleanup: FunctionReference<"mutation", "internal", {}, any>;
       enqueue: FunctionReference<
         "mutation",
         "internal",
@@ -54,18 +53,16 @@ export declare const components: {
         },
         string
       >;
-      startMainLoop: FunctionReference<"mutation", "internal", {}, any>;
-      status: FunctionReference<
+      state: FunctionReference<
         "query",
         "internal",
         { id: string },
         | { kind: "pending" }
         | { kind: "inProgress" }
         | { kind: "success" }
-        | { error: string; kind: "error" }
+        | { error: string; kind: "failed" }
+        | { kind: "canceled" }
       >;
-      stopCleanup: FunctionReference<"mutation", "internal", {}, any>;
-      stopMainLoop: FunctionReference<"mutation", "internal", {}, any>;
     };
   };
 };

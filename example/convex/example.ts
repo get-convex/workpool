@@ -28,9 +28,9 @@ export const list = query({
   },
 });
 
-export const status = query({
+export const state = query({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
-    return await pool.status(ctx, id);
+    return await pool.state(ctx, id);
   },
 });

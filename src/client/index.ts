@@ -42,16 +42,17 @@ export class WorkPool {
   async cancel(ctx: RunMutationCtx, id: string): Promise<void> {
     await ctx.runMutation(this.component.lib.cancel, { id });
   }
-  async status(
+  async state(
     ctx: RunQueryCtx,
     id: string
   ): Promise<
     | { kind: "pending" }
     | { kind: "inProgress" }
     | { kind: "success" }
-    | { kind: "error"; error: string }
+    | { kind: "failed"; error: string }
+    | { kind: "canceled" }
   > {
-    return await ctx.runQuery(this.component.lib.status, { id });
+    return await ctx.runQuery(this.component.lib.state, { id });
   }
 }
 

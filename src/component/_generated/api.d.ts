@@ -31,7 +31,6 @@ declare const fullApi: ApiFromModules<{
 export type Mounts = {
   lib: {
     cancel: FunctionReference<"mutation", "public", { id: string }, any>;
-    cleanup: FunctionReference<"mutation", "public", {}, any>;
     enqueue: FunctionReference<
       "mutation",
       "public",
@@ -44,18 +43,16 @@ export type Mounts = {
       },
       string
     >;
-    startMainLoop: FunctionReference<"mutation", "public", {}, any>;
-    status: FunctionReference<
+    state: FunctionReference<
       "query",
       "public",
       { id: string },
       | { kind: "pending" }
       | { kind: "inProgress" }
       | { kind: "success" }
-      | { error: string; kind: "error" }
+      | { error: string; kind: "failed" }
+      | { kind: "canceled" }
     >;
-    stopCleanup: FunctionReference<"mutation", "public", {}, any>;
-    stopMainLoop: FunctionReference<"mutation", "public", {}, any>;
   };
 };
 // For now fullApiWithMounts is only fullApi which provides
