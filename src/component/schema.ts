@@ -48,7 +48,6 @@ export default defineSchema({
     maxParallelism: v.number(),
     actionTimeoutMs: v.number(),
     mutationTimeoutMs: v.number(),
-    unknownTimeoutMs: v.number(),
     debounceMs: v.number(),
     fastHeartbeatMs: v.number(),
     slowHeartbeatMs: v.number(),
@@ -69,16 +68,11 @@ export default defineSchema({
   }).index("runAtTime", ["runAtTime"]),
 
   pendingWork: defineTable({
-    fnType: v.union(
-      v.literal("action"),
-      v.literal("mutation"),
-      v.literal("unknown")
-    ),
+    fnType: v.union(v.literal("action"), v.literal("mutation")),
     fnHandle: v.string(),
     fnName: v.string(),
     fnArgs: v.any(),
-    runAtTime: v.number(),
-  }).index("runAtTime", ["runAtTime"]),
+  }),
   pendingCompletion: defineTable({
     completionStatus,
     workId: v.id("pendingWork"),

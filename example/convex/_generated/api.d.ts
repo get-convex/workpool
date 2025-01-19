@@ -56,7 +56,7 @@ export declare const components: {
           fnArgs: any;
           fnHandle: string;
           fnName: string;
-          fnType: "action" | "mutation" | "unknown";
+          fnType: "action" | "mutation";
           options: {
             actionTimeoutMs?: number;
             debounceMs?: number;
@@ -66,9 +66,7 @@ export declare const components: {
             mutationTimeoutMs?: number;
             slowHeartbeatMs?: number;
             ttl?: number;
-            unknownTimeoutMs?: number;
           };
-          runAtTime: number;
         },
         string
       >;
@@ -104,7 +102,7 @@ export declare const components: {
           fnArgs: any;
           fnHandle: string;
           fnName: string;
-          fnType: "action" | "mutation" | "unknown";
+          fnType: "action" | "mutation";
           options: {
             actionTimeoutMs?: number;
             debounceMs?: number;
@@ -114,9 +112,7 @@ export declare const components: {
             mutationTimeoutMs?: number;
             slowHeartbeatMs?: number;
             ttl?: number;
-            unknownTimeoutMs?: number;
           };
-          runAtTime: number;
         },
         string
       >;

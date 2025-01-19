@@ -79,7 +79,6 @@ export class WorkPool {
       fnName: getFunctionName(fn),
       fnArgs,
       fnType: "action",
-      runAtTime: Date.now(),
       options: this.options,
     });
     return id as WorkId;
@@ -95,31 +94,6 @@ export class WorkPool {
       fnName: getFunctionName(fn),
       fnArgs,
       fnType: "mutation",
-      runAtTime: Date.now(),
-      options: this.options,
-    });
-    return id as WorkId;
-  }
-  // Unknown is if you don't know at runtime whether it's an action or mutation,
-  // which can happen if it comes from `runAt` or `runAfter`.
-  async enqueueUnknown<Args extends DefaultFunctionArgs>(
-    ctx: RunMutationCtx,
-    fn: FunctionReference<
-      "action" | "mutation",
-      FunctionVisibility,
-      Args,
-      null
-    >,
-    fnArgs: Args,
-    runAtTime: number
-  ): Promise<WorkId> {
-    const fnHandle = await createFunctionHandle(fn);
-    const id = await ctx.runMutation(this.component.lib.enqueue, {
-      fnHandle,
-      fnName: getFunctionName(fn),
-      fnArgs,
-      fnType: "unknown",
-      runAtTime,
       options: this.options,
     });
     return id as WorkId;
