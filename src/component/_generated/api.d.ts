@@ -64,8 +64,10 @@ export type Mounts = {
       { id: string },
       | { kind: "pending" }
       | { kind: "inProgress" }
-      | { kind: "success"; result: any }
-      | { error: string; kind: "error" }
+      | {
+          completionStatus: "success" | "error" | "canceled" | "timeout";
+          kind: "completed";
+        }
     >;
     stopCleanup: FunctionReference<"mutation", "public", {}, any>;
     stopMainLoop: FunctionReference<"mutation", "public", {}, any>;

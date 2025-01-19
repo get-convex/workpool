@@ -1,6 +1,12 @@
-import { mutation, action, query, internalMutation, internalAction } from "./_generated/server";
+import {
+  mutation,
+  action,
+  query,
+  internalMutation,
+  internalAction,
+} from "./_generated/server";
 import { api, components, internal } from "./_generated/api";
-import { WorkId, WorkPool } from "@convex-dev/workpool";
+import { WorkPool } from "@convex-dev/workpool";
 import { v } from "convex/values";
 
 const pool = new WorkPool(components.workpool, {
@@ -42,7 +48,7 @@ export const enqueueOneMutation = mutation({
 export const status = query({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
-    return await pool.status(ctx, id as WorkId<null>);
+    return await pool.status(ctx, id);
   },
 });
 
@@ -84,10 +90,8 @@ export const enqueueABunchOfActions = mutation({
 
 export const enqueueAndWait = action({
   args: {},
-  handler: async (ctx, _args): Promise<number> => {
-    const work = await pool.enqueueAction(ctx, api.example.addAction, {});
-    const result = await pool.pollResult(ctx, work, 30 * 1000);
-    return result;
+  handler: async (ctx, _args): Promise<void> => {
+    await pool.enqueueAction(ctx, api.example.addAction, {});
   },
 });
 
@@ -131,4 +135,3 @@ export const startForegroundWork = internalMutation({
     await pool.enqueueAction(ctx, internal.example.foregroundWork, {});
   },
 });
-

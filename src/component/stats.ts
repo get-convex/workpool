@@ -19,18 +19,28 @@ workpool
 
  */
 
-export function recordStarted(workId: Id<"pendingWork">, fnName: string, enqueuedAt: number, runAtTime: number) {
-  console.log(JSON.stringify({
-    workId,
-    event: "started",
-    fnName,
-    enqueuedAt,
-    runAtTime,
-    startedAt: Date.now(),
-    lagSinceEnqueued: Date.now() - enqueuedAt,
-  }));
+export function recordStarted(
+  workId: Id<"pendingWork">,
+  fnName: string,
+  enqueuedAt: number,
+  runAtTime: number
+) {
+  console.log(
+    JSON.stringify({
+      workId,
+      event: "started",
+      fnName,
+      enqueuedAt,
+      runAtTime,
+      startedAt: Date.now(),
+      lagSinceEnqueued: Date.now() - enqueuedAt,
+    })
+  );
 }
 
-export function recordCompleted(workId: Id<"pendingWork">, status: "success" | "failure" | "canceled") {
+export function recordCompleted(
+  workId: Id<"pendingWork">,
+  status: "success" | "error" | "canceled" | "timeout"
+) {
   console.log(JSON.stringify({ workId, completedAt: Date.now(), status }));
 }

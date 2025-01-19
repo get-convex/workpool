@@ -79,8 +79,10 @@ export declare const components: {
         { id: string },
         | { kind: "pending" }
         | { kind: "inProgress" }
-        | { kind: "success"; result: any }
-        | { error: string; kind: "error" }
+        | {
+            completionStatus: "success" | "error" | "canceled" | "timeout";
+            kind: "completed";
+          }
       >;
       stopCleanup: FunctionReference<"mutation", "internal", {}, any>;
       stopMainLoop: FunctionReference<"mutation", "internal", {}, any>;
@@ -125,8 +127,10 @@ export declare const components: {
         { id: string },
         | { kind: "pending" }
         | { kind: "inProgress" }
-        | { kind: "success"; result: any }
-        | { error: string; kind: "error" }
+        | {
+            completionStatus: "success" | "error" | "canceled" | "timeout";
+            kind: "completed";
+          }
       >;
       stopCleanup: FunctionReference<"mutation", "internal", {}, any>;
       stopMainLoop: FunctionReference<"mutation", "internal", {}, any>;

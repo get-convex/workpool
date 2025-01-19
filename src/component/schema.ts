@@ -1,6 +1,14 @@
 import { defineSchema, defineTable } from "convex/server";
-import { v } from "convex/values";
+import { Infer, v } from "convex/values";
 import { logLevel } from "./logging";
+
+export const completionStatus = v.union(
+  v.literal("success"),
+  v.literal("error"),
+  v.literal("canceled"),
+  v.literal("timeout")
+);
+export type CompletionStatus = Infer<typeof completionStatus>;
 
 /**
 Data flow:
@@ -72,8 +80,7 @@ export default defineSchema({
     runAtTime: v.number(),
   }).index("runAtTime", ["runAtTime"]),
   pendingCompletion: defineTable({
-    result: v.optional(v.any()),
-    error: v.optional(v.string()),
+    completionStatus,
     workId: v.id("pendingWork"),
   }).index("workId", ["workId"]),
   pendingCancelation: defineTable({
@@ -87,8 +94,7 @@ export default defineSchema({
   }).index("workId", ["workId"]),
 
   completedWork: defineTable({
-    result: v.optional(v.any()),
-    error: v.optional(v.string()),
+    completionStatus,
     workId: v.id("pendingWork"),
   }).index("workId", ["workId"]),
 });
