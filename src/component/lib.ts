@@ -25,17 +25,11 @@ export const enqueue = mutation({
     fnHandle: v.string(),
     fnName: v.string(),
     fnArgs: v.any(),
-    fnType: v.union(
-      v.literal("action"),
-      v.literal("mutation"),
-      v.literal("unknown")
-    ),
-    runAtTime: v.number(),
+    fnType: v.union(v.literal("action"), v.literal("mutation")),
     options: v.object({
       maxParallelism: v.number(),
       actionTimeoutMs: v.optional(v.number()),
       mutationTimeoutMs: v.optional(v.number()),
-      unknownTimeoutMs: v.optional(v.number()),
       debounceMs: v.optional(v.number()),
       fastHeartbeatMs: v.optional(v.number()),
       slowHeartbeatMs: v.optional(v.number()),
@@ -44,16 +38,12 @@ export const enqueue = mutation({
     }),
   },
   returns: v.id("pendingWork"),
-  handler: async (
-    ctx,
-    { fnHandle, fnName, options, fnArgs, fnType, runAtTime }
-  ) => {
+  handler: async (ctx, { fnHandle, fnName, options, fnArgs, fnType }) => {
     const debounceMs = options.debounceMs ?? 50;
     await ensurePoolExists(ctx, {
       maxParallelism: options.maxParallelism,
       actionTimeoutMs: options.actionTimeoutMs ?? 15 * 60 * 1000,
       mutationTimeoutMs: options.mutationTimeoutMs ?? 30 * 1000,
-      unknownTimeoutMs: options.unknownTimeoutMs ?? 15 * 60 * 1000,
       debounceMs,
       fastHeartbeatMs: options.fastHeartbeatMs ?? 10 * 1000,
       slowHeartbeatMs: options.slowHeartbeatMs ?? 2 * 60 * 60 * 1000,
@@ -65,10 +55,8 @@ export const enqueue = mutation({
       fnName,
       fnArgs,
       fnType,
-      runAtTime,
     });
-    const delay = Math.max(runAtTime - Date.now(), debounceMs);
-    await kickMainLoop(ctx, delay, false);
+    await kickMainLoop(ctx, debounceMs, false);
     return workId;
   },
 });
@@ -150,10 +138,7 @@ export const mainLoop = internalMutation({
       BATCH_SIZE
     );
     let didSomething = false;
-    const pending = await ctx.db
-      .query("pendingWork")
-      .withIndex("runAtTime", (q) => q.lte("runAtTime", Date.now()))
-      .take(toSchedule);
+    const pending = await ctx.db.query("pendingWork").take(toSchedule);
     console_.debug(`scheduling ${pending.length} pending work`);
     await Promise.all(
       pending.map(async (work) => {
@@ -254,12 +239,9 @@ export const mainLoop = internalMutation({
     } else {
       // Decide when to wake up.
       const allInProgressWork = await ctx.db.query("inProgressWork").collect();
-      const nextPending = await ctx.db
-        .query("pendingWork")
-        .withIndex("runAtTime")
-        .first();
+      const nextPending = await ctx.db.query("pendingWork").first();
       const nextPendingTime = nextPending
-        ? nextPending.runAtTime
+        ? nextPending._creationTime
         : slowHeartbeatMs + Date.now();
       const nextInProgress = allInProgressWork.length
         ? Math.min(
@@ -285,8 +267,8 @@ async function beginWork(
   if (!options) {
     throw new Error("cannot begin work with no pool");
   }
-  recordStarted(work._id, work.fnName, work._creationTime, work.runAtTime);
-  const { mutationTimeoutMs, actionTimeoutMs, unknownTimeoutMs } = options;
+  recordStarted(work._id, work.fnName, work._creationTime);
+  const { mutationTimeoutMs, actionTimeoutMs } = options;
   if (work.fnType === "action") {
     return {
       scheduledId: await ctx.scheduler.runAfter(
@@ -312,12 +294,6 @@ async function beginWork(
         }
       ),
       timeoutMs: mutationTimeoutMs,
-    };
-  } else if (work.fnType === "unknown") {
-    const fnHandle = work.fnHandle as FunctionHandle<"action" | "mutation">;
-    return {
-      scheduledId: await ctx.scheduler.runAfter(0, fnHandle, work.fnArgs),
-      timeoutMs: unknownTimeoutMs,
     };
   } else {
     throw new Error(`Unexpected fnType ${work.fnType}`);

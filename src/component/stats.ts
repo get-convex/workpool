@@ -22,8 +22,7 @@ workpool
 export function recordStarted(
   workId: Id<"pendingWork">,
   fnName: string,
-  enqueuedAt: number,
-  runAtTime: number
+  enqueuedAt: number
 ) {
   console.log(
     JSON.stringify({
@@ -31,7 +30,6 @@ export function recordStarted(
       event: "started",
       fnName,
       enqueuedAt,
-      runAtTime,
       startedAt: Date.now(),
       lagSinceEnqueued: Date.now() - enqueuedAt,
     })

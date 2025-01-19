@@ -41,7 +41,7 @@ export type Mounts = {
         fnArgs: any;
         fnHandle: string;
         fnName: string;
-        fnType: "action" | "mutation" | "unknown";
+        fnType: "action" | "mutation";
         options: {
           actionTimeoutMs?: number;
           debounceMs?: number;
@@ -51,9 +51,7 @@ export type Mounts = {
           mutationTimeoutMs?: number;
           slowHeartbeatMs?: number;
           ttl?: number;
-          unknownTimeoutMs?: number;
         };
-        runAtTime: number;
       },
       string
     >;
