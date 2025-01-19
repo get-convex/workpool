@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import {
+  ActionCtx,
   DatabaseReader,
   internalAction,
   internalMutation,
@@ -15,6 +16,7 @@ import { createLogger, logLevel } from "./logging";
 import { components } from "./_generated/api";
 import { Crons } from "@convex-dev/crons";
 import { recordCompleted, recordStarted } from "./stats";
+import { completionStatus } from "./schema";
 
 const crons = new Crons(components.crons);
 
@@ -42,7 +44,10 @@ export const enqueue = mutation({
     }),
   },
   returns: v.id("pendingWork"),
-  handler: async (ctx, { fnHandle, fnName, options, fnArgs, fnType, runAtTime }) => {
+  handler: async (
+    ctx,
+    { fnHandle, fnName, options, fnArgs, fnType, runAtTime }
+  ) => {
     const debounceMs = options.debounceMs ?? 50;
     await ensurePoolExists(ctx, {
       maxParallelism: options.maxParallelism,
@@ -81,7 +86,10 @@ async function getOptions(db: DatabaseReader) {
   return db.query("pools").unique();
 }
 
-async function console(ctx: QueryCtx) {
+async function console(ctx: QueryCtx | ActionCtx) {
+  if ("runAction" in ctx) {
+    return globalThis.console;
+  }
   const pool = await ctx.db.query("pools").unique();
   if (!pool) {
     return globalThis.console;
@@ -178,11 +186,10 @@ export const mainLoop = internalMutation({
         }
         await ctx.db.delete(work._id);
         await ctx.db.insert("completedWork", {
-          result: work.result,
-          error: work.error,
+          completionStatus: work.completionStatus,
           workId: work.workId,
         });
-        recordCompleted(work.workId, work.error ? "failure" : "success");
+        recordCompleted(work.workId, work.completionStatus);
         didSomething = true;
       })
     );
@@ -202,7 +209,7 @@ export const mainLoop = internalMutation({
           await ctx.db.delete(inProgressWork._id);
           await ctx.db.insert("completedWork", {
             workId: work.workId,
-            error: "Canceled",
+            completionStatus: "canceled",
           });
           recordCompleted(work.workId, "canceled");
         }
@@ -230,9 +237,9 @@ export const mainLoop = internalMutation({
             await ctx.db.delete(work._id);
             await ctx.db.insert("completedWork", {
               workId: work.workId,
-              ...result,
+              completionStatus: result.completionStatus,
             });
-            recordCompleted(work.workId, result.error ? "failure" : "success");
+            recordCompleted(work.workId, result.completionStatus);
             didSomething = true;
           }
         })
@@ -320,27 +327,29 @@ async function beginWork(
 async function checkInProgressWork(
   ctx: MutationCtx,
   doc: Doc<"inProgressWork">
-): Promise<{ result?: unknown; error?: string } | null> {
+): Promise<{
+  completionStatus: "success" | "error" | "canceled" | "timeout";
+} | null> {
   const workStatus = await ctx.db.system.get(doc.running);
   if (workStatus === null) {
-    return { error: "Timeout" };
+    return { completionStatus: "timeout" };
   } else if (
     workStatus.state.kind === "pending" ||
     workStatus.state.kind === "inProgress"
   ) {
     if (Date.now() - workStatus._creationTime > doc.timeoutMs) {
       await ctx.scheduler.cancel(doc.running);
-      return { error: "Timeout" };
+      return { completionStatus: "timeout" };
     }
   } else if (workStatus.state.kind === "success") {
     // Usually this would be handled by pendingCompletion, but for "unknown"
     // functions, this is how we know that they're done, and we can't get their
     // return values.
-    return { result: null };
+    return { completionStatus: "success" };
   } else if (workStatus.state.kind === "canceled") {
-    return { error: "Canceled" };
+    return { completionStatus: "canceled" };
   } else if (workStatus.state.kind === "failed") {
-    return { error: workStatus.state.error };
+    return { completionStatus: "error" };
   }
   return null;
 }
@@ -352,17 +361,19 @@ export const runActionWrapper = internalAction({
     fnArgs: v.any(),
   },
   handler: async (ctx, { workId, fnHandle: handleStr, fnArgs }) => {
+    const console_ = await console(ctx);
     const fnHandle = handleStr as FunctionHandle<"action">;
     try {
-      const retval = await ctx.runAction(fnHandle, fnArgs);
+      await ctx.runAction(fnHandle, fnArgs);
       await ctx.runMutation(internal.lib.saveResult, {
         workId,
-        result: retval,
+        completionStatus: "success",
       });
     } catch (e: unknown) {
+      console_.error(e);
       await ctx.runMutation(internal.lib.saveResult, {
         workId,
-        error: (e as Error).message,
+        completionStatus: "error",
       });
     }
   },
@@ -381,12 +392,10 @@ async function saveResultHandler(
   ctx: MutationCtx,
   {
     workId,
-    result,
-    error,
+    completionStatus,
   }: {
     workId: Id<"pendingWork">;
-    result?: unknown;
-    error?: string;
+    completionStatus: "success" | "error" | "canceled" | "timeout";
   }
 ): Promise<void> {
   const options = await getOptions(ctx.db);
@@ -395,8 +404,7 @@ async function saveResultHandler(
   }
   const { debounceMs } = options;
   await ctx.db.insert("pendingCompletion", {
-    result,
-    error,
+    completionStatus,
     workId,
   });
   await kickMainLoop(ctx, debounceMs, false);
@@ -409,12 +417,14 @@ export const runMutationWrapper = internalMutation({
     fnArgs: v.any(),
   },
   handler: async (ctx, { workId, fnHandle: handleStr, fnArgs }) => {
+    const console_ = await console(ctx);
     const fnHandle = handleStr as FunctionHandle<"mutation">;
     try {
-      const retval = await ctx.runMutation(fnHandle, fnArgs);
-      await saveResultHandler(ctx, { workId, result: retval });
+      await ctx.runMutation(fnHandle, fnArgs);
+      await saveResultHandler(ctx, { workId, completionStatus: "success" });
     } catch (e: unknown) {
-      await saveResultHandler(ctx, { workId, error: (e as Error).message });
+      console_.error(e);
+      await saveResultHandler(ctx, { workId, completionStatus: "error" });
     }
   },
 });
@@ -528,12 +538,8 @@ export const status = query({
       kind: v.literal("inProgress"),
     }),
     v.object({
-      kind: v.literal("success"),
-      result: v.any(),
-    }),
-    v.object({
-      kind: v.literal("error"),
-      error: v.string(),
+      kind: v.literal("completed"),
+      completionStatus,
     })
   ),
   handler: async (ctx, { id }) => {
@@ -542,10 +548,10 @@ export const status = query({
       .withIndex("workId", (q) => q.eq("workId", id))
       .unique();
     if (completedWork) {
-      if (completedWork.error) {
-        return { kind: "error", error: completedWork.error! } as const;
-      }
-      return { kind: "success", result: completedWork.result! } as const;
+      return {
+        kind: "completed",
+        completionStatus: completedWork.completionStatus,
+      } as const;
     }
     const pendingWork = await ctx.db.get(id);
     if (pendingWork) {
@@ -609,7 +615,9 @@ async function ensurePoolExists(
 
 async function ensureCleanupCron(ctx: MutationCtx, ttl: number) {
   if (ttl === Number.POSITIVE_INFINITY) {
-    (await console(ctx)).info("completedWorkMaxAgeMs is Infinity, so we won't schedule cleanup");
+    (await console(ctx)).info(
+      "completedWorkMaxAgeMs is Infinity, so we won't schedule cleanup"
+    );
     return;
   }
   const cronFrequencyMs = Math.min(ttl, 24 * 60 * 60 * 1000);

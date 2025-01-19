@@ -10,6 +10,7 @@ export default [
       "eslint.config.js",
       "**/_generated/",
       "node10stubs.mjs",
+      "example/eslint.config.js",
     ],
   },
   {
@@ -37,6 +38,7 @@ export default [
         {
           argsIgnorePattern: "^_",
           varsIgnorePattern: "^_",
+          "caughtErrorsIgnorePattern": "^_",
         },
       ],
     },

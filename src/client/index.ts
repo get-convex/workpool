@@ -1,11 +1,9 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import {
   createFunctionHandle,
   DefaultFunctionArgs,
   Expand,
   FunctionReference,
   FunctionVisibility,
-  GenericActionCtx,
   GenericDataModel,
   GenericMutationCtx,
   GenericQueryCtx,
@@ -14,8 +12,9 @@ import {
 import { GenericId } from "convex/values";
 import { api } from "../component/_generated/api";
 import { LogLevel } from "../component/logging";
+import { CompletionStatus } from "../component/schema";
 
-export type WorkId<ReturnType> = string & { __returnType: ReturnType };
+export type WorkId = string;
 
 export class WorkPool {
   constructor(
@@ -73,7 +72,7 @@ export class WorkPool {
     ctx: RunMutationCtx,
     fn: FunctionReference<"action", FunctionVisibility, Args, ReturnType>,
     fnArgs: Args
-  ): Promise<WorkId<ReturnType>> {
+  ): Promise<WorkId> {
     const fnHandle = await createFunctionHandle(fn);
     const id = await ctx.runMutation(this.component.lib.enqueue, {
       fnHandle,
@@ -83,13 +82,13 @@ export class WorkPool {
       runAtTime: Date.now(),
       options: this.options,
     });
-    return id as WorkId<ReturnType>;
+    return id as WorkId;
   }
   async enqueueMutation<Args extends DefaultFunctionArgs, ReturnType>(
     ctx: RunMutationCtx,
     fn: FunctionReference<"mutation", FunctionVisibility, Args, ReturnType>,
     fnArgs: Args
-  ): Promise<WorkId<ReturnType>> {
+  ): Promise<WorkId> {
     const fnHandle = await createFunctionHandle(fn);
     const id = await ctx.runMutation(this.component.lib.enqueue, {
       fnHandle,
@@ -99,7 +98,7 @@ export class WorkPool {
       runAtTime: Date.now(),
       options: this.options,
     });
-    return id as WorkId<ReturnType>;
+    return id as WorkId;
   }
   // Unknown is if you don't know at runtime whether it's an action or mutation,
   // which can happen if it comes from `runAt` or `runAfter`.
@@ -113,7 +112,7 @@ export class WorkPool {
     >,
     fnArgs: Args,
     runAtTime: number
-  ): Promise<WorkId<null>> {
+  ): Promise<WorkId> {
     const fnHandle = await createFunctionHandle(fn);
     const id = await ctx.runMutation(this.component.lib.enqueue, {
       fnHandle,
@@ -123,81 +122,20 @@ export class WorkPool {
       runAtTime,
       options: this.options,
     });
-    return id as WorkId<null>;
+    return id as WorkId;
   }
-  async cancel(ctx: RunMutationCtx, id: WorkId<any>): Promise<void> {
+  async cancel(ctx: RunMutationCtx, id: WorkId): Promise<void> {
     await ctx.runMutation(this.component.lib.cancel, { id });
   }
-  async status<ReturnType>(
+  async status(
     ctx: RunQueryCtx,
-    id: WorkId<ReturnType>
+    id: WorkId
   ): Promise<
     | { kind: "pending" }
     | { kind: "inProgress" }
-    | { kind: "success"; result: ReturnType }
-    | { kind: "error"; error: string }
+    | { kind: "completed"; completionStatus: CompletionStatus }
   > {
     return await ctx.runQuery(this.component.lib.status, { id });
-  }
-  async tryResult<ReturnType>(
-    ctx: RunQueryCtx,
-    id: WorkId<ReturnType>
-  ): Promise<ReturnType | undefined> {
-    const status = await this.status(ctx, id);
-    if (status.kind === "success") {
-      return status.result;
-    }
-    if (status.kind === "error") {
-      throw new Error(status.error);
-    }
-    return undefined;
-  }
-  // TODO(emma) consider removing. Apps can do this with `tryResult` if they want, and this is a tight resource-intensive loop.
-  async pollResult<ReturnType>(
-    ctx: RunQueryCtx & RunActionCtx,
-    id: WorkId<ReturnType>,
-    timeoutMs: number
-  ): Promise<ReturnType> {
-    const start = Date.now();
-    while (true) {
-      const result = await this.tryResult(ctx, id);
-      if (result !== undefined) {
-        return result;
-      }
-      if (Date.now() - start > timeoutMs) {
-        throw new Error(`Timeout waiting for result of work ${id}`);
-      }
-      await new Promise<void>((resolve) => setTimeout(resolve, 50));
-    }
-  }
-  // TODO(emma): just make this a wrapper around the scheduler.
-  // don't need to do the runAction/runMutation here.
-  // Also we can consider deleting this method entirely; just make them use
-  // enqueueMutation and enqueueAction.
-  ctx<DataModel extends GenericDataModel>(
-    ctx: GenericActionCtx<DataModel>
-  ): GenericActionCtx<DataModel> {
-    return {
-      runAction: (async (action: any, args: any) => {
-        const workId = await this.enqueueAction(ctx, action, args);
-        return this.pollResult(ctx, workId, 30 * 1000);
-      }) as any,
-      runMutation: (async (mutation: any, args: any) => {
-        const workId = await this.enqueueMutation(ctx, mutation, args);
-        return this.pollResult(ctx, workId, 30 * 1000);
-      }) as any,
-      scheduler: {
-        runAfter: async (delay: number, fn: any, args: any) =>
-          this.enqueueUnknown(ctx, fn, args, Date.now() + delay),
-        runAt: async (time: number, fn: any, args: any) =>
-          this.enqueueUnknown(ctx, fn, args, time),
-        cancel: async (id: any) => this.cancel(ctx, id),
-      } as any,
-      auth: ctx.auth,
-      storage: ctx.storage,
-      vectorSearch: ctx.vectorSearch.bind(ctx),
-      runQuery: ctx.runQuery.bind(ctx),
-    };
   }
 }
 
@@ -208,9 +146,6 @@ type RunQueryCtx = {
 };
 type RunMutationCtx = {
   runMutation: GenericMutationCtx<GenericDataModel>["runMutation"];
-};
-type RunActionCtx = {
-  runAction: GenericActionCtx<GenericDataModel>["runAction"];
 };
 
 export type OpaqueIds<T> =

@@ -28,6 +28,7 @@
     "prepack": "node node10stubs.mjs",
     "postpack": "node node10stubs.mjs --cleanup",
     "test": "vitest run",
+    "lint": "tsc --noEmit && eslint . && prettier --check .",
     "format": "prettier --write .",
     "test:debug": "vitest --inspect-brk --no-file-parallelism",
     "test:coverage": "vitest run --coverage --coverage.reporter=text"
