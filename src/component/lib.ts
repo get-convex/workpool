@@ -30,7 +30,6 @@ export const enqueue = mutation({
       maxParallelism: v.number(),
       actionTimeoutMs: v.optional(v.number()),
       mutationTimeoutMs: v.optional(v.number()),
-      debounceMs: v.optional(v.number()),
       fastHeartbeatMs: v.optional(v.number()),
       slowHeartbeatMs: v.optional(v.number()),
       logLevel: v.optional(logLevel),
@@ -39,12 +38,10 @@ export const enqueue = mutation({
   },
   returns: v.id("pendingWork"),
   handler: async (ctx, { fnHandle, fnName, options, fnArgs, fnType }) => {
-    const debounceMs = options.debounceMs ?? 50;
     await ensurePoolExists(ctx, {
       maxParallelism: options.maxParallelism,
       actionTimeoutMs: options.actionTimeoutMs ?? 15 * 60 * 1000,
       mutationTimeoutMs: options.mutationTimeoutMs ?? 30 * 1000,
-      debounceMs,
       fastHeartbeatMs: options.fastHeartbeatMs ?? 10 * 1000,
       slowHeartbeatMs: options.slowHeartbeatMs ?? 2 * 60 * 60 * 1000,
       ttl: options.ttl ?? 24 * 60 * 60 * 1000,
@@ -56,7 +53,7 @@ export const enqueue = mutation({
       fnArgs,
       fnType,
     });
-    await kickMainLoop(ctx, debounceMs, false);
+    await kickMainLoop(ctx, 0, false);
     return workId;
   },
 });
@@ -90,37 +87,16 @@ const BATCH_SIZE = 10;
 // There should only ever be at most one of these scheduled or running.
 // The scheduled one is in the "mainLoop" table.
 export const mainLoop = internalMutation({
-  args: {
-    generation: v.number(),
-  },
-  handler: async (ctx, args) => {
+  args: { },
+  handler: async (ctx, _args) => {
     const console_ = await console(ctx);
-
-    // Make sure mainLoop is serialized.
-    const loopDoc = await ctx.db.query("mainLoop").unique();
-    const expectedGeneration = loopDoc?.generation ?? 0;
-    if (expectedGeneration !== args.generation) {
-      throw new Error(
-        `mainLoop generation mismatch ${expectedGeneration} !== ${args.generation}`
-      );
-    }
-    if (loopDoc) {
-      await ctx.db.patch(loopDoc._id, { generation: args.generation + 1 });
-    } else {
-      await ctx.db.insert("mainLoop", {
-        generation: args.generation + 1,
-        // Don't know when it will next run. This will get patched later.
-        runAtTime: Number.POSITIVE_INFINITY,
-      });
-    }
 
     const options = await getOptions(ctx.db);
     if (!options) {
       console_.info("no pool, skipping mainLoop");
-      await kickMainLoop(ctx, 60 * 60 * 1000, true);
       return;
     }
-    const { maxParallelism, debounceMs, fastHeartbeatMs, slowHeartbeatMs } =
+    const { maxParallelism, fastHeartbeatMs, slowHeartbeatMs } =
       options;
 
     console_.time("inProgress count");
@@ -235,7 +211,7 @@ export const mainLoop = internalMutation({
     console_.time("kickMainLoop");
     if (didSomething) {
       // There might be more to do.
-      await kickMainLoop(ctx, debounceMs, true);
+      await kickMainLoop(ctx, 0, true);
     } else {
       // Decide when to wake up.
       const allInProgressWork = await ctx.db.query("inProgressWork").collect();
@@ -378,12 +354,11 @@ async function saveResultHandler(
   if (!options) {
     throw new Error("cannot save result with no pool");
   }
-  const { debounceMs } = options;
   await ctx.db.insert("pendingCompletion", {
     completionStatus,
     workId,
   });
-  await kickMainLoop(ctx, debounceMs, false);
+  await kickMainLoop(ctx, 0, false);
 }
 
 export const runMutationWrapper = internalMutation({
@@ -410,25 +385,21 @@ async function startMainLoopHandler(ctx: MutationCtx) {
   const console_ = await console(ctx);
   if (!mainLoop) {
     console_.debug("starting mainLoop");
-    const fn = await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {
-      generation: 0,
-    });
+    await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
     await ctx.db.insert("mainLoop", {
-      fn,
-      generation: 0,
-      runAtTime: Date.now(),
+      runAtTime: null,
+      fn: null,
     });
     return;
   }
-  const existingFn = mainLoop.fn ? await ctx.db.system.get(mainLoop.fn) : null;
-  if (existingFn === null || existingFn.completedTime) {
-    // mainLoop stopped, so we restart it.
-    const fn = await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {
-      generation: mainLoop.generation,
-    });
-    await ctx.db.patch(mainLoop._id, { fn });
-    console_.debug("mainLoop stopped, so we restarted it");
+  if (mainLoop.fn === null) {
+    console_.info("mainLoop should be actively running; if it's not, run `mainLoop` directly");
+    return;
   }
+  console_.debug("mainLoop is scheduled to run later, so run it now");
+  await ctx.scheduler.cancel(mainLoop.fn);
+  await ctx.db.patch(mainLoop._id, { fn: null, runAtTime: null });
+  await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
 }
 
 export const startMainLoop = mutation({
@@ -464,10 +435,15 @@ async function kickMainLoop(
   delayMs: number,
   isCurrentlyExecuting: boolean
 ): Promise<void> {
-  const debounceMs = (await getOptions(ctx.db))?.debounceMs ?? 50;
-  const delay = Math.max(delayMs, debounceMs);
-  const runAtTime = Date.now() + delay;
   const console_ = await console(ctx);
+
+  if (delayMs <= 0 && isCurrentlyExecuting) {
+    console_.debug("mainLoop is actively running and wants to keep running");
+    await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
+    return;
+  }
+
+  const runAtTime = Date.now() + delayMs;
   // Look for mainLoop documents that we want to reschedule.
   // If we're currently running mainLoop, we definitely want to reschedule.
   // Otherwise, only reschedule if the new runAtTime is earlier than the existing one.
@@ -493,13 +469,18 @@ async function kickMainLoop(
   if (!isCurrentlyExecuting && mainLoop.fn) {
     await ctx.scheduler.cancel(mainLoop.fn);
   }
-  const fn = await ctx.scheduler.runAt(runAtTime, internal.lib.mainLoop, {
-    generation: mainLoop.generation,
-  });
-  await ctx.db.patch(mainLoop._id, { fn, runAtTime });
-  console_.debug(
-    "mainLoop was scheduled later, so reschedule it to run sooner"
-  );
+  const fn = await ctx.scheduler.runAt(runAtTime, internal.lib.mainLoop, {});
+  if (delayMs <= 0) {
+    console_.debug(
+      "mainLoop was scheduled later, so reschedule it to run now"
+    );
+    await ctx.db.patch(mainLoop._id, { fn: null, runAtTime: null });
+  } else {
+    console_.debug(
+      "mainLoop was scheduled later, so reschedule it to run sooner"
+    );
+    await ctx.db.patch(mainLoop._id, { fn, runAtTime });
+  }
 }
 
 export const status = query({
@@ -566,9 +547,6 @@ async function ensurePoolExists(
   }
   if (opts.maxParallelism < 1) {
     throw new Error("maxParallelism must be >= 1");
-  }
-  if (opts.debounceMs < 10) {
-    throw new Error("debounceMs must be >= 10 to prevent OCCs");
   }
   const pool = await ctx.db.query("pools").unique();
   if (pool) {
