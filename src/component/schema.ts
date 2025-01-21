@@ -81,7 +81,7 @@ export default defineSchema({
 
   inProgressWork: defineTable({
     running: v.id("_scheduled_functions"),
-    timeoutMs: v.number(),
+    timeoutMs: v.union(v.number(), v.null()),
     workId: v.id("pendingWork"),
   }).index("workId", ["workId"]),
 

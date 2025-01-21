@@ -29,7 +29,6 @@ export const enqueue = mutation({
     options: v.object({
       maxParallelism: v.number(),
       actionTimeoutMs: v.optional(v.number()),
-
       fastHeartbeatMs: v.optional(v.number()),
       slowHeartbeatMs: v.optional(v.number()),
       logLevel: v.optional(logLevel),
@@ -41,7 +40,6 @@ export const enqueue = mutation({
     await ensurePoolExists(ctx, {
       maxParallelism: options.maxParallelism,
       actionTimeoutMs: options.actionTimeoutMs ?? 15 * 60 * 1000,
-
       fastHeartbeatMs: options.fastHeartbeatMs ?? 10 * 1000,
       slowHeartbeatMs: options.slowHeartbeatMs ?? 2 * 60 * 60 * 1000,
       ttl: options.ttl ?? 24 * 60 * 60 * 1000,
@@ -221,7 +219,9 @@ export const mainLoop = internalMutation({
       const nextInProgress = allInProgressWork.length
         ? Math.min(
             fastHeartbeatMs + Date.now(),
-            ...allInProgressWork.map((w) => w._creationTime + w.timeoutMs)
+            ...allInProgressWork
+              .filter((w) => w.timeoutMs !== null)
+              .map((w) => w._creationTime + w.timeoutMs!)
           )
         : Number.POSITIVE_INFINITY;
       const nextTime = Math.min(nextPendingTime, nextInProgress);
@@ -236,7 +236,7 @@ async function beginWork(
   work: Doc<"pendingWork">
 ): Promise<{
   scheduledId: Id<"_scheduled_functions">;
-  timeoutMs: number;
+  timeoutMs: number | null;
 }> {
   const options = await getOptions(ctx.db);
   if (!options) {
@@ -268,7 +268,7 @@ async function beginWork(
           fnArgs: work.fnArgs,
         }
       ),
-      timeoutMs: Number.MAX_SAFE_INTEGER, // Mutations cannot timeout
+      timeoutMs: null, // Mutations cannot timeout
     };
   } else {
     throw new Error(`Unexpected fnType ${work.fnType}`);
@@ -288,7 +288,10 @@ async function checkInProgressWork(
     workStatus.state.kind === "pending" ||
     workStatus.state.kind === "inProgress"
   ) {
-    if (Date.now() - workStatus._creationTime > doc.timeoutMs) {
+    if (
+      doc.timeoutMs !== null &&
+      Date.now() - workStatus._creationTime > doc.timeoutMs
+    ) {
       await ctx.scheduler.cancel(doc.running);
       return { completionStatus: "timeout" };
     }
