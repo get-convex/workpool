@@ -47,8 +47,6 @@ export default defineSchema({
   pools: defineTable({
     maxParallelism: v.number(),
     actionTimeoutMs: v.number(),
-    fastHeartbeatMs: v.number(),
-    slowHeartbeatMs: v.number(),
     ttl: v.number(),
     logLevel,
   }),
