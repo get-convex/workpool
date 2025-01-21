@@ -43,28 +43,27 @@ To avoid OCCs, we restrict which mutations can read and write from each table:
  */
 
 export default defineSchema({
-  // Statically configured.
+  // Statically configured, singleton.
   pools: defineTable({
     maxParallelism: v.number(),
     actionTimeoutMs: v.number(),
     mutationTimeoutMs: v.number(),
-    debounceMs: v.number(),
     fastHeartbeatMs: v.number(),
     slowHeartbeatMs: v.number(),
     ttl: v.number(),
     logLevel,
   }),
 
-  // State across all pools.
   // TODO(emma) change this to use a boolean or enum of statuses, instead of using runAtTime.
   // Status like "running", "waitingForJobCompletion", "idle".
   // Currently there's a problem if enqueue is called from a mutation that takes longer than
   // debounceMs to complete, and a mainLoop finishes and restarts in that time window. Then the enqueue will OCC with the mainLoop.
   // But if we have fixed statuses, we don't need to write it so frequently so it won't OCC. Chat with @ian about details.
   mainLoop: defineTable({
-    fn: v.optional(v.id("_scheduled_functions")),
-    generation: v.number(),
-    runAtTime: v.number(),
+    // null means it's actively running.
+    runAtTime: v.union(v.number(), v.null()),
+    // Only set if it's not actively running -- so it's scheduled to run in the future, at runAtTime.
+    fn: v.union(v.id("_scheduled_functions"), v.null()),
   }).index("runAtTime", ["runAtTime"]),
 
   pendingWork: defineTable({
