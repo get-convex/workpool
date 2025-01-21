@@ -47,7 +47,6 @@ export default defineSchema({
   pools: defineTable({
     maxParallelism: v.number(),
     actionTimeoutMs: v.number(),
-    mutationTimeoutMs: v.number(),
     fastHeartbeatMs: v.number(),
     slowHeartbeatMs: v.number(),
     ttl: v.number(),
@@ -82,7 +81,7 @@ export default defineSchema({
 
   inProgressWork: defineTable({
     running: v.id("_scheduled_functions"),
-    timeoutMs: v.number(),
+    timeoutMs: v.union(v.number(), v.null()),
     workId: v.id("pendingWork"),
   }).index("workId", ["workId"]),
 
