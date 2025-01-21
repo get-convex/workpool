@@ -59,7 +59,6 @@ export declare const components: {
           fnType: "action" | "mutation";
           options: {
             actionTimeoutMs?: number;
-            debounceMs?: number;
             fastHeartbeatMs?: number;
             logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
             maxParallelism: number;
@@ -81,49 +80,6 @@ export declare const components: {
             completionStatus: "success" | "error" | "canceled" | "timeout";
             kind: "completed";
           }
-      >;
-      stopCleanup: FunctionReference<"mutation", "internal", {}, any>;
-      stopMainLoop: FunctionReference<"mutation", "internal", {}, any>;
-    };
-    public: {
-      cancel: FunctionReference<"mutation", "internal", { id: string }, any>;
-      cleanup: FunctionReference<
-        "mutation",
-        "internal",
-        { maxAgeMs: number },
-        any
-      >;
-      enqueue: FunctionReference<
-        "mutation",
-        "internal",
-        {
-          fnArgs: any;
-          fnType: "action" | "mutation" | "unknown";
-          handle: string;
-          options: {
-            actionTimeoutMs?: number;
-            completedWorkMaxAgeMs?: number;
-            debounceMs?: number;
-            fastHeartbeatMs?: number;
-            logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
-            maxParallelism: number;
-            mutationTimeoutMs?: number;
-            slowHeartbeatMs?: number;
-            unknownTimeoutMs?: number;
-          };
-          runAtTime: number;
-        },
-        string
-      >;
-      startMainLoop: FunctionReference<"mutation", "internal", {}, any>;
-      status: FunctionReference<
-        "query",
-        "internal",
-        { id: string },
-        | { kind: "pending" }
-        | { kind: "inProgress" }
-        | { kind: "success"; result: any }
-        | { error: string; kind: "error" }
       >;
       stopCleanup: FunctionReference<"mutation", "internal", {}, any>;
       stopMainLoop: FunctionReference<"mutation", "internal", {}, any>;
@@ -148,7 +104,6 @@ export declare const components: {
           fnType: "action" | "mutation";
           options: {
             actionTimeoutMs?: number;
-            debounceMs?: number;
             fastHeartbeatMs?: number;
             logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
             maxParallelism: number;
@@ -170,49 +125,6 @@ export declare const components: {
             completionStatus: "success" | "error" | "canceled" | "timeout";
             kind: "completed";
           }
-      >;
-      stopCleanup: FunctionReference<"mutation", "internal", {}, any>;
-      stopMainLoop: FunctionReference<"mutation", "internal", {}, any>;
-    };
-    public: {
-      cancel: FunctionReference<"mutation", "internal", { id: string }, any>;
-      cleanup: FunctionReference<
-        "mutation",
-        "internal",
-        { maxAgeMs: number },
-        any
-      >;
-      enqueue: FunctionReference<
-        "mutation",
-        "internal",
-        {
-          fnArgs: any;
-          fnType: "action" | "mutation" | "unknown";
-          handle: string;
-          options: {
-            actionTimeoutMs?: number;
-            completedWorkMaxAgeMs?: number;
-            debounceMs?: number;
-            fastHeartbeatMs?: number;
-            logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
-            maxParallelism: number;
-            mutationTimeoutMs?: number;
-            slowHeartbeatMs?: number;
-            unknownTimeoutMs?: number;
-          };
-          runAtTime: number;
-        },
-        string
-      >;
-      startMainLoop: FunctionReference<"mutation", "internal", {}, any>;
-      status: FunctionReference<
-        "query",
-        "internal",
-        { id: string },
-        | { kind: "pending" }
-        | { kind: "inProgress" }
-        | { kind: "success"; result: any }
-        | { error: string; kind: "error" }
       >;
       stopCleanup: FunctionReference<"mutation", "internal", {}, any>;
       stopMainLoop: FunctionReference<"mutation", "internal", {}, any>;
