@@ -29,7 +29,7 @@ export const enqueue = mutation({
     options: v.object({
       maxParallelism: v.number(),
       actionTimeoutMs: v.optional(v.number()),
-      mutationTimeoutMs: v.optional(v.number()),
+
       fastHeartbeatMs: v.optional(v.number()),
       slowHeartbeatMs: v.optional(v.number()),
       logLevel: v.optional(logLevel),
@@ -41,7 +41,7 @@ export const enqueue = mutation({
     await ensurePoolExists(ctx, {
       maxParallelism: options.maxParallelism,
       actionTimeoutMs: options.actionTimeoutMs ?? 15 * 60 * 1000,
-      mutationTimeoutMs: options.mutationTimeoutMs ?? 30 * 1000,
+
       fastHeartbeatMs: options.fastHeartbeatMs ?? 10 * 1000,
       slowHeartbeatMs: options.slowHeartbeatMs ?? 2 * 60 * 60 * 1000,
       ttl: options.ttl ?? 24 * 60 * 60 * 1000,
@@ -87,7 +87,7 @@ const BATCH_SIZE = 10;
 // There should only ever be at most one of these scheduled or running.
 // The scheduled one is in the "mainLoop" table.
 export const mainLoop = internalMutation({
-  args: { },
+  args: {},
   handler: async (ctx, _args) => {
     const console_ = await console(ctx);
 
@@ -96,8 +96,7 @@ export const mainLoop = internalMutation({
       console_.info("no pool, skipping mainLoop");
       return;
     }
-    const { maxParallelism, fastHeartbeatMs, slowHeartbeatMs } =
-      options;
+    const { maxParallelism, fastHeartbeatMs, slowHeartbeatMs } = options;
 
     console_.time("inProgress count");
     // This is the only function reading and writing inProgressWork,
@@ -244,7 +243,7 @@ async function beginWork(
     throw new Error("cannot begin work with no pool");
   }
   recordStarted(work._id, work.fnName, work._creationTime);
-  const { mutationTimeoutMs, actionTimeoutMs } = options;
+  const { actionTimeoutMs } = options;
   if (work.fnType === "action") {
     return {
       scheduledId: await ctx.scheduler.runAfter(
@@ -269,7 +268,7 @@ async function beginWork(
           fnArgs: work.fnArgs,
         }
       ),
-      timeoutMs: mutationTimeoutMs,
+      timeoutMs: Number.MAX_SAFE_INTEGER, // Mutations cannot timeout
     };
   } else {
     throw new Error(`Unexpected fnType ${work.fnType}`);
@@ -393,7 +392,9 @@ async function startMainLoopHandler(ctx: MutationCtx) {
     return;
   }
   if (mainLoop.fn === null) {
-    console_.info("mainLoop should be actively running; if it's not, run `mainLoop` directly");
+    console_.info(
+      "mainLoop should be actively running; if it's not, run `mainLoop` directly"
+    );
     return;
   }
   console_.debug("mainLoop is scheduled to run later, so run it now");
@@ -471,9 +472,7 @@ async function kickMainLoop(
   }
   const fn = await ctx.scheduler.runAt(runAtTime, internal.lib.mainLoop, {});
   if (delayMs <= 0) {
-    console_.debug(
-      "mainLoop was scheduled later, so reschedule it to run now"
-    );
+    console_.debug("mainLoop was scheduled later, so reschedule it to run now");
     await ctx.db.patch(mainLoop._id, { fn: null, runAtTime: null });
   } else {
     console_.debug(
