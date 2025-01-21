@@ -29,8 +29,6 @@ export const enqueue = mutation({
     options: v.object({
       maxParallelism: v.number(),
       actionTimeoutMs: v.optional(v.number()),
-      fastHeartbeatMs: v.optional(v.number()),
-      slowHeartbeatMs: v.optional(v.number()),
       logLevel: v.optional(logLevel),
       ttl: v.optional(v.number()),
     }),
@@ -40,8 +38,6 @@ export const enqueue = mutation({
     await ensurePoolExists(ctx, {
       maxParallelism: options.maxParallelism,
       actionTimeoutMs: options.actionTimeoutMs ?? 15 * 60 * 1000,
-      fastHeartbeatMs: options.fastHeartbeatMs ?? 10 * 1000,
-      slowHeartbeatMs: options.slowHeartbeatMs ?? 2 * 60 * 60 * 1000,
       ttl: options.ttl ?? 24 * 60 * 60 * 1000,
       logLevel: options.logLevel ?? "WARN",
     });
@@ -94,7 +90,7 @@ export const mainLoop = internalMutation({
       console_.info("no pool, skipping mainLoop");
       return;
     }
-    const { maxParallelism, fastHeartbeatMs, slowHeartbeatMs } = options;
+    const { maxParallelism } = options;
 
     console_.time("inProgress count");
     // This is the only function reading and writing inProgressWork,
@@ -215,10 +211,9 @@ export const mainLoop = internalMutation({
       const nextPending = await ctx.db.query("pendingWork").first();
       const nextPendingTime = nextPending
         ? nextPending._creationTime
-        : slowHeartbeatMs + Date.now();
+        : Number.POSITIVE_INFINITY;
       const nextInProgress = allInProgressWork.length
         ? Math.min(
-            fastHeartbeatMs + Date.now(),
             ...allInProgressWork
               .filter((w) => w.timeoutMs !== null)
               .map((w) => w._creationTime + w.timeoutMs!)
@@ -473,7 +468,10 @@ async function kickMainLoop(
   if (!isCurrentlyExecuting && mainLoop.fn) {
     await ctx.scheduler.cancel(mainLoop.fn);
   }
-  const fn = await ctx.scheduler.runAt(runAtTime, internal.lib.mainLoop, {});
+  let fn: Id<"_scheduled_functions"> | null = null;
+  if (delayMs < Number.POSITIVE_INFINITY) {
+    fn = await ctx.scheduler.runAt(runAtTime, internal.lib.mainLoop, {});
+  }
   if (delayMs <= 0) {
     console_.debug("mainLoop was scheduled later, so reschedule it to run now");
     await ctx.db.patch(mainLoop._id, { fn: null, runAtTime: null });

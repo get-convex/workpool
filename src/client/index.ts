@@ -31,22 +31,6 @@ export class WorkPool {
        * Default 15 minutes.
        */
       actionTimeoutMs?: number;
-      /** How long a function started by `enqueueUnknown` or `runAt` or `runAfter`
-       * can run before the pool considers it to be timed out.
-       * The function itself might time out earlier.
-       * Default 15 minutes.
-       */
-      unknownTimeoutMs?: number;
-      /** When something is running, wait this long to check if anything has
-       * been canceled or failed unexpectedly.
-       * Default 10s.
-       */
-      fastHeartbeatMs?: number;
-      /** When nothing is happening, wait this long to check if there is new work
-       * that we missed.
-       * Default 2 hours.
-       */
-      slowHeartbeatMs?: number;
       /** How much to log.
        * Default WARN.
        */
