@@ -9,7 +9,7 @@ import { api, components, internal } from "./_generated/api";
 import { WorkPool } from "@convex-dev/workpool";
 import { v } from "convex/values";
 
-const highPriPool = new WorkPool(components.workpool, {
+const highPriPool = new WorkPool(components.highPriWorkpool, {
   maxParallelism: 20,
   // For tests, disable completed work cleanup.
   ttl: Number.POSITIVE_INFINITY,

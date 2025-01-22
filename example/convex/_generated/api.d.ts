@@ -58,11 +58,8 @@ export declare const components: {
           fnName: string;
           fnType: "action" | "mutation";
           options: {
-            fastHeartbeatMs?: number;
             logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
             maxParallelism: number;
-            mutationTimeoutMs?: number;
-            slowHeartbeatMs?: number;
             ttl?: number;
           };
         },
@@ -81,7 +78,6 @@ export declare const components: {
           }
       >;
       stopCleanup: FunctionReference<"mutation", "internal", {}, any>;
-      stopMainLoop: FunctionReference<"mutation", "internal", {}, any>;
     };
   };
   lowpriWorkpool: {
@@ -102,11 +98,8 @@ export declare const components: {
           fnName: string;
           fnType: "action" | "mutation";
           options: {
-            fastHeartbeatMs?: number;
             logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
             maxParallelism: number;
-            mutationTimeoutMs?: number;
-            slowHeartbeatMs?: number;
             ttl?: number;
           };
         },
@@ -125,7 +118,46 @@ export declare const components: {
           }
       >;
       stopCleanup: FunctionReference<"mutation", "internal", {}, any>;
-      stopMainLoop: FunctionReference<"mutation", "internal", {}, any>;
+    };
+  };
+  highPriWorkpool: {
+    lib: {
+      cancel: FunctionReference<"mutation", "internal", { id: string }, any>;
+      cleanup: FunctionReference<
+        "mutation",
+        "internal",
+        { maxAgeMs: number },
+        any
+      >;
+      enqueue: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          fnArgs: any;
+          fnHandle: string;
+          fnName: string;
+          fnType: "action" | "mutation";
+          options: {
+            logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
+            maxParallelism: number;
+            ttl?: number;
+          };
+        },
+        string
+      >;
+      startMainLoop: FunctionReference<"mutation", "internal", {}, any>;
+      status: FunctionReference<
+        "query",
+        "internal",
+        { id: string },
+        | { kind: "pending" }
+        | { kind: "inProgress" }
+        | {
+            completionStatus: "success" | "error" | "canceled" | "timeout";
+            kind: "completed";
+          }
+      >;
+      stopCleanup: FunctionReference<"mutation", "internal", {}, any>;
     };
   };
 };
