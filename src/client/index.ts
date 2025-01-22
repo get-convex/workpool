@@ -19,18 +19,11 @@ export type WorkId = string;
 export class WorkPool {
   constructor(
     private component: UseApi<typeof api>,
-    // TODO(emma) reduce the number of options. consider removing the timeout options.
-    // consider removing the heartbeats.
     private options: {
       /** How many actions/mutations can be running at once within this pool.
        * Min 1, Max 300.
        */
       maxParallelism: number;
-      /** How long an action can run before the pool considers it to be timed out.
-       * The action itself might time out earlier.
-       * Default 15 minutes.
-       */
-      actionTimeoutMs?: number;
       /** How much to log.
        * Default WARN.
        */

@@ -59,11 +59,8 @@ export declare const components: {
           fnType: "action" | "mutation";
           options: {
             actionTimeoutMs?: number;
-            fastHeartbeatMs?: number;
             logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
             maxParallelism: number;
-            mutationTimeoutMs?: number;
-            slowHeartbeatMs?: number;
             ttl?: number;
           };
         },
@@ -82,7 +79,6 @@ export declare const components: {
           }
       >;
       stopCleanup: FunctionReference<"mutation", "internal", {}, any>;
-      stopMainLoop: FunctionReference<"mutation", "internal", {}, any>;
     };
   };
   lowpriWorkpool: {
@@ -104,11 +100,8 @@ export declare const components: {
           fnType: "action" | "mutation";
           options: {
             actionTimeoutMs?: number;
-            fastHeartbeatMs?: number;
             logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
             maxParallelism: number;
-            mutationTimeoutMs?: number;
-            slowHeartbeatMs?: number;
             ttl?: number;
           };
         },
@@ -127,7 +120,6 @@ export declare const components: {
           }
       >;
       stopCleanup: FunctionReference<"mutation", "internal", {}, any>;
-      stopMainLoop: FunctionReference<"mutation", "internal", {}, any>;
     };
   };
 };

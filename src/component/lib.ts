@@ -20,6 +20,8 @@ import { completionStatus } from "./schema";
 
 const crons = new Crons(components.crons);
 
+export const ACTION_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+
 export const enqueue = mutation({
   args: {
     fnHandle: v.string(),
@@ -28,7 +30,6 @@ export const enqueue = mutation({
     fnType: v.union(v.literal("action"), v.literal("mutation")),
     options: v.object({
       maxParallelism: v.number(),
-      actionTimeoutMs: v.optional(v.number()),
       logLevel: v.optional(logLevel),
       ttl: v.optional(v.number()),
     }),
@@ -37,7 +38,6 @@ export const enqueue = mutation({
   handler: async (ctx, { fnHandle, fnName, options, fnArgs, fnType }) => {
     await ensurePoolExists(ctx, {
       maxParallelism: options.maxParallelism,
-      actionTimeoutMs: options.actionTimeoutMs ?? 15 * 60 * 1000,
       ttl: options.ttl ?? 24 * 60 * 60 * 1000,
       logLevel: options.logLevel ?? "WARN",
     });
@@ -243,7 +243,7 @@ async function beginWork(
     throw new Error("work not found");
   }
   recordStarted(work._id, work.fnName, work._creationTime);
-  const { actionTimeoutMs } = options;
+  // Use ACTION_TIMEOUT_MS constant for timeout
   if (work.fnType === "action") {
     return {
       scheduledId: await ctx.scheduler.runAfter(
@@ -255,7 +255,7 @@ async function beginWork(
           fnArgs: work.fnArgs,
         }
       ),
-      timeoutMs: actionTimeoutMs,
+      timeoutMs: ACTION_TIMEOUT_MS,
     };
   } else if (work.fnType === "mutation") {
     return {
