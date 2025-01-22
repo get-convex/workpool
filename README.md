@@ -2,8 +2,6 @@
 
 [![npm version](https://badge.fury.io/js/@convex-dev%2Fworkpool.svg)](https://badge.fury.io/js/@convex-dev%2Fworkpool)
 
-**Note: Convex Components are currently in beta**
-
 <!-- START: Include on https://convex.dev/components -->
 
 This Convex component pools actions and mutations to restrict parallel requests.
@@ -46,10 +44,6 @@ With limited parallelism, you can reduce
 [OCC errors](https://docs.convex.dev/error#1)
 from mutations that read and write the same data.
 
-Additionally, a Workpool stores return values when async work completes.
-And you can use a Workpool's `ctx` method to make sure `runMutation`,
-`runAction`, and `scheduler` all use the pool.
-
 Consider this action that calls a mutation to increment a singleton counter.
 By calling the mutation on a workpool with `maxParallelism: 1`, it will never
 throw an error due to conflicts with parallel mutations.
@@ -58,20 +52,28 @@ throw an error due to conflicts with parallel mutations.
 const counterPool = new Workpool(components.counterWorkpool, {
   maxParallelism: 1,
 });
+
 export const doSomethingAndCount = action({
   handler: async (ctx) => {
-    // poolCtx has the same interface as ctx, but it runs everything in the pool.
-    const poolCtx = counterPool.ctx(ctx);
-    const newValue = await poolCtx.runMutation(api.counter.increment);
-    // You can schedule things and they will run in the pool.
-    await poolCtx.scheduler.runAfter(100, api.counter.increment);
+    const doSomething = await fetch("https://example.com");
+    await counterPool.enqueueMutation(internal.counter.increment, {});
+  },
+});
+
+// This mutation is prone to conflicting with itself, because it always reads
+// and writes the same data. By running it in a workpool with low parallelism,
+// it will run serially.
+export const increment = internalMutation({
+  handler: async (ctx) => {
+    const countDoc = await ctx.db.query("counter").unique();
+    await ctx.db.patch(countDoc!._id, { count: countDoc!.count + 1 });
   },
 });
 ```
 
-Effectively, Workpool runs async functions similar to `ctx.scheduler`, but with
-limited parallelism. And it provides additional features like return values and
-configurable timeouts.
+Effectively, Workpool runs async functions similar to
+`ctx.scheduler.runAfter(0, ...)`, but it limits the number of functions that
+can run in parallel.
 
 ## Pre-requisite: Convex
 
@@ -109,7 +111,7 @@ export default app;
 
 ```ts
 import { components } from "./_generated/api";
-import { Workpool } from "@convex-dev/counter";
+import { Workpool } from "@convex-dev/workpool";
 
 const pool = new Workpool(components.emailWorkpool, {
   maxParallelism: 10,
@@ -122,25 +124,38 @@ Then you have the following interface on `pool`:
 
 ```ts
 // Schedule functions to run in the background.
-const id = await pool.enqueueMutation(api.foo.bar, args);
-const id = await pool.enqueueAction(api.foo.bar, args);
+const id = await pool.enqueueMutation(internal.foo.bar, args);
+const id = await pool.enqueueAction(internal.foo.bar, args);
 
-// Is it done yet?
+// Is it done yet? Did it succeed or fail?
 const status = await pool.status(id);
-// Wait for it to be done and get the return value.
-const result = await pool.pollResult(id);
 
-// ActionCtx that uses the pool to run and schedule actions and mutations.
-const poolCtx = pool.ctx(ctx);
-const result = await poolCtx.runMutation(api.foo.bar, args);
-const result = await poolCtx.runAction(api.foo.bar, args);
-const id = await poolCtx.scheduler.runAfter(100, api.foo.bar, args);
-const id = await poolCtx.scheduler.runAt(timestamp, api.foo.bar, args);
-// Note `poolCtx.scheduler.cancel` will only work on IDs returned by
-// `poolCtx.scheduler.runAt` or `poolCtx.scheduler.runAfter`
-await poolCtx.scheduler.cancel(id);
+// You can cancel the work, if it hasn't finished yet.
+await pool.cancel(id);
 ```
 
 See more example usage in [example.ts](./example/convex/example.ts).
+
+## Optimizations with and without Workpool
+
+The benefit of Workpool is that it won't fall over if there are many jobs
+scheduled at once, and it allows you to throttle low-priority jobs.
+
+However, Workpool has some overhead and can slow down your workload compared
+to using `ctx.scheduler` directly.
+
+Since each Workpool has some overhead -- each runs several functions to
+coordinate its work -- don't create too many of them.
+
+If you're running into issues with too many concurrent functions, there are
+alternatives to Workpool:
+
+- Try combining multiple mutations into a single mutation, with batching or
+  debouncing.
+- Call plain TypeScript functions if possible.
+  - In particular, an action calling `ctx.runAction` has more overhead than just
+    calling the action's handler directly.
+
+See [best practices](https://docs.convex.dev/production/best-practices) for more.
 
 <!-- END: Include on https://convex.dev/components -->

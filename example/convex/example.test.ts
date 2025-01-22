@@ -18,6 +18,8 @@ describe("workpool", () => {
     const t = convexTest(schema, modules);
     t.registerComponent("workpool", componentSchema, componentModules);
     t.registerComponent("workpool/crons", cronsSchema, cronsModules);
+    t.registerComponent("highPriWorkpool", componentSchema, componentModules);
+    t.registerComponent("highPriWorkpool/crons", cronsSchema, cronsModules);
     return t;
   }
 
@@ -67,5 +69,15 @@ describe("workpool", () => {
     expect(await t.query(api.example.queryData, {})).toEqual([
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
     ]);
+  });
+
+  test("cancellation", async () => {
+    const id = await t.mutation(api.example.enqueueOneMutation, { data: 1 });
+    await t.mutation(api.example.cancelMutation, { id });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await t.query(api.example.status, { id })).toEqual({
+      kind: "completed",
+      completionStatus: "canceled",
+    });
   });
 });

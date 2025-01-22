@@ -6,22 +6,22 @@ import {
   internalAction,
 } from "./_generated/server";
 import { api, components, internal } from "./_generated/api";
-import { WorkPool } from "@convex-dev/workpool";
+import { Workpool } from "@convex-dev/workpool";
 import { v } from "convex/values";
 
-const highPriPool = new WorkPool(components.highPriWorkpool, {
+const highPriPool = new Workpool(components.highPriWorkpool, {
   maxParallelism: 20,
   // For tests, disable completed work cleanup.
   ttl: Number.POSITIVE_INFINITY,
   logLevel: "INFO",
 });
-const pool = new WorkPool(components.workpool, {
+const pool = new Workpool(components.workpool, {
   maxParallelism: 3,
   // For tests, disable completed work cleanup.
   ttl: Number.POSITIVE_INFINITY,
   logLevel: "INFO",
 });
-const lowpriPool = new WorkPool(components.lowpriWorkpool, {
+const lowpriPool = new Workpool(components.lowpriWorkpool, {
   maxParallelism: 1,
   // For tests, disable completed work cleanup.
   ttl: Number.POSITIVE_INFINITY,
@@ -56,6 +56,13 @@ export const enqueueOneMutation = mutation({
   args: { data: v.number() },
   handler: async (ctx, { data }): Promise<string> => {
     return await pool.enqueueMutation(ctx, api.example.addMutation, { data });
+  },
+});
+
+export const cancelMutation = mutation({
+  args: { id: v.string() },
+  handler: async (ctx, { id }) => {
+    await pool.cancel(ctx, id);
   },
 });
 
@@ -109,7 +116,7 @@ export const enqueueABunchOfActions = mutation({
   },
 });
 
-export const enqueueAndWait = action({
+export const enqueueAnAction = action({
   args: {},
   handler: async (ctx, _args): Promise<void> => {
     await pool.enqueueAction(ctx, api.example.addAction, {});

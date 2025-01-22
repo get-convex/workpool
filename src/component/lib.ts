@@ -149,7 +149,7 @@ export const mainLoop = internalMutation({
           workId: pendingCompletion.workId,
         });
         const work = (await ctx.db.get(pendingCompletion.workId))!;
-        recordCompleted(work, pendingCompletion.completionStatus);
+        console_.info(recordCompleted(work, pendingCompletion.completionStatus));
         didSomething = true;
       })
     );
@@ -172,7 +172,7 @@ export const mainLoop = internalMutation({
             completionStatus: "canceled",
           });
           const work = (await ctx.db.get(pendingCancelation.workId))!;
-          recordCompleted(work, "canceled");
+          console_.info(recordCompleted(work, "canceled"));
         }
         await ctx.db.delete(pendingCancelation._id);
         didSomething = true;
@@ -201,7 +201,7 @@ export const mainLoop = internalMutation({
               completionStatus: result.completionStatus,
             });
             const work = (await ctx.db.get(inProgressWork.workId))!;
-            recordCompleted(work, result.completionStatus);
+            console_.info(recordCompleted(work, result.completionStatus));
             didSomething = true;
           }
         })
@@ -245,11 +245,12 @@ async function beginWork(
   if (!options) {
     throw new Error("cannot begin work with no pool");
   }
+  const console_ = await console(ctx);
   const work = await ctx.db.get(pendingStart.workId);
   if (!work) {
     throw new Error("work not found");
   }
-  recordStarted(work);
+  console_.info(recordStarted(work));
   if (work.fnType === "action") {
     return {
       scheduledId: await ctx.scheduler.runAfter(

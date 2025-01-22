@@ -31,7 +31,7 @@ Data flow:
 - `cleanup` mutation deletes old rows from completedWork.
 
 To avoid OCCs, we restrict which mutations can read and write from each table:
-- pools: read by all, written only when static WorkPool options change.
+- pools: read by all, written only when static Workpool options change.
 - mainLoop (table): read by all, written mostly by `mainLoop`.
   If `mainLoop` will not run for a while, mainLoop table is written by `enqueue`, `cancel`, or `saveResult`.
 - pendingWork: `enqueue` inserts at high timestamps, `mainLoop` pops at low timestamps. `status` query does point-reads.

@@ -16,11 +16,9 @@ import { CompletionStatus } from "../component/schema";
 
 export type WorkId = string;
 
-export class WorkPool {
+export class Workpool {
   constructor(
     private component: UseApi<typeof api>,
-    // TODO(emma) reduce the number of options. consider removing the timeout options.
-    // consider removing the heartbeats.
     private options: {
       /** How many actions/mutations can be running at once within this pool.
        * Min 1, Max 300.
