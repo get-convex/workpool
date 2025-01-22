@@ -430,12 +430,15 @@ async function loopFromMainLoop(ctx: MutationCtx, delayMs: number) {
     await startMainLoopHandler(ctx);
     return;
   }
-  if (mainLoop.state.kind !== "running") {
-    throw new Error("mainLoop is not running but `loopFromMainLoop` was called");
+  if (mainLoop.state.kind === "idle") {
+    throw new Error("mainLoop is idle but `loopFromMainLoop` was called");
   }
   if (delayMs <= 0) {
     console_.debug("mainLoop is actively running and wants to keep running");
     await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
+    if (mainLoop.state.kind !== "running") {
+      await ctx.db.patch(mainLoop._id, { state: { kind: "running" } });
+    }
   } else if (delayMs < Number.POSITIVE_INFINITY) {
     console_.debug(`mainLoop wants to run after ${delayMs}ms`);
     const runAtTime = Date.now() + delayMs;
