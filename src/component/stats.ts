@@ -1,4 +1,4 @@
-import { Id } from "./_generated/dataModel";
+import { Doc } from "./_generated/dataModel";
 
 /**
  * Record stats about work execution. Intended to be queried by Axiom or Datadog.
@@ -20,25 +20,32 @@ workpool
  */
 
 export function recordStarted(
-  workId: Id<"work">,
-  fnName: string,
-  enqueuedAt: number
+  work: Doc<"work">,
 ) {
   console.log(
     JSON.stringify({
-      workId,
+      workId: work._id,
       event: "started",
-      fnName,
-      enqueuedAt,
+      fnName: work.fnName,
+      enqueuedAt: work._creationTime,
       startedAt: Date.now(),
-      lagSinceEnqueued: Date.now() - enqueuedAt,
+      lagSinceEnqueued: Date.now() - work._creationTime,
     })
   );
 }
 
 export function recordCompleted(
-  workId: Id<"work">,
-  status: "success" | "error" | "canceled" | "timeout"
+  work: Doc<"work">,
+  status: "success" | "error" | "canceled" | "timeout",
 ) {
-  console.log(JSON.stringify({ workId, completedAt: Date.now(), status }));
+  console.log(
+    JSON.stringify({
+      workId: work._id,
+      event: "completed",
+      fnName: work.fnName,
+      completedAt: Date.now(),
+      status,
+      lagSinceEnqueued: Date.now() - work._creationTime,
+    })
+  );
 }

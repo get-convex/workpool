@@ -40,7 +40,7 @@ export const enqueue = mutation({
       actionTimeoutMs: options.actionTimeoutMs ?? 15 * 60 * 1000,
       ttl: options.ttl ?? 24 * 60 * 60 * 1000,
       logLevel: options.logLevel ?? "WARN",
-    });
+    }, "enqueue");
     const workId = await ctx.db.insert("work", {
       fnHandle,
       fnName,
@@ -48,7 +48,7 @@ export const enqueue = mutation({
       fnType,
     });
     await ctx.db.insert("pendingStart", { workId });
-    await kickMainLoop(ctx);
+    await kickMainLoop(ctx, "enqueue");
     return workId;
   },
 });
@@ -88,28 +88,28 @@ export const mainLoop = internalMutation({
 
     const options = await getOptions(ctx.db);
     if (!options) {
-      console_.info("no pool, skipping mainLoop");
+      console_.info("[mainLoop] no pool, skipping mainLoop");
       return;
     }
     const { maxParallelism } = options;
 
-    console_.time("inProgress count");
+    console_.time("[mainLoop] inProgress count");
     // This is the only function reading and writing inProgressWork,
     // and it's bounded by MAX_POSSIBLE_PARALLELISM, so we can
     // read it all into memory.
     const inProgressBefore = await ctx.db.query("inProgressWork").collect();
-    console_.debug(`${inProgressBefore.length} in progress`);
-    console_.timeEnd("inProgress count");
+    console_.debug(`[mainLoop] ${inProgressBefore.length} in progress`);
+    console_.timeEnd("[mainLoop] inProgress count");
 
     // Move from pendingWork to inProgressWork.
-    console_.time("pendingWork");
+    console_.time("[mainLoop] pendingWork");
     const toSchedule = Math.min(
       maxParallelism - inProgressBefore.length,
       BATCH_SIZE
     );
     let didSomething = false;
     const pending = await ctx.db.query("pendingStart").take(toSchedule);
-    console_.debug(`scheduling ${pending.length} pending work`);
+    console_.debug(`[mainLoop] scheduling ${pending.length} pending work`);
     await Promise.all(
       pending.map(async (work) => {
         const { scheduledId, timeoutMs } = await beginWork(ctx, work);
@@ -122,87 +122,90 @@ export const mainLoop = internalMutation({
         didSomething = true;
       })
     );
-    console_.timeEnd("pendingWork");
+    console_.timeEnd("[mainLoop] pendingWork");
 
     // Move from pendingCompletion to completedWork, deleting from inProgressWork.
     // We could do all of these, but we don't want to OCC with work completing,
     // so we only do a few at a time.
-    console_.time("pendingCompletion");
+    console_.time("[mainLoop] pendingCompletion");
     const completed = await ctx.db.query("pendingCompletion").take(BATCH_SIZE);
-    console_.debug(`completing ${completed.length}`);
+    console_.debug(`[mainLoop] completing ${completed.length}`);
     await Promise.all(
-      completed.map(async (work) => {
+      completed.map(async (pendingCompletion) => {
         const inProgressWork = await ctx.db
           .query("inProgressWork")
-          .withIndex("workId", (q) => q.eq("workId", work.workId))
+          .withIndex("workId", (q) => q.eq("workId", pendingCompletion.workId))
           .unique();
         if (inProgressWork) {
           await ctx.db.delete(inProgressWork._id);
         }
-        await ctx.db.delete(work._id);
+        await ctx.db.delete(pendingCompletion._id);
         await ctx.db.insert("completedWork", {
-          completionStatus: work.completionStatus,
-          workId: work.workId,
+          completionStatus: pendingCompletion.completionStatus,
+          workId: pendingCompletion.workId,
         });
-        recordCompleted(work.workId, work.completionStatus);
+        const work = (await ctx.db.get(pendingCompletion.workId))!;
+        recordCompleted(work, pendingCompletion.completionStatus);
         didSomething = true;
       })
     );
-    console_.timeEnd("pendingCompletion");
+    console_.timeEnd("[mainLoop] pendingCompletion");
 
-    console_.time("pendingCancelation");
+    console_.time("[mainLoop] pendingCancelation");
     const canceled = await ctx.db.query("pendingCancelation").take(BATCH_SIZE);
-    console_.debug(`canceling ${canceled.length}`);
+    console_.debug(`[mainLoop] canceling ${canceled.length}`);
     await Promise.all(
-      canceled.map(async (work) => {
+      canceled.map(async (pendingCancelation) => {
         const inProgressWork = await ctx.db
           .query("inProgressWork")
-          .withIndex("workId", (q) => q.eq("workId", work.workId))
+          .withIndex("workId", (q) => q.eq("workId", pendingCancelation.workId))
           .unique();
         if (inProgressWork) {
           await ctx.scheduler.cancel(inProgressWork.running);
           await ctx.db.delete(inProgressWork._id);
           await ctx.db.insert("completedWork", {
-            workId: work.workId,
+            workId: pendingCancelation.workId,
             completionStatus: "canceled",
           });
-          recordCompleted(work.workId, "canceled");
+          const work = (await ctx.db.get(pendingCancelation.workId))!;
+          recordCompleted(work, "canceled");
         }
-        await ctx.db.delete(work._id);
+        await ctx.db.delete(pendingCancelation._id);
         didSomething = true;
       })
     );
-    console_.timeEnd("pendingCancelation");
+    console_.timeEnd("[mainLoop] pendingCancelation");
 
     if (completed.length === 0) {
-      console_.time("inProgressWork check for unclean exits");
+      console_.time("[mainLoop] inProgressWork check for unclean exits");
       // If all completions are handled, check everything in inProgressWork.
       // This will find everything that timed out, failed ungracefully, was
       // cancelled, or succeeded without a return value.
       const inProgress = await ctx.db.query("inProgressWork").collect();
       await Promise.all(
-        inProgress.map(async (work) => {
-          const result = await checkInProgressWork(ctx, work);
+        inProgress.map(async (inProgressWork) => {
+          const result = await checkInProgressWork(ctx, inProgressWork);
           if (result !== null) {
             console_.debug(
-              "inProgressWork finished uncleanly",
-              work.workId,
+              "[mainLoop] inProgressWork finished uncleanly",
+              inProgressWork.workId,
               result
             );
-            await ctx.db.delete(work._id);
+            await ctx.db.delete(inProgressWork._id);
             await ctx.db.insert("completedWork", {
-              workId: work.workId,
+              workId: inProgressWork.workId,
               completionStatus: result.completionStatus,
             });
-            recordCompleted(work.workId, result.completionStatus);
+            const work = (await ctx.db.get(inProgressWork.workId))!;
+            recordCompleted(work, result.completionStatus);
             didSomething = true;
           }
         })
       );
-      console_.timeEnd("inProgressWork check for unclean exits");
+      console_.timeEnd("[mainLoop] inProgressWork check for unclean exits");
     }
 
-    console_.time("kickMainLoop");
+    console_.time("[mainLoop] kickMainLoop");
     if (didSomething) {
       // There might be more to do.
       await loopFromMainLoop(ctx, 0);
@@ -223,7 +226,7 @@ export const mainLoop = internalMutation({
       const nextTime = Math.min(nextPendingTime, nextInProgress);
       await loopFromMainLoop(ctx, nextTime - Date.now());
     }
-    console_.timeEnd("kickMainLoop");
+    console_.timeEnd("[mainLoop] kickMainLoop");
   },
 });
 
@@ -242,7 +245,7 @@ async function beginWork(
   if (!work) {
     throw new Error("work not found");
   }
-  recordStarted(work._id, work.fnName, work._creationTime);
+  recordStarted(work);
   const { actionTimeoutMs } = options;
   if (work.fnType === "action") {
     return {
@@ -360,7 +363,7 @@ async function saveResultHandler(
     completionStatus,
     workId,
   });
-  await kickMainLoop(ctx);
+  await kickMainLoop(ctx, "saveResult");
 }
 
 export const runMutationWrapper = internalMutation({
@@ -382,11 +385,11 @@ export const runMutationWrapper = internalMutation({
   },
 });
 
-async function startMainLoopHandler(ctx: MutationCtx) {
+async function startMainLoopHandler(ctx: MutationCtx, source: string) {
   const mainLoop = await ctx.db.query("mainLoop").unique();
   const console_ = await console(ctx);
   if (!mainLoop) {
-    console_.debug("starting mainLoop");
+    console_.debug(`[${source}] starting mainLoop`);
     await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
     await ctx.db.insert("mainLoop", {
       state: { kind: "running" },
@@ -395,11 +398,11 @@ async function startMainLoopHandler(ctx: MutationCtx) {
   }
   if (mainLoop.state.kind === "running") {
     console_.info(
-      "mainLoop should be actively running; if it's not, run `mainLoop` directly"
+      `[${source}] mainLoop should be actively running; if it's not, run \`mainLoop\` directly`
     );
     return;
   }
-  console_.debug("mainLoop is scheduled to run later, so run it now");
+  console_.debug(`[${source}] mainLoop is scheduled to run later, so run it now`);
   if (mainLoop.state.kind === "scheduled") {
     await ctx.scheduler.cancel(mainLoop.state.fn);
   }
@@ -409,7 +412,7 @@ async function startMainLoopHandler(ctx: MutationCtx) {
 
 export const startMainLoop = mutation({
   args: {},
-  handler: startMainLoopHandler,
+  handler: (ctx) => startMainLoopHandler(ctx, "startMainLoop"),
 });
 
 export const stopCleanup = mutation({
@@ -426,45 +429,47 @@ async function loopFromMainLoop(ctx: MutationCtx, delayMs: number) {
   const console_ = await console(ctx);
   const mainLoop = await ctx.db.query("mainLoop").unique();
   if (mainLoop === null) {
-    console_.debug("mainLoop not found, so we need to start it");
-    await startMainLoopHandler(ctx);
+    console_.debug("[mainLoop] mainLoop not found, so we need to start it");
+    await startMainLoopHandler(ctx, "mainLoop");
     return;
   }
   if (mainLoop.state.kind === "idle") {
     throw new Error("mainLoop is idle but `loopFromMainLoop` was called");
   }
   if (delayMs <= 0) {
-    console_.debug("mainLoop is actively running and wants to keep running");
+    console_.debug("[mainLoop] mainLoop is actively running and wants to keep running");
     await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
     if (mainLoop.state.kind !== "running") {
       await ctx.db.patch(mainLoop._id, { state: { kind: "running" } });
     }
   } else if (delayMs < Number.POSITIVE_INFINITY) {
-    console_.debug(`mainLoop wants to run after ${delayMs}ms`);
+    console_.debug(`[mainLoop] mainLoop wants to run after ${delayMs}ms`);
     const runAtTime = Date.now() + delayMs;
     const fn = await ctx.scheduler.runAt(runAtTime, internal.lib.mainLoop, {});
     await ctx.db.patch(mainLoop._id, {
       state: { kind: "scheduled", fn, runAtTime },
     });
   } else {
-    console_.debug("mainLoop wants to become idle");
+    console_.debug("[mainLoop] mainLoop wants to become idle");
     await ctx.db.patch(mainLoop._id, { state: { kind: "idle" } });
   }
 }
 
-async function kickMainLoop(ctx: MutationCtx): Promise<void> {
+async function kickMainLoop(ctx: MutationCtx, source: "saveResult" | "enqueue"): Promise<void> {
   const console_ = await console(ctx);
 
   // Look for mainLoop documents that we want to reschedule.
   // Only kick to run now if we're scheduled or idle.
   const mainLoop = await ctx.db.query("mainLoop").unique();
   if (!mainLoop) {
-    console_.debug("mainLoop doesn't exist, so we need to start it");
-    await startMainLoopHandler(ctx);
+    console_.debug(`[${source}] mainLoop doesn't exist, so we need to start it`);
+    await startMainLoopHandler(ctx, source);
     return;
   }
   if (mainLoop.state.kind === "running") {
-    console_.debug("mainLoop is actively running, so we don't need to do anything");
+    console_.debug(
+      `[${source}] mainLoop is actively running, so we don't need to do anything`
+    );
     return;
   }
   // mainLoop is scheduled to run later, so we should cancel it and reschedule.
@@ -472,7 +477,9 @@ async function kickMainLoop(ctx: MutationCtx): Promise<void> {
     await ctx.scheduler.cancel(mainLoop.state.fn);
   }
   await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
-  console_.debug("mainLoop was scheduled later, so reschedule it to run now");
+  console_.debug(
+    `[${source}] mainLoop was scheduled later, so reschedule it to run now`
+  );
   await ctx.db.patch(mainLoop._id, { state: { kind: "running" } });
 }
 
@@ -527,7 +534,10 @@ export const cleanup = mutation({
       .query("completedWork")
       .withIndex("by_creation_time", (q) => q.lt("_creationTime", old))
       .collect();
-    await Promise.all(docs.map((doc) => ctx.db.delete(doc._id)));
+    await Promise.all(docs.map(async (doc) => {
+      await ctx.db.delete(doc._id);
+      await ctx.db.delete(doc.workId);
+    }));
   },
 });
 
@@ -536,7 +546,8 @@ const CLEANUP_CRON_NAME = "cleanup";
 
 async function ensurePoolExists(
   ctx: MutationCtx,
-  opts: WithoutSystemFields<Doc<"pools">>
+  opts: WithoutSystemFields<Doc<"pools">>,
+  source: "enqueue" | "saveResult" | "mainLoop"
 ) {
   if (opts.maxParallelism > MAX_POSSIBLE_PARALLELISM) {
     throw new Error(`maxParallelism must be <= ${MAX_POSSIBLE_PARALLELISM}`);
@@ -558,20 +569,20 @@ async function ensurePoolExists(
   }
   if (!pool) {
     await ctx.db.insert("pools", opts);
-    await startMainLoopHandler(ctx);
+    await startMainLoopHandler(ctx, source);
   }
   await ensureCleanupCron(ctx, opts.ttl);
 }
 
 async function ensureCleanupCron(ctx: MutationCtx, ttl: number) {
+  let cleanupCron = await crons.get(ctx, { name: CLEANUP_CRON_NAME });
   if (ttl === Number.POSITIVE_INFINITY) {
-    (await console(ctx)).info(
-      "completedWorkMaxAgeMs is Infinity, so we won't schedule cleanup"
-    );
+    if (cleanupCron) {
+      await crons.delete(ctx, { id: cleanupCron.id });
+    }
     return;
   }
   const cronFrequencyMs = Math.min(ttl, 24 * 60 * 60 * 1000);
-  let cleanupCron = await crons.get(ctx, { name: CLEANUP_CRON_NAME });
   if (
     cleanupCron !== null &&
     !(

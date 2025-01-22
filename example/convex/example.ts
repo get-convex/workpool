@@ -9,11 +9,17 @@ import { api, components, internal } from "./_generated/api";
 import { WorkPool } from "@convex-dev/workpool";
 import { v } from "convex/values";
 
+const highPriPool = new WorkPool(components.workpool, {
+  maxParallelism: 20,
+  // For tests, disable completed work cleanup.
+  ttl: Number.POSITIVE_INFINITY,
+  logLevel: "INFO",
+});
 const pool = new WorkPool(components.workpool, {
   maxParallelism: 3,
   // For tests, disable completed work cleanup.
   ttl: Number.POSITIVE_INFINITY,
-  logLevel: "DEBUG",
+  logLevel: "INFO",
 });
 const lowpriPool = new WorkPool(components.lowpriWorkpool, {
   maxParallelism: 1,
@@ -35,6 +41,14 @@ export const addAction = action({
   args: { data: v.optional(v.number()) },
   handler: async (ctx, { data }): Promise<number> => {
     return await ctx.runMutation(api.example.addMutation, { data });
+  },
+});
+
+export const queryData = query({
+  args: {},
+  handler: async (ctx) => {
+    const dataDocs = await ctx.db.query("data").collect();
+    return dataDocs.map((doc) => doc.data);
   },
 });
 
@@ -76,6 +90,13 @@ export const enqueueLowPriMutations = mutation({
     for (let i = 0; i < 30; i++) {
       await lowpriPool.enqueueMutation(ctx, api.example.addLowPri, {});
     }
+  },
+});
+
+export const highPriMutation = mutation({
+  args: { data: v.number() },
+  handler: async (ctx, { data }) => {
+    await highPriPool.enqueueMutation(ctx, api.example.addMutation, { data });
   },
 });
 
