@@ -422,6 +422,20 @@ export const stopCleanup = mutation({
   },
 });
 
+export const stopMainLoop = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const mainLoop = await ctx.db.query("mainLoop").unique();
+    if (!mainLoop) {
+      return;
+    }
+    if (mainLoop.state.kind === "scheduled") {
+      await ctx.scheduler.cancel(mainLoop.state.fn);
+    }
+    await ctx.db.patch(mainLoop._id, { state: { kind: "idle" } });
+  },
+});
+
 async function loopFromMainLoop(ctx: MutationCtx, delayMs: number) {
   const console_ = await console(ctx);
   const mainLoop = await ctx.db.query("mainLoop").unique();
