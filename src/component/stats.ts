@@ -19,9 +19,7 @@ workpool
 
  */
 
-export function recordStarted(
-  work: Doc<"work">,
-) {
+export function recordStarted(work: Doc<"work">) {
   console.log(
     JSON.stringify({
       workId: work._id,
@@ -36,7 +34,7 @@ export function recordStarted(
 
 export function recordCompleted(
   work: Doc<"work">,
-  status: "success" | "error" | "canceled" | "timeout",
+  status: "success" | "error" | "canceled" | "timeout"
 ) {
   console.log(
     JSON.stringify({

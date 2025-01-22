@@ -20,6 +20,8 @@ import { completionStatus } from "./schema";
 
 const crons = new Crons(components.crons);
 
+const ACTION_TIMEOUT_MS = 15 * 60 * 1000;
+
 export const enqueue = mutation({
   args: {
     fnHandle: v.string(),
@@ -28,19 +30,21 @@ export const enqueue = mutation({
     fnType: v.union(v.literal("action"), v.literal("mutation")),
     options: v.object({
       maxParallelism: v.number(),
-      actionTimeoutMs: v.optional(v.number()),
       logLevel: v.optional(logLevel),
       ttl: v.optional(v.number()),
     }),
   },
   returns: v.id("work"),
   handler: async (ctx, { fnHandle, fnName, options, fnArgs, fnType }) => {
-    await ensurePoolExists(ctx, {
-      maxParallelism: options.maxParallelism,
-      actionTimeoutMs: options.actionTimeoutMs ?? 15 * 60 * 1000,
-      ttl: options.ttl ?? 24 * 60 * 60 * 1000,
-      logLevel: options.logLevel ?? "WARN",
-    }, "enqueue");
+    await ensurePoolExists(
+      ctx,
+      {
+        maxParallelism: options.maxParallelism,
+        ttl: options.ttl ?? 24 * 60 * 60 * 1000,
+        logLevel: options.logLevel ?? "WARN",
+      },
+      "enqueue"
+    );
     const workId = await ctx.db.insert("work", {
       fnHandle,
       fnName,
@@ -246,7 +250,6 @@ async function beginWork(
     throw new Error("work not found");
   }
   recordStarted(work);
-  const { actionTimeoutMs } = options;
   if (work.fnType === "action") {
     return {
       scheduledId: await ctx.scheduler.runAfter(
@@ -258,7 +261,7 @@ async function beginWork(
           fnArgs: work.fnArgs,
         }
       ),
-      timeoutMs: actionTimeoutMs,
+      timeoutMs: ACTION_TIMEOUT_MS,
     };
   } else if (work.fnType === "mutation") {
     return {
@@ -402,7 +405,9 @@ async function startMainLoopHandler(ctx: MutationCtx, source: string) {
     );
     return;
   }
-  console_.debug(`[${source}] mainLoop is scheduled to run later, so run it now`);
+  console_.debug(
+    `[${source}] mainLoop is scheduled to run later, so run it now`
+  );
   if (mainLoop.state.kind === "scheduled") {
     await ctx.scheduler.cancel(mainLoop.state.fn);
   }
@@ -437,7 +442,9 @@ async function loopFromMainLoop(ctx: MutationCtx, delayMs: number) {
     throw new Error("mainLoop is idle but `loopFromMainLoop` was called");
   }
   if (delayMs <= 0) {
-    console_.debug("[mainLoop] mainLoop is actively running and wants to keep running");
+    console_.debug(
+      "[mainLoop] mainLoop is actively running and wants to keep running"
+    );
     await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
     if (mainLoop.state.kind !== "running") {
       await ctx.db.patch(mainLoop._id, { state: { kind: "running" } });
@@ -455,14 +462,19 @@ async function loopFromMainLoop(ctx: MutationCtx, delayMs: number) {
   }
 }
 
-async function kickMainLoop(ctx: MutationCtx, source: "saveResult" | "enqueue"): Promise<void> {
+async function kickMainLoop(
+  ctx: MutationCtx,
+  source: "saveResult" | "enqueue"
+): Promise<void> {
   const console_ = await console(ctx);
 
   // Look for mainLoop documents that we want to reschedule.
   // Only kick to run now if we're scheduled or idle.
   const mainLoop = await ctx.db.query("mainLoop").unique();
   if (!mainLoop) {
-    console_.debug(`[${source}] mainLoop doesn't exist, so we need to start it`);
+    console_.debug(
+      `[${source}] mainLoop doesn't exist, so we need to start it`
+    );
     await startMainLoopHandler(ctx, source);
     return;
   }
@@ -534,10 +546,12 @@ export const cleanup = mutation({
       .query("completedWork")
       .withIndex("by_creation_time", (q) => q.lt("_creationTime", old))
       .collect();
-    await Promise.all(docs.map(async (doc) => {
-      await ctx.db.delete(doc._id);
-      await ctx.db.delete(doc.workId);
-    }));
+    await Promise.all(
+      docs.map(async (doc) => {
+        await ctx.db.delete(doc._id);
+        await ctx.db.delete(doc.workId);
+      })
+    );
   },
 });
 

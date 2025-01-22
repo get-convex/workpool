@@ -58,7 +58,6 @@ export declare const components: {
           fnName: string;
           fnType: "action" | "mutation";
           options: {
-            actionTimeoutMs?: number;
             fastHeartbeatMs?: number;
             logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
             maxParallelism: number;
@@ -103,7 +102,6 @@ export declare const components: {
           fnName: string;
           fnType: "action" | "mutation";
           options: {
-            actionTimeoutMs?: number;
             fastHeartbeatMs?: number;
             logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
             maxParallelism: number;

@@ -26,17 +26,15 @@ export class WorkPool {
        * Min 1, Max 300.
        */
       maxParallelism: number;
-      /** How long an action can run before the pool considers it to be timed out.
-       * The action itself might time out earlier.
-       * Default 15 minutes.
-       */
-      actionTimeoutMs?: number;
       /** How much to log.
        * Default WARN.
+       * With INFO, you can see events for started and completed work, which can
+       * be parsed.
+       * With DEBUG, you can see timers and internal events for work being
+       * scheduled.
        */
       logLevel?: LogLevel;
-      /** How long to keep completed work in the database, for access by `status`,
-       * `tryResult`, and `pollResult`.
+      /** How long to keep completed work in the database, for access by `status`.
        * Default 1 day.
        */
       ttl?: number;

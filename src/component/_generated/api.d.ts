@@ -43,7 +43,6 @@ export type Mounts = {
         fnName: string;
         fnType: "action" | "mutation";
         options: {
-          actionTimeoutMs?: number;
           logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
           maxParallelism: number;
           ttl?: number;
@@ -64,7 +63,6 @@ export type Mounts = {
         }
     >;
     stopCleanup: FunctionReference<"mutation", "public", {}, any>;
-    stopMainLoop: FunctionReference<"mutation", "public", {}, any>;
   };
 };
 // For now fullApiWithMounts is only fullApi which provides
