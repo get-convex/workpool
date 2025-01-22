@@ -16,12 +16,12 @@ Data flow:
 - The mutation `mainLoop` runs periodically and serially.
 - Several tables act as queues, with client-driven mutations enqueueing at high
   timestamps and `mainLoop` popping at low timestamps:
-  pendingWork, pendingCompletion, and pendingCancelation.
-  - The `enqueue` mutation writes to pendingWork.
+  pendingStart, pendingCompletion, and pendingCancelation.
+  - The `enqueue` mutation writes to pendingStart.
   - The `cancel` mutation writes to pendingCancelation.
   - The `saveResult` mutation, run as part of scheduled work, writes to pendingCompletion.
 - mainLoop processes the queues:
-  - pendingWork => inProgressWork.
+  - pendingStart => inProgressWork.
   - pendingCompletion and pendingCancelation => completedWork.
   - inProgressWork that finishes uncleanly (timeout or system failure) => completedWork.
 - `mainLoop` schedules itself to run.
@@ -51,40 +51,44 @@ export default defineSchema({
     logLevel,
   }),
 
-  // TODO(emma) change this to use a boolean or enum of statuses, instead of using runAtTime.
-  // Status like "running", "waitingForJobCompletion", "idle".
-  // Currently there's a problem if enqueue is called from a mutation that takes longer than
-  // debounceMs to complete, and a mainLoop finishes and restarts in that time window. Then the enqueue will OCC with the mainLoop.
-  // But if we have fixed statuses, we don't need to write it so frequently so it won't OCC. Chat with @ian about details.
   mainLoop: defineTable({
-    // null means it's actively running.
-    runAtTime: v.union(v.number(), v.null()),
-    // Only set if it's not actively running -- so it's scheduled to run in the future, at runAtTime.
-    fn: v.union(v.id("_scheduled_functions"), v.null()),
-  }).index("runAtTime", ["runAtTime"]),
+    state: v.union(
+      v.object({ kind: v.literal("running") }),
+      v.object({
+        kind: v.literal("scheduled"),
+        runAtTime: v.number(),
+        fn: v.id("_scheduled_functions"),
+      }),
+      v.object({ kind: v.literal("idle") })
+    ),
+  }),
 
-  pendingWork: defineTable({
+  work: defineTable({
     fnType: v.union(v.literal("action"), v.literal("mutation")),
     fnHandle: v.string(),
     fnName: v.string(),
     fnArgs: v.any(),
   }),
+
+  pendingStart: defineTable({
+    workId: v.id("work"),
+  }).index("workId", ["workId"]),
   pendingCompletion: defineTable({
     completionStatus,
-    workId: v.id("pendingWork"),
+    workId: v.id("work"),
   }).index("workId", ["workId"]),
   pendingCancelation: defineTable({
-    workId: v.id("pendingWork"),
+    workId: v.id("work"),
   }),
 
   inProgressWork: defineTable({
     running: v.id("_scheduled_functions"),
     timeoutMs: v.union(v.number(), v.null()),
-    workId: v.id("pendingWork"),
+    workId: v.id("work"),
   }).index("workId", ["workId"]),
 
   completedWork: defineTable({
     completionStatus,
-    workId: v.id("pendingWork"),
+    workId: v.id("work"),
   }).index("workId", ["workId"]),
 });

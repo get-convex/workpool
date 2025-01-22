@@ -33,7 +33,7 @@ export const enqueue = mutation({
       ttl: v.optional(v.number()),
     }),
   },
-  returns: v.id("pendingWork"),
+  returns: v.id("work"),
   handler: async (ctx, { fnHandle, fnName, options, fnArgs, fnType }) => {
     await ensurePoolExists(ctx, {
       maxParallelism: options.maxParallelism,
@@ -41,20 +41,21 @@ export const enqueue = mutation({
       ttl: options.ttl ?? 24 * 60 * 60 * 1000,
       logLevel: options.logLevel ?? "WARN",
     });
-    const workId = await ctx.db.insert("pendingWork", {
+    const workId = await ctx.db.insert("work", {
       fnHandle,
       fnName,
       fnArgs,
       fnType,
     });
-    await kickMainLoop(ctx, 0, false);
+    await ctx.db.insert("pendingStart", { workId });
+    await kickMainLoop(ctx);
     return workId;
   },
 });
 
 export const cancel = mutation({
   args: {
-    id: v.id("pendingWork"),
+    id: v.id("work"),
   },
   handler: async (ctx, { id }) => {
     await ctx.db.insert("pendingCancelation", { workId: id });
@@ -107,7 +108,7 @@ export const mainLoop = internalMutation({
       BATCH_SIZE
     );
     let didSomething = false;
-    const pending = await ctx.db.query("pendingWork").take(toSchedule);
+    const pending = await ctx.db.query("pendingStart").take(toSchedule);
     console_.debug(`scheduling ${pending.length} pending work`);
     await Promise.all(
       pending.map(async (work) => {
@@ -115,7 +116,7 @@ export const mainLoop = internalMutation({
         await ctx.db.insert("inProgressWork", {
           running: scheduledId,
           timeoutMs,
-          workId: work._id,
+          workId: work.workId,
         });
         await ctx.db.delete(work._id);
         didSomething = true;
@@ -204,11 +205,11 @@ export const mainLoop = internalMutation({
     console_.time("kickMainLoop");
     if (didSomething) {
       // There might be more to do.
-      await kickMainLoop(ctx, 0, true);
+      await loopFromMainLoop(ctx, 0);
     } else {
       // Decide when to wake up.
       const allInProgressWork = await ctx.db.query("inProgressWork").collect();
-      const nextPending = await ctx.db.query("pendingWork").first();
+      const nextPending = await ctx.db.query("pendingStart").first();
       const nextPendingTime = nextPending
         ? nextPending._creationTime
         : Number.POSITIVE_INFINITY;
@@ -220,7 +221,7 @@ export const mainLoop = internalMutation({
           )
         : Number.POSITIVE_INFINITY;
       const nextTime = Math.min(nextPendingTime, nextInProgress);
-      await kickMainLoop(ctx, nextTime - Date.now(), true);
+      await loopFromMainLoop(ctx, nextTime - Date.now());
     }
     console_.timeEnd("kickMainLoop");
   },
@@ -228,7 +229,7 @@ export const mainLoop = internalMutation({
 
 async function beginWork(
   ctx: MutationCtx,
-  work: Doc<"pendingWork">
+  pendingStart: Doc<"pendingStart">
 ): Promise<{
   scheduledId: Id<"_scheduled_functions">;
   timeoutMs: number | null;
@@ -236,6 +237,10 @@ async function beginWork(
   const options = await getOptions(ctx.db);
   if (!options) {
     throw new Error("cannot begin work with no pool");
+  }
+  const work = await ctx.db.get(pendingStart.workId);
+  if (!work) {
+    throw new Error("work not found");
   }
   recordStarted(work._id, work.fnName, work._creationTime);
   const { actionTimeoutMs } = options;
@@ -305,7 +310,7 @@ async function checkInProgressWork(
 
 export const runActionWrapper = internalAction({
   args: {
-    workId: v.id("pendingWork"),
+    workId: v.id("work"),
     fnHandle: v.string(),
     fnArgs: v.any(),
   },
@@ -330,7 +335,7 @@ export const runActionWrapper = internalAction({
 
 export const saveResult = internalMutation({
   args: {
-    workId: v.id("pendingWork"),
+    workId: v.id("work"),
     result: v.optional(v.any()),
     error: v.optional(v.string()),
   },
@@ -343,7 +348,7 @@ async function saveResultHandler(
     workId,
     completionStatus,
   }: {
-    workId: Id<"pendingWork">;
+    workId: Id<"work">;
     completionStatus: "success" | "error" | "canceled" | "timeout";
   }
 ): Promise<void> {
@@ -355,12 +360,12 @@ async function saveResultHandler(
     completionStatus,
     workId,
   });
-  await kickMainLoop(ctx, 0, false);
+  await kickMainLoop(ctx);
 }
 
 export const runMutationWrapper = internalMutation({
   args: {
-    workId: v.id("pendingWork"),
+    workId: v.id("work"),
     fnHandle: v.string(),
     fnArgs: v.any(),
   },
@@ -384,39 +389,27 @@ async function startMainLoopHandler(ctx: MutationCtx) {
     console_.debug("starting mainLoop");
     await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
     await ctx.db.insert("mainLoop", {
-      runAtTime: null,
-      fn: null,
+      state: { kind: "running" },
     });
     return;
   }
-  if (mainLoop.fn === null) {
+  if (mainLoop.state.kind === "running") {
     console_.info(
       "mainLoop should be actively running; if it's not, run `mainLoop` directly"
     );
     return;
   }
   console_.debug("mainLoop is scheduled to run later, so run it now");
-  await ctx.scheduler.cancel(mainLoop.fn);
-  await ctx.db.patch(mainLoop._id, { fn: null, runAtTime: null });
+  if (mainLoop.state.kind === "scheduled") {
+    await ctx.scheduler.cancel(mainLoop.state.fn);
+  }
+  await ctx.db.patch(mainLoop._id, { state: { kind: "running" } });
   await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
 }
 
 export const startMainLoop = mutation({
   args: {},
   handler: startMainLoopHandler,
-});
-
-export const stopMainLoop = mutation({
-  args: {},
-  handler: async (ctx) => {
-    const mainLoop = await ctx.db.query("mainLoop").unique();
-    if (mainLoop) {
-      if (mainLoop.fn) {
-        await ctx.scheduler.cancel(mainLoop.fn);
-      }
-      await ctx.db.delete(mainLoop._id);
-    }
-  },
 });
 
 export const stopCleanup = mutation({
@@ -429,63 +422,60 @@ export const stopCleanup = mutation({
   },
 });
 
-async function kickMainLoop(
-  ctx: MutationCtx,
-  delayMs: number,
-  isCurrentlyExecuting: boolean
-): Promise<void> {
+async function loopFromMainLoop(ctx: MutationCtx, delayMs: number) {
   const console_ = await console(ctx);
-
-  if (delayMs <= 0 && isCurrentlyExecuting) {
-    console_.debug("mainLoop is actively running and wants to keep running");
-    await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
+  const mainLoop = await ctx.db.query("mainLoop").unique();
+  if (mainLoop === null) {
+    console_.debug("mainLoop not found, so we need to start it");
+    await startMainLoopHandler(ctx);
     return;
   }
+  if (mainLoop.state.kind !== "running") {
+    throw new Error("mainLoop is not running but `loopFromMainLoop` was called");
+  }
+  if (delayMs <= 0) {
+    console_.debug("mainLoop is actively running and wants to keep running");
+    await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
+  } else if (delayMs < Number.POSITIVE_INFINITY) {
+    console_.debug(`mainLoop wants to run after ${delayMs}ms`);
+    const runAtTime = Date.now() + delayMs;
+    const fn = await ctx.scheduler.runAt(runAtTime, internal.lib.mainLoop, {});
+    await ctx.db.patch(mainLoop._id, {
+      state: { kind: "scheduled", fn, runAtTime },
+    });
+  } else {
+    console_.debug("mainLoop wants to become idle");
+    await ctx.db.patch(mainLoop._id, { state: { kind: "idle" } });
+  }
+}
 
-  const runAtTime = Date.now() + delayMs;
+async function kickMainLoop(ctx: MutationCtx): Promise<void> {
+  const console_ = await console(ctx);
+
   // Look for mainLoop documents that we want to reschedule.
-  // If we're currently running mainLoop, we definitely want to reschedule.
-  // Otherwise, only reschedule if the new runAtTime is earlier than the existing one.
-  const mainLoop = await ctx.db
-    .query("mainLoop")
-    .withIndex("runAtTime", (q) => {
-      if (isCurrentlyExecuting) return q;
-      else return q.gt("runAtTime", runAtTime);
-    })
-    .unique();
+  // Only kick to run now if we're scheduled or idle.
+  const mainLoop = await ctx.db.query("mainLoop").unique();
   if (!mainLoop) {
-    // Two possibilities:
-    // 1. There is no main loop, in which case `startMainLoop` needs to be called.
-    // 2. The main loop is scheduled to run soon, so we don't need to do anything.
-    // Unfortunately, we can't tell the difference between those cases without taking
-    // a read dependency on soon-to-be-run mainLoop documents, so we assume the latter.
-    console_.debug(
-      "mainLoop already scheduled to run soon (or doesn't exist, in which case you should call `startMainLoop`)"
-    );
+    console_.debug("mainLoop doesn't exist, so we need to start it");
+    await startMainLoopHandler(ctx);
+    return;
+  }
+  if (mainLoop.state.kind === "running") {
+    console_.debug("mainLoop is actively running, so we don't need to do anything");
     return;
   }
   // mainLoop is scheduled to run later, so we should cancel it and reschedule.
-  if (!isCurrentlyExecuting && mainLoop.fn) {
-    await ctx.scheduler.cancel(mainLoop.fn);
+  if (mainLoop.state.kind === "scheduled") {
+    await ctx.scheduler.cancel(mainLoop.state.fn);
   }
-  let fn: Id<"_scheduled_functions"> | null = null;
-  if (delayMs < Number.POSITIVE_INFINITY) {
-    fn = await ctx.scheduler.runAt(runAtTime, internal.lib.mainLoop, {});
-  }
-  if (delayMs <= 0) {
-    console_.debug("mainLoop was scheduled later, so reschedule it to run now");
-    await ctx.db.patch(mainLoop._id, { fn: null, runAtTime: null });
-  } else {
-    console_.debug(
-      "mainLoop was scheduled later, so reschedule it to run sooner"
-    );
-    await ctx.db.patch(mainLoop._id, { fn, runAtTime });
-  }
+  await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
+  console_.debug("mainLoop was scheduled later, so reschedule it to run now");
+  await ctx.db.patch(mainLoop._id, { state: { kind: "running" } });
 }
 
 export const status = query({
   args: {
-    id: v.id("pendingWork"),
+    id: v.id("work"),
   },
   returns: v.union(
     v.object({
@@ -510,8 +500,11 @@ export const status = query({
         completionStatus: completedWork.completionStatus,
       } as const;
     }
-    const pendingWork = await ctx.db.get(id);
-    if (pendingWork) {
+    const pendingStart = await ctx.db
+      .query("pendingStart")
+      .withIndex("workId", (q) => q.eq("workId", id))
+      .unique();
+    if (pendingStart) {
       return { kind: "pending" } as const;
     }
     // If it's not pending or completed, it must be in progress.

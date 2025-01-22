@@ -20,7 +20,7 @@ workpool
  */
 
 export function recordStarted(
-  workId: Id<"pendingWork">,
+  workId: Id<"work">,
   fnName: string,
   enqueuedAt: number
 ) {
@@ -37,7 +37,7 @@ export function recordStarted(
 }
 
 export function recordCompleted(
-  workId: Id<"pendingWork">,
+  workId: Id<"work">,
   status: "success" | "error" | "canceled" | "timeout"
 ) {
   console.log(JSON.stringify({ workId, completedAt: Date.now(), status }));
