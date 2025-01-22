@@ -464,7 +464,9 @@ async function kickMainLoop(ctx: MutationCtx): Promise<void> {
     return;
   }
   if (mainLoop.state.kind === "running") {
-    console_.debug("mainLoop is actively running, so we don't need to do anything");
+    console_.debug(
+      "mainLoop is actively running, so we don't need to do anything"
+    );
     return;
   }
   // mainLoop is scheduled to run later, so we should cancel it and reschedule.
