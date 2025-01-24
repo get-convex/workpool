@@ -155,4 +155,29 @@ alternatives to Workpool:
 
 See [best practices](https://docs.convex.dev/production/best-practices) for more.
 
+## Reading function status
+
+The workpool stores the status of each function in the database, so you can
+read it even after the function has finished.
+By default, it will keep the status for 1 day but you can change this with
+the `statusTtl` option to `Workpool`.
+
+To keep the status forever, set `statusTtl: Number.POSITIVE_INFINITY`.
+
+You can read the status of a function by calling `pool.status(id)`.
+
+The status will be one of:
+
+- `{ kind: "pending" }`: The function has not started yet.
+- `{ kind: "inProgress" }`: The function is currently running.
+- `{ kind: "completed"; completionStatus: CompletionStatus }`: The function has
+  finished.
+
+The `CompletionStatus` type is one of:
+
+- `"success"`: The function completed successfully.
+- `"error"`: The function threw an error.
+- `"canceled"`: The function was canceled.
+- `"timeout"`: The function timed out.
+
 <!-- END: Include on https://convex.dev/components -->
