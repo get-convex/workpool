@@ -67,14 +67,14 @@ export const cancel = mutation({
 });
 
 async function getOptions(db: DatabaseReader) {
-  return db.query("pools").unique();
+  return db.query("pool").unique();
 }
 
 async function console(ctx: QueryCtx | ActionCtx) {
   if ("runAction" in ctx) {
     return globalThis.console;
   }
-  const pool = await ctx.db.query("pools").unique();
+  const pool = await ctx.db.query("pool").unique();
   if (!pool) {
     return globalThis.console;
   }
@@ -562,7 +562,7 @@ const CLEANUP_CRON_NAME = "cleanup";
 
 async function ensurePoolExists(
   ctx: MutationCtx,
-  opts: WithoutSystemFields<Doc<"pools">>,
+  opts: WithoutSystemFields<Doc<"pool">>,
   source: "enqueue" | "saveResult" | "mainLoop"
 ) {
   if (opts.maxParallelism > MAX_POSSIBLE_PARALLELISM) {
@@ -571,7 +571,7 @@ async function ensurePoolExists(
   if (opts.maxParallelism < 1) {
     throw new Error("maxParallelism must be >= 1");
   }
-  const pool = await ctx.db.query("pools").unique();
+  const pool = await ctx.db.query("pool").unique();
   if (pool) {
     let update = false;
     for (const key in opts) {
@@ -584,7 +584,7 @@ async function ensurePoolExists(
     }
   }
   if (!pool) {
-    await ctx.db.insert("pools", opts);
+    await ctx.db.insert("pool", opts);
     await startMainLoopHandler(ctx, source);
   }
   await ensureCleanupCron(ctx, opts.statusTtl);
