@@ -12,7 +12,8 @@ import {
 import { GenericId } from "convex/values";
 import { api } from "../component/_generated/api";
 import { LogLevel } from "../component/logging";
-import { CompletionStatus } from "../component/schema";
+import { completionStatus, type CompletionStatus } from "../component/schema";
+export { completionStatus, type CompletionStatus };
 
 export type WorkId = string;
 
