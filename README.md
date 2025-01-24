@@ -121,7 +121,8 @@ Then you have the following interface on `pool`:
 ```ts
 // Schedule functions to run in the background.
 const id = await pool.enqueueMutation(internal.foo.bar, args);
-const id = await pool.enqueueAction(internal.foo.bar, args);
+// Or for an action:
+const id = await pool.enqueueAction(internal.foo.baz, args);
 
 // Is it done yet? Did it succeed or fail?
 const status = await pool.status(id);
