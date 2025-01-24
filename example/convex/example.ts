@@ -123,13 +123,29 @@ export const enqueueAnAction = action({
   },
 });
 
+export const echo = query({
+  args: { num: v.number() },
+  handler: async (ctx, { num }) => {
+    return num;
+  },
+});
+
 async function sampleWork() {
   const index = Math.floor(Math.random() * 3000) + 1;
-  const url = `https://xkcd.com/${index}`;
-  const response = await fetch(url);
-  const text = await response.text();
-  const titleMatch = text.match(/<title>(.*)<\/title>/);
-  console.log(`xkcd ${index} title: ${titleMatch?.[1]}`);
+  const url = `${process.env.CONVEX_CLOUD_URL}/api/query`;
+  const start = Date.now();
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      path: "example:echo",
+      args: { num: index },
+    }),
+  });
+  const data = await response.json();
+  console.log(data.value === index, Date.now() - start);
 }
 
 // Example background work: scraping from a website.
