@@ -50,7 +50,6 @@ export type Mounts = {
       },
       string
     >;
-    startMainLoop: FunctionReference<"mutation", "public", {}, any>;
     status: FunctionReference<
       "query",
       "public",

@@ -417,11 +417,6 @@ async function startMainLoopHandler(ctx: MutationCtx, source: string) {
   await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
 }
 
-export const startMainLoop = mutation({
-  args: {},
-  handler: (ctx) => startMainLoopHandler(ctx, "startMainLoop"),
-});
-
 export const stopCleanup = mutation({
   args: {},
   handler: async (ctx) => {
