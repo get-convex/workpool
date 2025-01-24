@@ -149,7 +149,9 @@ export const mainLoop = internalMutation({
           workId: pendingCompletion.workId,
         });
         const work = (await ctx.db.get(pendingCompletion.workId))!;
-        console_.info(recordCompleted(work, pendingCompletion.completionStatus));
+        console_.info(
+          recordCompleted(work, pendingCompletion.completionStatus)
+        );
         didSomething = true;
       })
     );
