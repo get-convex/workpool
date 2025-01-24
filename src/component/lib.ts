@@ -1,7 +1,6 @@
 import { v } from "convex/values";
 import {
   ActionCtx,
-  DatabaseReader,
   internalAction,
   internalMutation,
   mutation,
