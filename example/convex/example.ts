@@ -122,7 +122,7 @@ export const enqueueABunchOfActions = action({
   },
 });
 
-export const enqueueAnAction = action({
+export const enqueueAnAction = mutation({
   args: {},
   handler: async (ctx, _args): Promise<void> => {
     await pool.enqueueAction(ctx, api.example.addAction, {});
