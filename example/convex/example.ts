@@ -184,6 +184,10 @@ export const foregroundWork = internalAction({
 export const startForegroundWork = internalMutation({
   args: {},
   handler: async (ctx, _args) => {
-    await pool.enqueueAction(ctx, internal.example.foregroundWork, {});
+    await Promise.all(
+      Array.from({ length: 20 }, () =>
+        highPriPool.enqueueAction(ctx, internal.example.foregroundWork, {})
+      )
+    );
   },
 });
