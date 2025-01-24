@@ -540,6 +540,8 @@ export const status = query({
   },
 });
 
+export const MAX_CLEANUP_DOCS = 1000;
+
 export const cleanup = mutation({
   args: {
     maxAgeMs: v.number(),
@@ -548,14 +550,21 @@ export const cleanup = mutation({
     const old = Date.now() - maxAgeMs;
     const docs = await ctx.db
       .query("completedWork")
-      .withIndex("by_creation_time", (q) => q.lt("_creationTime", old))
-      .collect();
+      .withIndex("by_creation_time", (q) => q.lte("_creationTime", old))
+      .order("desc")
+      .take(MAX_CLEANUP_DOCS);
     await Promise.all(
       docs.map(async (doc) => {
         await ctx.db.delete(doc._id);
         await ctx.db.delete(doc.workId);
       })
     );
+    if (docs.length === MAX_CLEANUP_DOCS) {
+      // Schedule the next cleanup to run starting from the oldest document.
+      await ctx.scheduler.runAfter(0, api.lib.cleanup, {
+        maxAgeMs: docs[docs.length - 1]._creationTime,
+      });
+    }
   },
 });
 
