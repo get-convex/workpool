@@ -95,16 +95,17 @@ export const mainLoop = internalMutation({
     console_.time("[mainLoop] inProgress count");
     // This is the only function reading and writing inProgressWork,
     // and it's bounded by MAX_POSSIBLE_PARALLELISM, so we can
-    // read it all.
-    const inProgressBefore =
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (ctx.db.query("inProgressWork") as any).count();
-    console_.debug(`[mainLoop] ${inProgressBefore} in progress`);
+    // read it all into memory.
+    const inProgressBefore = await ctx.db.query("inProgressWork").collect();
+    console_.debug(`[mainLoop] ${inProgressBefore.length} in progress`);
     console_.timeEnd("[mainLoop] inProgress count");
 
     // Move from pendingWork to inProgressWork.
     console_.time("[mainLoop] pendingWork");
-    const toSchedule = Math.min(maxParallelism - inProgressBefore, BATCH_SIZE);
+    const toSchedule = Math.min(
+      maxParallelism - inProgressBefore.length,
+      BATCH_SIZE
+    );
     let didSomething = false;
     const pending = await ctx.db.query("pendingStart").take(toSchedule);
     console_.debug(`[mainLoop] scheduling ${pending.length} pending work`);
