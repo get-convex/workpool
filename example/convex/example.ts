@@ -73,12 +73,14 @@ export const status = query({
   },
 });
 
-export const enqueueABunchOfMutations = mutation({
+export const enqueueABunchOfMutations = action({
   args: {},
   handler: async (ctx, _args) => {
-    for (let i = 0; i < 30; i++) {
-      await pool.enqueueMutation(ctx, api.example.addMutation, {});
-    }
+    await Promise.all(
+      Array.from({ length: 30 }, () =>
+        pool.enqueueMutation(ctx, api.example.addMutation, {})
+      )
+    );
   },
 });
 
@@ -91,12 +93,14 @@ export const addLowPri = mutation({
   },
 });
 
-export const enqueueLowPriMutations = mutation({
+export const enqueueLowPriMutations = action({
   args: {},
   handler: async (ctx, _args) => {
-    for (let i = 0; i < 30; i++) {
-      await lowpriPool.enqueueMutation(ctx, api.example.addLowPri, {});
-    }
+    await Promise.all(
+      Array.from({ length: 30 }, () =>
+        lowpriPool.enqueueMutation(ctx, api.example.addLowPri, {})
+      )
+    );
   },
 });
 
@@ -107,12 +111,14 @@ export const highPriMutation = mutation({
   },
 });
 
-export const enqueueABunchOfActions = mutation({
+export const enqueueABunchOfActions = action({
   args: {},
   handler: async (ctx, _args) => {
-    for (let i = 0; i < 30; i++) {
-      await pool.enqueueAction(ctx, api.example.addAction, {});
-    }
+    await Promise.all(
+      Array.from({ length: 30 }, () =>
+        pool.enqueueAction(ctx, api.example.addAction, {})
+      )
+    );
   },
 });
 
@@ -156,12 +162,14 @@ export const backgroundWork = internalAction({
   },
 });
 
-export const startBackgroundWork = internalMutation({
+export const startBackgroundWork = internalAction({
   args: {},
   handler: async (ctx, _args) => {
-    for (let i = 0; i < 20; i++) {
-      await lowpriPool.enqueueAction(ctx, internal.example.backgroundWork, {});
-    }
+    await Promise.all(
+      Array.from({ length: 20 }, () =>
+        lowpriPool.enqueueAction(ctx, internal.example.backgroundWork, {})
+      )
+    );
   },
 });
 
