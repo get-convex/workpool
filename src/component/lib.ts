@@ -110,14 +110,14 @@ export const mainLoop = internalMutation({
     const pending = await ctx.db.query("pendingStart").take(toSchedule);
     console_.debug(`[mainLoop] scheduling ${pending.length} pending work`);
     await Promise.all(
-      pending.map(async (work) => {
-        const { scheduledId, timeoutMs } = await beginWork(ctx, work);
+      pending.map(async (pendingWork) => {
+        const { scheduledId, timeoutMs } = await beginWork(ctx, pendingWork);
         await ctx.db.insert("inProgressWork", {
           running: scheduledId,
           timeoutMs,
-          workId: work.workId,
+          workId: pendingWork.workId,
         });
-        await ctx.db.delete(work._id);
+        await ctx.db.delete(pendingWork._id);
         didSomething = true;
       })
     );
