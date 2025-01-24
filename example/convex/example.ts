@@ -12,19 +12,19 @@ import { v } from "convex/values";
 const highPriPool = new Workpool(components.highPriWorkpool, {
   maxParallelism: 20,
   // For tests, disable completed work cleanup.
-  ttl: Number.POSITIVE_INFINITY,
+  statusTtl: Number.POSITIVE_INFINITY,
   logLevel: "INFO",
 });
 const pool = new Workpool(components.workpool, {
   maxParallelism: 3,
   // For tests, disable completed work cleanup.
-  ttl: Number.POSITIVE_INFINITY,
+  statusTtl: Number.POSITIVE_INFINITY,
   logLevel: "INFO",
 });
 const lowpriPool = new Workpool(components.lowpriWorkpool, {
   maxParallelism: 1,
   // For tests, disable completed work cleanup.
-  ttl: Number.POSITIVE_INFINITY,
+  statusTtl: Number.POSITIVE_INFINITY,
   logLevel: "INFO",
 });
 

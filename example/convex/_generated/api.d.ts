@@ -60,7 +60,7 @@ export declare const components: {
           options: {
             logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
             maxParallelism: number;
-            ttl?: number;
+            statusTtl?: number;
           };
         },
         string
@@ -100,7 +100,7 @@ export declare const components: {
           options: {
             logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
             maxParallelism: number;
-            ttl?: number;
+            statusTtl?: number;
           };
         },
         string
@@ -140,7 +140,7 @@ export declare const components: {
           options: {
             logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
             maxParallelism: number;
-            ttl?: number;
+            statusTtl?: number;
           };
         },
         string

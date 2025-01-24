@@ -46,7 +46,7 @@ export default defineSchema({
   // Statically configured, singleton.
   pools: defineTable({
     maxParallelism: v.number(),
-    ttl: v.number(),
+    statusTtl: v.number(),
     logLevel,
   }),
 

@@ -35,7 +35,7 @@ export class Workpool {
       /** How long to keep completed work in the database, for access by `status`.
        * Default 1 day.
        */
-      ttl?: number;
+      statusTtl?: number;
     }
   ) {}
   async enqueueAction<Args extends DefaultFunctionArgs, ReturnType>(

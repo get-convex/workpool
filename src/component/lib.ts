@@ -31,7 +31,7 @@ export const enqueue = mutation({
     options: v.object({
       maxParallelism: v.number(),
       logLevel: v.optional(logLevel),
-      ttl: v.optional(v.number()),
+      statusTtl: v.optional(v.number()),
     }),
   },
   returns: v.id("work"),
@@ -40,7 +40,7 @@ export const enqueue = mutation({
       ctx,
       {
         maxParallelism: options.maxParallelism,
-        ttl: options.ttl ?? 24 * 60 * 60 * 1000,
+        statusTtl: options.statusTtl ?? 24 * 60 * 60 * 1000,
         logLevel: options.logLevel ?? "WARN",
       },
       "enqueue"
@@ -586,7 +586,7 @@ async function ensurePoolExists(
     await ctx.db.insert("pools", opts);
     await startMainLoopHandler(ctx, source);
   }
-  await ensureCleanupCron(ctx, opts.ttl);
+  await ensureCleanupCron(ctx, opts.statusTtl);
 }
 
 async function ensureCleanupCron(ctx: MutationCtx, ttl: number) {
