@@ -65,6 +65,7 @@ export declare const components: {
         },
         string
       >;
+      queueLength: FunctionReference<"query", "internal", {}, number>;
       status: FunctionReference<
         "query",
         "internal",
@@ -104,6 +105,7 @@ export declare const components: {
         },
         string
       >;
+      queueLength: FunctionReference<"query", "internal", {}, number>;
       status: FunctionReference<
         "query",
         "internal",
@@ -143,6 +145,7 @@ export declare const components: {
         },
         string
       >;
+      queueLength: FunctionReference<"query", "internal", {}, number>;
       status: FunctionReference<
         "query",
         "internal",

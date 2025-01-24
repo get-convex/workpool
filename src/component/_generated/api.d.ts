@@ -50,6 +50,7 @@ export type Mounts = {
       },
       string
     >;
+    queueLength: FunctionReference<"query", "public", {}, number>;
     status: FunctionReference<
       "query",
       "public",

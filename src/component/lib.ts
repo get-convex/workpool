@@ -590,3 +590,12 @@ async function ensureCleanupCron(ctx: MutationCtx, ttl: number) {
     );
   }
 }
+
+export const queueLength = query({
+  args: {},
+  returns: v.number(),
+  handler: async (ctx) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (ctx.db.query("pendingStart") as any).count();
+  },
+});
