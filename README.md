@@ -113,11 +113,7 @@ export default app;
 import { components } from "./_generated/api";
 import { Workpool } from "@convex-dev/workpool";
 
-const pool = new Workpool(components.emailWorkpool, {
-  maxParallelism: 10,
-  // More options available, such as:
-  ttl: 7 * 24 * 60 * 60 * 1000,
-});
+const pool = new Workpool(components.emailWorkpool, { maxParallelism: 10 });
 ```
 
 Then you have the following interface on `pool`:
