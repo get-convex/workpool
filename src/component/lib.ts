@@ -396,12 +396,10 @@ async function startMainLoopHandler(ctx: MutationCtx, source: string) {
   if (!mainLoop) {
     console_.debug(`[${source}] starting mainLoop`);
     await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
-    await ctx.db.insert("mainLoop", {
-      state: { kind: "running" },
-    });
+    await ctx.db.insert("mainLoop", { kind: "running" });
     return;
   }
-  if (mainLoop.state.kind === "running") {
+  if (mainLoop.kind === "running") {
     console_.info(
       `[${source}] mainLoop should be actively running; if it's not, run \`mainLoop\` directly`
     );
@@ -410,10 +408,10 @@ async function startMainLoopHandler(ctx: MutationCtx, source: string) {
   console_.debug(
     `[${source}] mainLoop is scheduled to run later, so run it now`
   );
-  if (mainLoop.state.kind === "scheduled") {
-    await ctx.scheduler.cancel(mainLoop.state.fn);
+  if (mainLoop.kind === "scheduled") {
+    await ctx.scheduler.cancel(mainLoop.fn);
   }
-  await ctx.db.patch(mainLoop._id, { state: { kind: "running" } });
+  await ctx.db.replace(mainLoop._id, { kind: "running" });
   await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
 }
 
@@ -440,7 +438,7 @@ async function loopFromMainLoop(ctx: MutationCtx, delayMs: number) {
     await startMainLoopHandler(ctx, "mainLoop");
     return;
   }
-  if (mainLoop.state.kind === "idle") {
+  if (mainLoop.kind === "idle") {
     throw new Error("mainLoop is idle but `loopFromMainLoop` was called");
   }
   if (delayMs <= 0) {
@@ -448,19 +446,21 @@ async function loopFromMainLoop(ctx: MutationCtx, delayMs: number) {
       "[mainLoop] mainLoop is actively running and wants to keep running"
     );
     await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
-    if (mainLoop.state.kind !== "running") {
-      await ctx.db.patch(mainLoop._id, { state: { kind: "running" } });
+    if (mainLoop.kind !== "running") {
+      await ctx.db.replace(mainLoop._id, { kind: "running" });
     }
   } else if (delayMs < Number.POSITIVE_INFINITY) {
     console_.debug(`[mainLoop] mainLoop wants to run after ${delayMs}ms`);
     const runAtTime = Date.now() + delayMs;
     const fn = await ctx.scheduler.runAt(runAtTime, internal.lib.mainLoop, {});
-    await ctx.db.patch(mainLoop._id, {
-      state: { kind: "scheduled", fn, runAtTime },
+    await ctx.db.replace(mainLoop._id, {
+      kind: "scheduled",
+      fn,
+      runAtTime,
     });
   } else {
     console_.debug("[mainLoop] mainLoop wants to become idle");
-    await ctx.db.patch(mainLoop._id, { state: { kind: "idle" } });
+    await ctx.db.replace(mainLoop._id, { kind: "idle" });
   }
 }
 
@@ -480,21 +480,21 @@ async function kickMainLoop(
     await startMainLoopHandler(ctx, source);
     return;
   }
-  if (mainLoop.state.kind === "running") {
+  if (mainLoop.kind === "running") {
     console_.debug(
       `[${source}] mainLoop is actively running, so we don't need to do anything`
     );
     return;
   }
   // mainLoop is scheduled to run later, so we should cancel it and reschedule.
-  if (mainLoop.state.kind === "scheduled") {
-    await ctx.scheduler.cancel(mainLoop.state.fn);
+  if (mainLoop.kind === "scheduled") {
+    await ctx.scheduler.cancel(mainLoop.fn);
   }
   await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
   console_.debug(
     `[${source}] mainLoop was scheduled later, so reschedule it to run now`
   );
-  await ctx.db.patch(mainLoop._id, { state: { kind: "running" } });
+  await ctx.db.replace(mainLoop._id, { kind: "running" });
 }
 
 export const status = query({
