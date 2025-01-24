@@ -93,33 +93,6 @@ export const mainLoop = internalMutation({
     const { maxParallelism } = options;
     let didSomething = false;
 
-    console_.time("[mainLoop] inProgress count");
-    // This is the only function reading and writing inProgressWork,
-    // and it's bounded by MAX_POSSIBLE_PARALLELISM, so we can
-    // read it all into memory.
-    const inProgressBefore = await ctx.db.query("inProgressWork").collect();
-    console_.debug(`[mainLoop] ${inProgressBefore.length} in progress`);
-    console_.timeEnd("[mainLoop] inProgress count");
-
-    // Move from pendingWork to inProgressWork.
-    console_.time("[mainLoop] pendingWork");
-    const toSchedule = maxParallelism - inProgressBefore.length;
-    const pending = await ctx.db.query("pendingStart").take(toSchedule);
-    console_.debug(`[mainLoop] scheduling ${pending.length} pending work`);
-    await Promise.all(
-      pending.map(async (pendingWork) => {
-        const { scheduledId, timeoutMs } = await beginWork(ctx, pendingWork);
-        await ctx.db.insert("inProgressWork", {
-          running: scheduledId,
-          timeoutMs,
-          workId: pendingWork.workId,
-        });
-        await ctx.db.delete(pendingWork._id);
-        didSomething = true;
-      })
-    );
-    console_.timeEnd("[mainLoop] pendingWork");
-
     // Move from pendingCompletion to completedWork, deleting from inProgressWork.
     // We could do all of these, but we don't want to OCC with work completing,
     // so we only do a few at a time.
@@ -148,6 +121,33 @@ export const mainLoop = internalMutation({
       })
     );
     console_.timeEnd("[mainLoop] pendingCompletion");
+
+    console_.time("[mainLoop] inProgress count");
+    // This is the only function reading and writing inProgressWork,
+    // and it's bounded by MAX_POSSIBLE_PARALLELISM, so we can
+    // read it all into memory.
+    const inProgressBefore = await ctx.db.query("inProgressWork").collect();
+    console_.debug(`[mainLoop] ${inProgressBefore.length} in progress`);
+    console_.timeEnd("[mainLoop] inProgress count");
+
+    // Move from pendingWork to inProgressWork.
+    console_.time("[mainLoop] pendingWork");
+    const toSchedule = maxParallelism - inProgressBefore.length;
+    const pending = await ctx.db.query("pendingStart").take(toSchedule);
+    console_.debug(`[mainLoop] scheduling ${pending.length} pending work`);
+    await Promise.all(
+      pending.map(async (pendingWork) => {
+        const { scheduledId, timeoutMs } = await beginWork(ctx, pendingWork);
+        await ctx.db.insert("inProgressWork", {
+          running: scheduledId,
+          timeoutMs,
+          workId: pendingWork.workId,
+        });
+        await ctx.db.delete(pendingWork._id);
+        didSomething = true;
+      })
+    );
+    console_.timeEnd("[mainLoop] pendingWork");
 
     console_.time("[mainLoop] pendingCancelation");
     const canceled = await ctx.db.query("pendingCancelation").take(BATCH_SIZE);
