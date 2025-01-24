@@ -345,6 +345,7 @@ export const saveResult = internalMutation({
     workId: v.id("work"),
     result: v.optional(v.any()),
     error: v.optional(v.string()),
+    completionStatus,
   },
   handler: saveResultHandler,
 });
