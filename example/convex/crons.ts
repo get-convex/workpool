@@ -3,7 +3,7 @@ import { cronJobs } from "convex/server";
 
 const crons = cronJobs();
 
-// Useful for testing while developing.
+// /* Useful for testing while developing.*/
 // crons.interval(
 //   "start background work",
 //   { minutes: 1 }, // every minute
