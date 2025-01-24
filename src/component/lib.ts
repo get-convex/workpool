@@ -66,10 +66,6 @@ export const cancel = mutation({
   },
 });
 
-async function getOptions(db: DatabaseReader) {
-  return db.query("pool").unique();
-}
-
 async function console(ctx: QueryCtx | ActionCtx) {
   if ("runAction" in ctx) {
     return globalThis.console;
@@ -90,10 +86,9 @@ export const mainLoop = internalMutation({
   handler: async (ctx, _args) => {
     const console_ = await console(ctx);
 
-    const options = await getOptions(ctx.db);
+    const options = (await ctx.db.query("pool").unique())!;
     if (!options) {
-      console_.info("[mainLoop] no pool, skipping mainLoop");
-      return;
+      throw new Error("no pool in mainLoop");
     }
     const { maxParallelism } = options;
 
