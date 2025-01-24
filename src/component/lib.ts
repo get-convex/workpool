@@ -91,6 +91,7 @@ export const mainLoop = internalMutation({
       throw new Error("no pool in mainLoop");
     }
     const { maxParallelism } = options;
+    let didSomething = false;
 
     console_.time("[mainLoop] inProgress count");
     // This is the only function reading and writing inProgressWork,
@@ -102,11 +103,7 @@ export const mainLoop = internalMutation({
 
     // Move from pendingWork to inProgressWork.
     console_.time("[mainLoop] pendingWork");
-    const toSchedule = Math.min(
-      maxParallelism - inProgressBefore.length,
-      BATCH_SIZE
-    );
-    let didSomething = false;
+    const toSchedule = maxParallelism - inProgressBefore.length;
     const pending = await ctx.db.query("pendingStart").take(toSchedule);
     console_.debug(`[mainLoop] scheduling ${pending.length} pending work`);
     await Promise.all(
