@@ -68,15 +68,22 @@ export const debugCounts = query({
   returns: v.any(),
   handler: async (ctx) => {
     /* eslint-disable @typescript-eslint/no-explicit-any */
+    const inProgressWork = await (
+      ctx.db.query("inProgressWork") as any
+    ).count();
+    const pendingStart = await (ctx.db.query("pendingStart") as any).count();
+    const pendingCompletion = await (
+      ctx.db.query("pendingCompletion") as any
+    ).count();
+    const pendingCancelation = await (
+      ctx.db.query("pendingCancelation") as any
+    ).count();
     return {
-      pendingStart: await (ctx.db.query("pendingStart") as any).count(),
-      inProgressWork: await (ctx.db.query("inProgressWork") as any).count(),
-      pendingCompletion: await (
-        ctx.db.query("pendingCompletion") as any
-      ).count(),
-      pendingCancelation: await (
-        ctx.db.query("pendingCancelation") as any
-      ).count(),
+      pendingStart,
+      inProgressWork,
+      pendingCompletion,
+      pendingCancelation,
+      active: inProgressWork - pendingCompletion - pendingCancelation,
     };
     /* eslint-enable @typescript-eslint/no-explicit-any */
   },
