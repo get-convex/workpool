@@ -243,10 +243,6 @@ async function beginWork(
   scheduledId: Id<"_scheduled_functions">;
   timeoutMs: number | null;
 }> {
-  const options = await getOptions(ctx.db);
-  if (!options) {
-    throw new Error("cannot begin work with no pool");
-  }
   const console_ = await console(ctx);
   const work = await ctx.db.get(pendingStart.workId);
   if (!work) {
@@ -362,10 +358,6 @@ async function saveResultHandler(
     completionStatus: "success" | "error" | "canceled" | "timeout";
   }
 ): Promise<void> {
-  const options = await getOptions(ctx.db);
-  if (!options) {
-    throw new Error("cannot save result with no pool");
-  }
   await ctx.db.insert("pendingCompletion", {
     completionStatus,
     workId,
