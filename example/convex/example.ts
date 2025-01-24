@@ -137,7 +137,8 @@ export const echo = query({
 });
 
 async function sampleWork() {
-  const index = Math.floor(Math.random() * 3000) + 1;
+  const index = Math.floor(Math.random() * 1000) + 1;
+  await new Promise((resolve) => setTimeout(resolve, Math.random() * index));
   const url = `${process.env.CONVEX_CLOUD_URL}/api/query`;
   const start = Date.now();
   const response = await fetch(url, {
