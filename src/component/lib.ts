@@ -105,12 +105,7 @@ export const mainLoop = internalMutation({
           .withIndex("workId", (q) => q.eq("workId", pendingCompletion.workId))
           .unique();
         if (inProgressWork) {
-          await ctx.db.delete(inProgressWork._id);
-          if (inProgressCount) {
-            await ctx.db.patch(inProgressCount._id, {
-              count: inProgressCount.count - 1,
-            });
-          }
+          await deleteInProgressWork(ctx, inProgressWork._id);
           await ctx.db.insert("completedWork", {
             completionStatus: pendingCompletion.completionStatus,
             workId: pendingCompletion.workId,
@@ -176,12 +171,7 @@ export const mainLoop = internalMutation({
           .unique();
         if (inProgressWork) {
           await ctx.scheduler.cancel(inProgressWork.running);
-          await ctx.db.delete(inProgressWork._id);
-          if (inProgressCount) {
-            await ctx.db.patch(inProgressCount._id, {
-              count: inProgressCount.count - 1,
-            });
-          }
+          await deleteInProgressWork(ctx, inProgressWork._id);
           await ctx.db.insert("completedWork", {
             workId: pendingCancelation.workId,
             completionStatus: "canceled",
@@ -211,12 +201,7 @@ export const mainLoop = internalMutation({
               inProgressWork.workId,
               result
             );
-            await ctx.db.delete(inProgressWork._id);
-            if (inProgressCount) {
-              await ctx.db.patch(inProgressCount._id, {
-                count: inProgressCount.count - 1,
-              });
-            }
+            await deleteInProgressWork(ctx, inProgressWork._id);
             await ctx.db.insert("completedWork", {
               workId: inProgressWork.workId,
               completionStatus: result.completionStatus,
@@ -254,6 +239,19 @@ export const mainLoop = internalMutation({
     console_.timeEnd("[mainLoop] kickMainLoop");
   },
 });
+
+async function deleteInProgressWork(
+  ctx: MutationCtx,
+  inProgressWorkId: Id<"inProgressWork">
+) {
+  await ctx.db.delete(inProgressWorkId);
+  const inProgressCount = await ctx.db.query("inProgressCount").unique();
+  if (inProgressCount) {
+    await ctx.db.patch(inProgressCount._id, {
+      count: inProgressCount.count - 1,
+    });
+  }
+}
 
 async function beginWork(
   ctx: MutationCtx,
