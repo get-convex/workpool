@@ -77,13 +77,14 @@ async function console(ctx: QueryCtx | ActionCtx) {
 }
 
 const BATCH_SIZE = 10;
-const COMPLETION_BATCH_SIZE = 100;
 
 // There should only ever be at most one of these scheduled or running.
 // The scheduled one is in the "mainLoop" table.
 export const mainLoop = internalMutation({
-  args: {},
-  handler: async (ctx, _args) => {
+  args: {
+    generation: v.number(),
+  },
+  handler: async (ctx, args) => {
     const console_ = await console(ctx);
 
     const options = (await ctx.db.query("pool").unique())!;
@@ -98,10 +99,15 @@ export const mainLoop = internalMutation({
     console_.time("[mainLoop] pendingCompletion");
     const generation = await ctx.db.query("completionGeneration").unique();
     const generationNumber = generation?.generation ?? 0;
+    if (generationNumber !== args.generation) {
+      throw new Error(`generation mismatch: ${generationNumber} !== ${args.generation}`);
+    }
+    // Collect all pending completions for the previous generation.
+    // This won't be too many because the jobs all correspond to being scheduled
+    // by a single mainLoop (the previous one), so they're limited by MAX_PARALLELISM.
     const completed = await ctx.db.query("pendingCompletion")
-      .withIndex("generation", (q) => q.lt("generation", generationNumber))
-      .take(COMPLETION_BATCH_SIZE);
-    const haveMoreCompleted = completed.length === COMPLETION_BATCH_SIZE;
+      .withIndex("generation", (q) => q.eq("generation", generationNumber - 1))
+      .collect()
     console_.debug(`[mainLoop] completing ${completed.length}`);
     await Promise.all(
       completed.map(async (pendingCompletion) => {
@@ -216,7 +222,7 @@ export const mainLoop = internalMutation({
     console_.time("[mainLoop] kickMainLoop");
     if (didSomething) {
       // There might be more to do.
-      await loopFromMainLoop(ctx, 0, haveMoreCompleted);
+      await loopFromMainLoop(ctx, 0);
     } else {
       // Decide when to wake up.
       const allInProgressWork = await ctx.db.query("inProgressWork").collect();
@@ -232,7 +238,7 @@ export const mainLoop = internalMutation({
           )
         : Number.POSITIVE_INFINITY;
       const nextTime = Math.min(nextPendingTime, nextInProgress);
-      await loopFromMainLoop(ctx, nextTime - Date.now(), haveMoreCompleted);
+      await loopFromMainLoop(ctx, nextTime - Date.now());
     }
     console_.timeEnd("[mainLoop] kickMainLoop");
   },
@@ -363,14 +369,13 @@ export const bumpGeneration = internalMutation({
   args: {},
   handler: async (ctx) => {
     const currentGeneration = await ctx.db.query("completionGeneration").unique();
+    const generation = (currentGeneration?.generation ?? 0) + 1;
     if (!currentGeneration) {
-      await ctx.db.insert("completionGeneration", { generation: 1 });
+      await ctx.db.insert("completionGeneration", { generation });
     } else {
-      await ctx.db.patch(currentGeneration._id, {
-        generation: currentGeneration.generation + 1,
-      });
+      await ctx.db.patch(currentGeneration._id, { generation });
     }
-    await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
+    await ctx.scheduler.runAfter(0, internal.lib.mainLoop, { generation });
   },
 });
 
@@ -419,25 +424,24 @@ export const stopCleanup = mutation({
   },
 });
 
-async function loopFromMainLoop(ctx: MutationCtx, delayMs: number, haveMoreCompleted: boolean) {
+async function loopFromMainLoop(ctx: MutationCtx, delayMs: number) {
   const console_ = await console(ctx);
   const mainLoop = await getMainLoop(ctx);
   if (mainLoop.state.kind === "idle") {
     throw new Error("mainLoop is idle but `loopFromMainLoop` was called");
   }
-  const toRun = haveMoreCompleted ? internal.lib.mainLoop : internal.lib.bumpGeneration;
   if (delayMs <= 0) {
     console_.debug(
       "[mainLoop] mainLoop is actively running and wants to keep running"
     );
-    await ctx.scheduler.runAfter(0, toRun, {});
+    await ctx.scheduler.runAfter(0, internal.lib.bumpGeneration, {});
     if (mainLoop.state.kind !== "running") {
       await ctx.db.patch(mainLoop._id, { state: { kind: "running" } });
     }
   } else if (delayMs < Number.POSITIVE_INFINITY) {
     console_.debug(`[mainLoop] mainLoop wants to run after ${delayMs}ms`);
     const runAtTime = Date.now() + delayMs;
-    const fn = await ctx.scheduler.runAt(runAtTime, toRun, {});
+    const fn = await ctx.scheduler.runAt(runAtTime, internal.lib.bumpGeneration, {});
     await ctx.db.patch(mainLoop._id, {
       state: {
         kind: "scheduled",
@@ -470,7 +474,9 @@ async function kickMainLoop(
   if (mainLoop.state.kind === "scheduled") {
     await ctx.scheduler.cancel(mainLoop.state.fn);
   }
-  await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
+  const currentGeneration = await ctx.db.query("completionGeneration").unique();
+  const generation = currentGeneration?.generation ?? 0;
+  await ctx.scheduler.runAfter(0, internal.lib.mainLoop, { generation });
   console_.debug(
     `[${source}] mainLoop was scheduled later, so reschedule it to run now`
   );
@@ -583,7 +589,12 @@ async function ensurePoolAndLoopExist(
       throw new Error("mainLoop already exists");
     }
     await ctx.db.insert("mainLoop", { state: { kind: "running" } });
-    await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
+    const currentGeneration = await ctx.db.query("completionGeneration").unique();
+    if (currentGeneration) {
+      throw new Error("completionGeneration already exists");
+    }
+    await ctx.db.insert("completionGeneration", { generation: 0 });
+    await ctx.scheduler.runAfter(0, internal.lib.mainLoop, { generation: 0 });
   }
   await ensureCleanupCron(ctx, opts.statusTtl);
 }
