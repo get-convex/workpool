@@ -180,9 +180,10 @@ export const mainLoop = internalMutation({
     );
     console_.timeEnd("[mainLoop] pendingCancelation");
 
-    const nextCompleted = await ctx.db.query("pendingCompletion").first();
-    const nextCanceled = await ctx.db.query("pendingCancelation").first();
-    if (nextCompleted === null && nextCanceled === null) {
+    didSomething ||= (await ctx.db.query("pendingCompletion").first()) !== null;
+    didSomething ||= (await ctx.db.query("pendingCancelation").first()) !== null;
+
+    if (!didSomething) {
       console_.time("[mainLoop] inProgressWork check for unclean exits");
       // If all completions are handled, check everything in inProgressWork.
       // This will find everything that timed out, failed ungracefully, was
@@ -212,7 +213,7 @@ export const mainLoop = internalMutation({
     }
 
     console_.time("[mainLoop] kickMainLoop");
-    if (didSomething || nextCompleted !== null || nextCanceled !== null) {
+    if (didSomething) {
       // There might be more to do.
       await loopFromMainLoop(ctx, 0, haveMoreCompleted);
     } else {
