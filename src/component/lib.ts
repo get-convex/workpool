@@ -180,8 +180,9 @@ export const mainLoop = internalMutation({
     );
     console_.timeEnd("[mainLoop] pendingCancelation");
 
+    // In case there are more pending completions at higher generation numbers,
+    // there's more to do.
     didSomething ||= (await ctx.db.query("pendingCompletion").first()) !== null;
-    didSomething ||= (await ctx.db.query("pendingCancelation").first()) !== null;
 
     if (!didSomething) {
       console_.time("[mainLoop] inProgressWork check for unclean exits");
