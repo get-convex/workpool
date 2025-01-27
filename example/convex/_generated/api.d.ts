@@ -60,12 +60,11 @@ export declare const components: {
           options: {
             logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
             maxParallelism: number;
-            ttl?: number;
+            statusTtl?: number;
           };
         },
         string
       >;
-      startMainLoop: FunctionReference<"mutation", "internal", {}, any>;
       status: FunctionReference<
         "query",
         "internal",
@@ -100,12 +99,11 @@ export declare const components: {
           options: {
             logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
             maxParallelism: number;
-            ttl?: number;
+            statusTtl?: number;
           };
         },
         string
       >;
-      startMainLoop: FunctionReference<"mutation", "internal", {}, any>;
       status: FunctionReference<
         "query",
         "internal",
@@ -140,12 +138,11 @@ export declare const components: {
           options: {
             logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
             maxParallelism: number;
-            ttl?: number;
+            statusTtl?: number;
           };
         },
         string
       >;
-      startMainLoop: FunctionReference<"mutation", "internal", {}, any>;
       status: FunctionReference<
         "query",
         "internal",

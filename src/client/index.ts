@@ -12,7 +12,8 @@ import {
 import { GenericId } from "convex/values";
 import { api } from "../component/_generated/api";
 import { LogLevel } from "../component/logging";
-import { CompletionStatus } from "../component/schema";
+import { completionStatus, type CompletionStatus } from "../component/schema";
+export { completionStatus, type CompletionStatus };
 
 export type WorkId = string;
 
@@ -35,7 +36,7 @@ export class Workpool {
       /** How long to keep completed work in the database, for access by `status`.
        * Default 1 day.
        */
-      ttl?: number;
+      statusTtl?: number;
     }
   ) {}
   async enqueueAction<Args extends DefaultFunctionArgs, ReturnType>(

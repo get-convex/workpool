@@ -1,7 +1,6 @@
 import { v } from "convex/values";
 import {
   ActionCtx,
-  DatabaseReader,
   internalAction,
   internalMutation,
   mutation,
@@ -31,16 +30,16 @@ export const enqueue = mutation({
     options: v.object({
       maxParallelism: v.number(),
       logLevel: v.optional(logLevel),
-      ttl: v.optional(v.number()),
+      statusTtl: v.optional(v.number()),
     }),
   },
   returns: v.id("work"),
   handler: async (ctx, { fnHandle, fnName, options, fnArgs, fnType }) => {
-    await ensurePoolExists(
+    await ensurePoolAndLoopExist(
       ctx,
       {
         maxParallelism: options.maxParallelism,
-        ttl: options.ttl ?? 24 * 60 * 60 * 1000,
+        statusTtl: options.statusTtl ?? 24 * 60 * 60 * 1000,
         logLevel: options.logLevel ?? "WARN",
       },
       "enqueue"
@@ -66,15 +65,11 @@ export const cancel = mutation({
   },
 });
 
-async function getOptions(db: DatabaseReader) {
-  return db.query("pools").unique();
-}
-
 async function console(ctx: QueryCtx | ActionCtx) {
   if ("runAction" in ctx) {
     return globalThis.console;
   }
-  const pool = await ctx.db.query("pools").unique();
+  const pool = await ctx.db.query("pool").unique();
   if (!pool) {
     return globalThis.console;
   }
@@ -90,43 +85,12 @@ export const mainLoop = internalMutation({
   handler: async (ctx, _args) => {
     const console_ = await console(ctx);
 
-    const options = await getOptions(ctx.db);
+    const options = (await ctx.db.query("pool").unique())!;
     if (!options) {
-      console_.info("[mainLoop] no pool, skipping mainLoop");
-      return;
+      throw new Error("no pool in mainLoop");
     }
     const { maxParallelism } = options;
-
-    console_.time("[mainLoop] inProgress count");
-    // This is the only function reading and writing inProgressWork,
-    // and it's bounded by MAX_POSSIBLE_PARALLELISM, so we can
-    // read it all into memory.
-    const inProgressBefore = await ctx.db.query("inProgressWork").collect();
-    console_.debug(`[mainLoop] ${inProgressBefore.length} in progress`);
-    console_.timeEnd("[mainLoop] inProgress count");
-
-    // Move from pendingWork to inProgressWork.
-    console_.time("[mainLoop] pendingWork");
-    const toSchedule = Math.min(
-      maxParallelism - inProgressBefore.length,
-      BATCH_SIZE
-    );
     let didSomething = false;
-    const pending = await ctx.db.query("pendingStart").take(toSchedule);
-    console_.debug(`[mainLoop] scheduling ${pending.length} pending work`);
-    await Promise.all(
-      pending.map(async (work) => {
-        const { scheduledId, timeoutMs } = await beginWork(ctx, work);
-        await ctx.db.insert("inProgressWork", {
-          running: scheduledId,
-          timeoutMs,
-          workId: work.workId,
-        });
-        await ctx.db.delete(work._id);
-        didSomething = true;
-      })
-    );
-    console_.timeEnd("[mainLoop] pendingWork");
 
     // Move from pendingCompletion to completedWork, deleting from inProgressWork.
     // We could do all of these, but we don't want to OCC with work completing,
@@ -149,11 +113,40 @@ export const mainLoop = internalMutation({
           workId: pendingCompletion.workId,
         });
         const work = (await ctx.db.get(pendingCompletion.workId))!;
-        console_.info(recordCompleted(work, pendingCompletion.completionStatus));
+        console_.info(
+          recordCompleted(work, pendingCompletion.completionStatus)
+        );
         didSomething = true;
       })
     );
     console_.timeEnd("[mainLoop] pendingCompletion");
+
+    console_.time("[mainLoop] inProgress count");
+    // This is the only function reading and writing inProgressWork,
+    // and it's bounded by MAX_POSSIBLE_PARALLELISM, so we can
+    // read it all into memory.
+    const inProgressBefore = await ctx.db.query("inProgressWork").collect();
+    console_.debug(`[mainLoop] ${inProgressBefore.length} in progress`);
+    console_.timeEnd("[mainLoop] inProgress count");
+
+    // Move from pendingWork to inProgressWork.
+    console_.time("[mainLoop] pendingWork");
+    const toSchedule = maxParallelism - inProgressBefore.length;
+    const pending = await ctx.db.query("pendingStart").take(toSchedule);
+    console_.debug(`[mainLoop] scheduling ${pending.length} pending work`);
+    await Promise.all(
+      pending.map(async (pendingWork) => {
+        const { scheduledId, timeoutMs } = await beginWork(ctx, pendingWork);
+        await ctx.db.insert("inProgressWork", {
+          running: scheduledId,
+          timeoutMs,
+          workId: pendingWork.workId,
+        });
+        await ctx.db.delete(pendingWork._id);
+        didSomething = true;
+      })
+    );
+    console_.timeEnd("[mainLoop] pendingWork");
 
     console_.time("[mainLoop] pendingCancelation");
     const canceled = await ctx.db.query("pendingCancelation").take(BATCH_SIZE);
@@ -241,10 +234,6 @@ async function beginWork(
   scheduledId: Id<"_scheduled_functions">;
   timeoutMs: number | null;
 }> {
-  const options = await getOptions(ctx.db);
-  if (!options) {
-    throw new Error("cannot begin work with no pool");
-  }
   const console_ = await console(ctx);
   const work = await ctx.db.get(pendingStart.workId);
   if (!work) {
@@ -345,6 +334,7 @@ export const saveResult = internalMutation({
     workId: v.id("work"),
     result: v.optional(v.any()),
     error: v.optional(v.string()),
+    completionStatus,
   },
   handler: saveResultHandler,
 });
@@ -359,10 +349,6 @@ async function saveResultHandler(
     completionStatus: "success" | "error" | "canceled" | "timeout";
   }
 ): Promise<void> {
-  const options = await getOptions(ctx.db);
-  if (!options) {
-    throw new Error("cannot save result with no pool");
-  }
   await ctx.db.insert("pendingCompletion", {
     completionStatus,
     workId,
@@ -389,37 +375,13 @@ export const runMutationWrapper = internalMutation({
   },
 });
 
-async function startMainLoopHandler(ctx: MutationCtx, source: string) {
+async function getMainLoop(ctx: QueryCtx) {
   const mainLoop = await ctx.db.query("mainLoop").unique();
-  const console_ = await console(ctx);
   if (!mainLoop) {
-    console_.debug(`[${source}] starting mainLoop`);
-    await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
-    await ctx.db.insert("mainLoop", {
-      state: { kind: "running" },
-    });
-    return;
+    throw new Error("mainLoop doesn't exist");
   }
-  if (mainLoop.state.kind === "running") {
-    console_.info(
-      `[${source}] mainLoop should be actively running; if it's not, run \`mainLoop\` directly`
-    );
-    return;
-  }
-  console_.debug(
-    `[${source}] mainLoop is scheduled to run later, so run it now`
-  );
-  if (mainLoop.state.kind === "scheduled") {
-    await ctx.scheduler.cancel(mainLoop.state.fn);
-  }
-  await ctx.db.patch(mainLoop._id, { state: { kind: "running" } });
-  await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
+  return mainLoop;
 }
-
-export const startMainLoop = mutation({
-  args: {},
-  handler: (ctx) => startMainLoopHandler(ctx, "startMainLoop"),
-});
 
 export const stopCleanup = mutation({
   args: {},
@@ -433,12 +395,7 @@ export const stopCleanup = mutation({
 
 async function loopFromMainLoop(ctx: MutationCtx, delayMs: number) {
   const console_ = await console(ctx);
-  const mainLoop = await ctx.db.query("mainLoop").unique();
-  if (mainLoop === null) {
-    console_.debug("[mainLoop] mainLoop not found, so we need to start it");
-    await startMainLoopHandler(ctx, "mainLoop");
-    return;
-  }
+  const mainLoop = await getMainLoop(ctx);
   if (mainLoop.state.kind === "idle") {
     throw new Error("mainLoop is idle but `loopFromMainLoop` was called");
   }
@@ -455,7 +412,11 @@ async function loopFromMainLoop(ctx: MutationCtx, delayMs: number) {
     const runAtTime = Date.now() + delayMs;
     const fn = await ctx.scheduler.runAt(runAtTime, internal.lib.mainLoop, {});
     await ctx.db.patch(mainLoop._id, {
-      state: { kind: "scheduled", fn, runAtTime },
+      state: {
+        kind: "scheduled",
+        fn,
+        runAtTime,
+      },
     });
   } else {
     console_.debug("[mainLoop] mainLoop wants to become idle");
@@ -471,14 +432,7 @@ async function kickMainLoop(
 
   // Look for mainLoop documents that we want to reschedule.
   // Only kick to run now if we're scheduled or idle.
-  const mainLoop = await ctx.db.query("mainLoop").unique();
-  if (!mainLoop) {
-    console_.debug(
-      `[${source}] mainLoop doesn't exist, so we need to start it`
-    );
-    await startMainLoopHandler(ctx, source);
-    return;
-  }
+  const mainLoop = await getMainLoop(ctx);
   if (mainLoop.state.kind === "running") {
     console_.debug(
       `[${source}] mainLoop is actively running, so we don't need to do anything`
@@ -537,6 +491,8 @@ export const status = query({
   },
 });
 
+export const MAX_CLEANUP_DOCS = 1000;
+
 export const cleanup = mutation({
   args: {
     maxAgeMs: v.number(),
@@ -545,23 +501,30 @@ export const cleanup = mutation({
     const old = Date.now() - maxAgeMs;
     const docs = await ctx.db
       .query("completedWork")
-      .withIndex("by_creation_time", (q) => q.lt("_creationTime", old))
-      .collect();
+      .withIndex("by_creation_time", (q) => q.lte("_creationTime", old))
+      .order("desc")
+      .take(MAX_CLEANUP_DOCS);
     await Promise.all(
       docs.map(async (doc) => {
         await ctx.db.delete(doc._id);
         await ctx.db.delete(doc.workId);
       })
     );
+    if (docs.length === MAX_CLEANUP_DOCS) {
+      // Schedule the next cleanup to run starting from the oldest document.
+      await ctx.scheduler.runAfter(0, api.lib.cleanup, {
+        maxAgeMs: docs[docs.length - 1]._creationTime,
+      });
+    }
   },
 });
 
 const MAX_POSSIBLE_PARALLELISM = 300;
 const CLEANUP_CRON_NAME = "cleanup";
 
-async function ensurePoolExists(
+async function ensurePoolAndLoopExist(
   ctx: MutationCtx,
-  opts: WithoutSystemFields<Doc<"pools">>,
+  opts: WithoutSystemFields<Doc<"pool">>,
   source: "enqueue" | "saveResult" | "mainLoop"
 ) {
   if (opts.maxParallelism > MAX_POSSIBLE_PARALLELISM) {
@@ -570,7 +533,7 @@ async function ensurePoolExists(
   if (opts.maxParallelism < 1) {
     throw new Error("maxParallelism must be >= 1");
   }
-  const pool = await ctx.db.query("pools").unique();
+  const pool = await ctx.db.query("pool").unique();
   if (pool) {
     let update = false;
     for (const key in opts) {
@@ -581,12 +544,18 @@ async function ensurePoolExists(
     if (update) {
       await ctx.db.patch(pool._id, opts);
     }
+  } else {
+    const console_ = await console(ctx);
+    await ctx.db.insert("pool", opts);
+    console_.debug(`[${source}] starting mainLoop`);
+    const exists = await ctx.db.query("mainLoop").unique();
+    if (exists) {
+      throw new Error("mainLoop already exists");
+    }
+    await ctx.db.insert("mainLoop", { state: { kind: "running" } });
+    await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
   }
-  if (!pool) {
-    await ctx.db.insert("pools", opts);
-    await startMainLoopHandler(ctx, source);
-  }
-  await ensureCleanupCron(ctx, opts.ttl);
+  await ensureCleanupCron(ctx, opts.statusTtl);
 }
 
 async function ensureCleanupCron(ctx: MutationCtx, ttl: number) {

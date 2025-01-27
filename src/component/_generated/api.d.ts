@@ -45,12 +45,11 @@ export type Mounts = {
         options: {
           logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
           maxParallelism: number;
-          ttl?: number;
+          statusTtl?: number;
         };
       },
       string
     >;
-    startMainLoop: FunctionReference<"mutation", "public", {}, any>;
     status: FunctionReference<
       "query",
       "public",

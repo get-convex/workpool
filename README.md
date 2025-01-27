@@ -113,11 +113,7 @@ export default app;
 import { components } from "./_generated/api";
 import { Workpool } from "@convex-dev/workpool";
 
-const pool = new Workpool(components.emailWorkpool, {
-  maxParallelism: 10,
-  // More options available, such as:
-  ttl: 7 * 24 * 60 * 60 * 1000,
-});
+const pool = new Workpool(components.emailWorkpool, { maxParallelism: 10 });
 ```
 
 Then you have the following interface on `pool`:
@@ -125,7 +121,8 @@ Then you have the following interface on `pool`:
 ```ts
 // Schedule functions to run in the background.
 const id = await pool.enqueueMutation(internal.foo.bar, args);
-const id = await pool.enqueueAction(internal.foo.bar, args);
+// Or for an action:
+const id = await pool.enqueueAction(internal.foo.baz, args);
 
 // Is it done yet? Did it succeed or fail?
 const status = await pool.status(id);
@@ -157,5 +154,30 @@ alternatives to Workpool:
     calling the action's handler directly.
 
 See [best practices](https://docs.convex.dev/production/best-practices) for more.
+
+## Reading function status
+
+The workpool stores the status of each function in the database, so you can
+read it even after the function has finished.
+By default, it will keep the status for 1 day but you can change this with
+the `statusTtl` option to `Workpool`.
+
+To keep the status forever, set `statusTtl: Number.POSITIVE_INFINITY`.
+
+You can read the status of a function by calling `pool.status(id)`.
+
+The status will be one of:
+
+- `{ kind: "pending" }`: The function has not started yet.
+- `{ kind: "inProgress" }`: The function is currently running.
+- `{ kind: "completed"; completionStatus: CompletionStatus }`: The function has
+  finished.
+
+The `CompletionStatus` type is one of:
+
+- `"success"`: The function completed successfully.
+- `"error"`: The function threw an error.
+- `"canceled"`: The function was canceled.
+- `"timeout"`: The function timed out.
 
 <!-- END: Include on https://convex.dev/components -->

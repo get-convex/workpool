@@ -1,4 +1,6 @@
+import { v } from "convex/values";
 import { Doc } from "./_generated/dataModel";
+import { internalQuery } from "./_generated/server";
 
 /**
  * Record stats about work execution. Intended to be queried by Axiom or Datadog.
@@ -9,8 +11,8 @@ import { Doc } from "./_generated/dataModel";
 
 workpool
 | extend parsed_message = iff(
-	isnotnull(parse_json(trim("'", tostring(["data.message"])))), 
-	parse_json(trim("'", tostring(["data.message"]))), 
+	isnotnull(parse_json(trim("'", tostring(["data.message"])))),
+	parse_json(trim("'", tostring(["data.message"]))),
 	parse_json('{}')
 )
 | extend lagSinceEnqueued = parsed_message["lagSinceEnqueued"]
@@ -43,3 +45,46 @@ export function recordCompleted(
     lagSinceEnqueued: Date.now() - work._creationTime,
   });
 }
+
+/**
+ * Warning: this should not be used from a mutation, as it will cause conflicts.
+ * Use this to debug or diagnose your queue length when it's backed up.
+ */
+export const queueLength = internalQuery({
+  args: {},
+  returns: v.number(),
+  handler: async (ctx) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (ctx.db.query("pendingStart") as any).count();
+  },
+});
+
+/**
+ * Warning: this should not be used from a mutation, as it will cause conflicts.
+ * Use this while developing to see the state of the queue.
+ */
+export const debugCounts = internalQuery({
+  args: {},
+  returns: v.any(),
+  handler: async (ctx) => {
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const inProgressWork = await (
+      ctx.db.query("inProgressWork") as any
+    ).count();
+    const pendingStart = await (ctx.db.query("pendingStart") as any).count();
+    const pendingCompletion = await (
+      ctx.db.query("pendingCompletion") as any
+    ).count();
+    const pendingCancelation = await (
+      ctx.db.query("pendingCancelation") as any
+    ).count();
+    return {
+      pendingStart,
+      inProgressWork,
+      pendingCompletion,
+      pendingCancelation,
+      active: inProgressWork - pendingCompletion - pendingCancelation,
+    };
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+  },
+});

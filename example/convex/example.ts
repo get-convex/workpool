@@ -12,19 +12,19 @@ import { v } from "convex/values";
 const highPriPool = new Workpool(components.highPriWorkpool, {
   maxParallelism: 20,
   // For tests, disable completed work cleanup.
-  ttl: Number.POSITIVE_INFINITY,
+  statusTtl: Number.POSITIVE_INFINITY,
   logLevel: "INFO",
 });
 const pool = new Workpool(components.workpool, {
   maxParallelism: 3,
   // For tests, disable completed work cleanup.
-  ttl: Number.POSITIVE_INFINITY,
+  statusTtl: Number.POSITIVE_INFINITY,
   logLevel: "INFO",
 });
 const lowpriPool = new Workpool(components.lowpriWorkpool, {
   maxParallelism: 1,
   // For tests, disable completed work cleanup.
-  ttl: Number.POSITIVE_INFINITY,
+  statusTtl: Number.POSITIVE_INFINITY,
   logLevel: "INFO",
 });
 
@@ -73,12 +73,14 @@ export const status = query({
   },
 });
 
-export const enqueueABunchOfMutations = mutation({
+export const enqueueABunchOfMutations = action({
   args: {},
   handler: async (ctx, _args) => {
-    for (let i = 0; i < 30; i++) {
-      await pool.enqueueMutation(ctx, api.example.addMutation, {});
-    }
+    await Promise.all(
+      Array.from({ length: 30 }, () =>
+        pool.enqueueMutation(ctx, api.example.addMutation, {})
+      )
+    );
   },
 });
 
@@ -91,12 +93,14 @@ export const addLowPri = mutation({
   },
 });
 
-export const enqueueLowPriMutations = mutation({
+export const enqueueLowPriMutations = action({
   args: {},
   handler: async (ctx, _args) => {
-    for (let i = 0; i < 30; i++) {
-      await lowpriPool.enqueueMutation(ctx, api.example.addLowPri, {});
-    }
+    await Promise.all(
+      Array.from({ length: 30 }, () =>
+        lowpriPool.enqueueMutation(ctx, api.example.addLowPri, {})
+      )
+    );
   },
 });
 
@@ -107,29 +111,48 @@ export const highPriMutation = mutation({
   },
 });
 
-export const enqueueABunchOfActions = mutation({
+export const enqueueABunchOfActions = action({
   args: {},
   handler: async (ctx, _args) => {
-    for (let i = 0; i < 30; i++) {
-      await pool.enqueueAction(ctx, api.example.addAction, {});
-    }
+    await Promise.all(
+      Array.from({ length: 30 }, () =>
+        pool.enqueueAction(ctx, api.example.addAction, {})
+      )
+    );
   },
 });
 
-export const enqueueAnAction = action({
+export const enqueueAnAction = mutation({
   args: {},
   handler: async (ctx, _args): Promise<void> => {
     await pool.enqueueAction(ctx, api.example.addAction, {});
   },
 });
 
+export const echo = query({
+  args: { num: v.number() },
+  handler: async (ctx, { num }) => {
+    return num;
+  },
+});
+
 async function sampleWork() {
-  const index = Math.floor(Math.random() * 3000) + 1;
-  const url = `https://xkcd.com/${index}`;
-  const response = await fetch(url);
-  const text = await response.text();
-  const titleMatch = text.match(/<title>(.*)<\/title>/);
-  console.log(`xkcd ${index} title: ${titleMatch?.[1]}`);
+  const index = Math.floor(Math.random() * 1000) + 1;
+  await new Promise((resolve) => setTimeout(resolve, Math.random() * index));
+  const url = `${process.env.CONVEX_CLOUD_URL}/api/query`;
+  const start = Date.now();
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      path: "example:echo",
+      args: { num: index },
+    }),
+  });
+  const data = await response.json();
+  console.log(data.value === index, Date.now() - start);
 }
 
 // Example background work: scraping from a website.
@@ -140,12 +163,14 @@ export const backgroundWork = internalAction({
   },
 });
 
-export const startBackgroundWork = internalMutation({
+export const startBackgroundWork = internalAction({
   args: {},
   handler: async (ctx, _args) => {
-    for (let i = 0; i < 20; i++) {
-      await lowpriPool.enqueueAction(ctx, internal.example.backgroundWork, {});
-    }
+    await Promise.all(
+      Array.from({ length: 20 }, () =>
+        lowpriPool.enqueueAction(ctx, internal.example.backgroundWork, {})
+      )
+    );
   },
 });
 
@@ -160,6 +185,10 @@ export const foregroundWork = internalAction({
 export const startForegroundWork = internalMutation({
   args: {},
   handler: async (ctx, _args) => {
-    await pool.enqueueAction(ctx, internal.example.foregroundWork, {});
+    await Promise.all(
+      Array.from({ length: 20 }, () =>
+        highPriPool.enqueueAction(ctx, internal.example.foregroundWork, {})
+      )
+    );
   },
 });
