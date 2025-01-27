@@ -77,6 +77,7 @@ async function console(ctx: QueryCtx | ActionCtx) {
 }
 
 const BATCH_SIZE = 10;
+const COMPLETION_BATCH_SIZE = 100;
 
 // There should only ever be at most one of these scheduled or running.
 // The scheduled one is in the "mainLoop" table.
@@ -99,8 +100,8 @@ export const mainLoop = internalMutation({
     const generationNumber = generation?.generation ?? 0;
     const completed = await ctx.db.query("pendingCompletion")
       .withIndex("generation", (q) => q.lt("generation", generationNumber))
-      .take(BATCH_SIZE);
-    const haveMoreCompleted = completed.length === BATCH_SIZE;
+      .take(COMPLETION_BATCH_SIZE);
+    const haveMoreCompleted = completed.length === COMPLETION_BATCH_SIZE;
     console_.debug(`[mainLoop] completing ${completed.length}`);
     await Promise.all(
       completed.map(async (pendingCompletion) => {
@@ -179,7 +180,9 @@ export const mainLoop = internalMutation({
     );
     console_.timeEnd("[mainLoop] pendingCancelation");
 
-    if (completed.length === 0) {
+    const nextCompleted = await ctx.db.query("pendingCompletion").first();
+    const nextCanceled = await ctx.db.query("pendingCancelation").first();
+    if (nextCompleted === null && nextCanceled === null) {
       console_.time("[mainLoop] inProgressWork check for unclean exits");
       // If all completions are handled, check everything in inProgressWork.
       // This will find everything that timed out, failed ungracefully, was
@@ -189,7 +192,7 @@ export const mainLoop = internalMutation({
         inProgress.map(async (inProgressWork) => {
           const result = await checkInProgressWork(ctx, inProgressWork);
           if (result !== null) {
-            console_.debug(
+            console_.warn(
               "[mainLoop] inProgressWork finished uncleanly",
               inProgressWork.workId,
               result
@@ -209,7 +212,7 @@ export const mainLoop = internalMutation({
     }
 
     console_.time("[mainLoop] kickMainLoop");
-    if (didSomething) {
+    if (didSomething || nextCompleted !== null || nextCanceled !== null) {
       // There might be more to do.
       await loopFromMainLoop(ctx, 0, haveMoreCompleted);
     } else {

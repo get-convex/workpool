@@ -13,7 +13,7 @@ const highPriPool = new Workpool(components.highPriWorkpool, {
   maxParallelism: 20,
   // For tests, disable completed work cleanup.
   statusTtl: Number.POSITIVE_INFINITY,
-  logLevel: "INFO",
+  logLevel: "DEBUG",
 });
 const pool = new Workpool(components.workpool, {
   maxParallelism: 3,
@@ -186,7 +186,7 @@ export const startForegroundWork = internalMutation({
   args: {},
   handler: async (ctx, _args) => {
     await Promise.all(
-      Array.from({ length: 20 }, () =>
+      Array.from({ length: 100 }, () =>
         highPriPool.enqueueAction(ctx, internal.example.foregroundWork, {})
       )
     );
