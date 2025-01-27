@@ -2,7 +2,6 @@ import {
   mutation,
   action,
   query,
-  internalMutation,
   internalAction,
 } from "./_generated/server";
 import { api, components, internal } from "./_generated/api";
@@ -182,7 +181,7 @@ export const foregroundWork = internalAction({
   },
 });
 
-export const startForegroundWork = internalMutation({
+export const startForegroundWork = internalAction({
   args: {},
   handler: async (ctx, _args) => {
     await Promise.all(
