@@ -93,10 +93,14 @@ export const mainLoop = internalMutation({
     let didSomething = false;
 
     // Move from pendingCompletion to completedWork, deleting from inProgressWork.
-    // We could do all of these, but we don't want to OCC with work completing,
-    // so we only do a few at a time.
+    // Generation is used to avoid OCCs with work completing.
     console_.time("[mainLoop] pendingCompletion");
-    const completed = await ctx.db.query("pendingCompletion").take(BATCH_SIZE);
+    const generation = await ctx.db.query("completionGeneration").unique();
+    const generationNumber = generation?.generation ?? 0;
+    const completed = await ctx.db.query("pendingCompletion")
+      .withIndex("generation", (q) => q.lt("generation", generationNumber))
+      .take(BATCH_SIZE);
+    const haveMoreCompleted = completed.length === BATCH_SIZE;
     console_.debug(`[mainLoop] completing ${completed.length}`);
     await Promise.all(
       completed.map(async (pendingCompletion) => {
@@ -205,7 +209,7 @@ export const mainLoop = internalMutation({
     console_.time("[mainLoop] kickMainLoop");
     if (didSomething) {
       // There might be more to do.
-      await loopFromMainLoop(ctx, 0);
+      await loopFromMainLoop(ctx, 0, haveMoreCompleted);
     } else {
       // Decide when to wake up.
       const allInProgressWork = await ctx.db.query("inProgressWork").collect();
@@ -221,7 +225,7 @@ export const mainLoop = internalMutation({
           )
         : Number.POSITIVE_INFINITY;
       const nextTime = Math.min(nextPendingTime, nextInProgress);
-      await loopFromMainLoop(ctx, nextTime - Date.now());
+      await loopFromMainLoop(ctx, nextTime - Date.now(), haveMoreCompleted);
     }
     console_.timeEnd("[mainLoop] kickMainLoop");
   },
@@ -315,13 +319,15 @@ export const runActionWrapper = internalAction({
     const fnHandle = handleStr as FunctionHandle<"action">;
     try {
       await ctx.runAction(fnHandle, fnArgs);
-      await ctx.runMutation(internal.lib.saveResult, {
+      // NOTE: we could run `ctx.runMutation`, but we want to guarantee execution,
+      // and `ctx.scheduler.runAfter` won't OCC.
+      await ctx.scheduler.runAfter(0, internal.lib.saveResult, {
         workId,
         completionStatus: "success",
       });
     } catch (e: unknown) {
       console_.error(e);
-      await ctx.runMutation(internal.lib.saveResult, {
+      await ctx.scheduler.runAfter(0, internal.lib.saveResult, {
         workId,
         completionStatus: "error",
       });
@@ -332,29 +338,34 @@ export const runActionWrapper = internalAction({
 export const saveResult = internalMutation({
   args: {
     workId: v.id("work"),
-    result: v.optional(v.any()),
-    error: v.optional(v.string()),
     completionStatus,
   },
-  handler: saveResultHandler,
+  handler: async (ctx, args) => {
+    const currentGeneration = await ctx.db.query("completionGeneration").unique();
+    const generation = currentGeneration?.generation ?? 0;
+    await ctx.db.insert("pendingCompletion", {
+      completionStatus: args.completionStatus,
+      workId: args.workId,
+      generation,
+    });
+    await kickMainLoop(ctx, "saveResult");
+  },
 });
 
-async function saveResultHandler(
-  ctx: MutationCtx,
-  {
-    workId,
-    completionStatus,
-  }: {
-    workId: Id<"work">;
-    completionStatus: "success" | "error" | "canceled" | "timeout";
-  }
-): Promise<void> {
-  await ctx.db.insert("pendingCompletion", {
-    completionStatus,
-    workId,
-  });
-  await kickMainLoop(ctx, "saveResult");
-}
+export const bumpGeneration = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const currentGeneration = await ctx.db.query("completionGeneration").unique();
+    if (!currentGeneration) {
+      await ctx.db.insert("completionGeneration", { generation: 1 });
+    } else {
+      await ctx.db.patch(currentGeneration._id, {
+        generation: currentGeneration.generation + 1,
+      });
+    }
+    await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
+  },
+});
 
 export const runMutationWrapper = internalMutation({
   args: {
@@ -367,10 +378,18 @@ export const runMutationWrapper = internalMutation({
     const fnHandle = handleStr as FunctionHandle<"mutation">;
     try {
       await ctx.runMutation(fnHandle, fnArgs);
-      await saveResultHandler(ctx, { workId, completionStatus: "success" });
+      // NOTE: we could run the `saveResult` handler here, or call `ctx.runMutation`,
+      // but we want the mutation to be a separate transaction to reduce the window for OCCs.
+      await ctx.scheduler.runAfter(0, internal.lib.saveResult, {
+        workId,
+        completionStatus: "success",
+      });
     } catch (e: unknown) {
       console_.error(e);
-      await saveResultHandler(ctx, { workId, completionStatus: "error" });
+      await ctx.scheduler.runAfter(0, internal.lib.saveResult, {
+        workId,
+        completionStatus: "error",
+      });
     }
   },
 });
@@ -393,24 +412,25 @@ export const stopCleanup = mutation({
   },
 });
 
-async function loopFromMainLoop(ctx: MutationCtx, delayMs: number) {
+async function loopFromMainLoop(ctx: MutationCtx, delayMs: number, haveMoreCompleted: boolean) {
   const console_ = await console(ctx);
   const mainLoop = await getMainLoop(ctx);
   if (mainLoop.state.kind === "idle") {
     throw new Error("mainLoop is idle but `loopFromMainLoop` was called");
   }
+  const toRun = haveMoreCompleted ? internal.lib.mainLoop : internal.lib.bumpGeneration;
   if (delayMs <= 0) {
     console_.debug(
       "[mainLoop] mainLoop is actively running and wants to keep running"
     );
-    await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
+    await ctx.scheduler.runAfter(0, toRun, {});
     if (mainLoop.state.kind !== "running") {
       await ctx.db.patch(mainLoop._id, { state: { kind: "running" } });
     }
   } else if (delayMs < Number.POSITIVE_INFINITY) {
     console_.debug(`[mainLoop] mainLoop wants to run after ${delayMs}ms`);
     const runAtTime = Date.now() + delayMs;
-    const fn = await ctx.scheduler.runAt(runAtTime, internal.lib.mainLoop, {});
+    const fn = await ctx.scheduler.runAt(runAtTime, toRun, {});
     await ctx.db.patch(mainLoop._id, {
       state: {
         kind: "scheduled",

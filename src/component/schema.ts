@@ -73,9 +73,11 @@ export default defineSchema({
     workId: v.id("work"),
   }).index("workId", ["workId"]),
   pendingCompletion: defineTable({
+    generation: v.number(),
     completionStatus,
     workId: v.id("work"),
-  }).index("workId", ["workId"]),
+  }).index("workId", ["workId"])
+  .index("generation", ["generation"]),
   pendingCancelation: defineTable({
     workId: v.id("work"),
   }),
@@ -90,4 +92,8 @@ export default defineSchema({
     completionStatus,
     workId: v.id("work"),
   }).index("workId", ["workId"]),
+
+  completionGeneration: defineTable({
+    generation: v.number(),
+  }),
 });
