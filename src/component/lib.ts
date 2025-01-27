@@ -92,6 +92,8 @@ export const mainLoop = internalMutation({
     const { maxParallelism } = options;
     let didSomething = false;
 
+    let inProgressCountChange = 0;
+
     // Move from pendingCompletion to completedWork, deleting from inProgressWork.
     // We could do all of these, but we don't want to OCC with work completing,
     // so we only do a few at a time.
@@ -105,7 +107,8 @@ export const mainLoop = internalMutation({
           .withIndex("workId", (q) => q.eq("workId", pendingCompletion.workId))
           .unique();
         if (inProgressWork) {
-          await deleteInProgressWork(ctx, inProgressWork._id);
+          await ctx.db.delete(inProgressWork._id);
+          inProgressCountChange--;
           await ctx.db.insert("completedWork", {
             completionStatus: pendingCompletion.completionStatus,
             workId: pendingCompletion.workId,
@@ -128,7 +131,7 @@ export const mainLoop = internalMutation({
     // read it all into memory. BUT we don't have to -- we can just read
     // the count from the inProgressCount table.
     const inProgressCount = await ctx.db.query("inProgressCount").unique();
-    const inProgressBefore = inProgressCount?.count ?? 0;
+    const inProgressBefore = (inProgressCount?.count ?? 0) + inProgressCountChange;
     console_.debug(`[mainLoop] ${inProgressBefore} in progress`);
     console_.timeEnd("[mainLoop] inProgress count");
 
@@ -145,15 +148,7 @@ export const mainLoop = internalMutation({
           timeoutMs,
           workId: pendingWork.workId,
         });
-        if (inProgressCount) {
-          await ctx.db.patch(inProgressCount._id, {
-            count: inProgressCount.count + 1,
-          });
-        } else {
-          await ctx.db.insert("inProgressCount", {
-            count: 1,
-          });
-        }
+        inProgressCountChange++;
         await ctx.db.delete(pendingWork._id);
         didSomething = true;
       })
@@ -171,7 +166,8 @@ export const mainLoop = internalMutation({
           .unique();
         if (inProgressWork) {
           await ctx.scheduler.cancel(inProgressWork.running);
-          await deleteInProgressWork(ctx, inProgressWork._id);
+          await ctx.db.delete(inProgressWork._id);
+          inProgressCountChange--;
           await ctx.db.insert("completedWork", {
             workId: pendingCancelation.workId,
             completionStatus: "canceled",
@@ -201,7 +197,8 @@ export const mainLoop = internalMutation({
               inProgressWork.workId,
               result
             );
-            await deleteInProgressWork(ctx, inProgressWork._id);
+            inProgressCountChange--;
+            await ctx.db.delete(inProgressWork._id);
             await ctx.db.insert("completedWork", {
               workId: inProgressWork.workId,
               completionStatus: result.completionStatus,
@@ -213,6 +210,18 @@ export const mainLoop = internalMutation({
         })
       );
       console_.timeEnd("[mainLoop] inProgressWork check for unclean exits");
+    }
+
+    if (inProgressCountChange !== 0) {
+      if (inProgressCount) {
+        await ctx.db.patch(inProgressCount._id, {
+          count: inProgressCount.count + inProgressCountChange,
+        });
+      } else {
+        await ctx.db.insert("inProgressCount", {
+          count: inProgressCountChange,
+        });
+      }
     }
 
     console_.time("[mainLoop] kickMainLoop");
@@ -239,19 +248,6 @@ export const mainLoop = internalMutation({
     console_.timeEnd("[mainLoop] kickMainLoop");
   },
 });
-
-async function deleteInProgressWork(
-  ctx: MutationCtx,
-  inProgressWorkId: Id<"inProgressWork">
-) {
-  await ctx.db.delete(inProgressWorkId);
-  const inProgressCount = await ctx.db.query("inProgressCount").unique();
-  if (inProgressCount) {
-    await ctx.db.patch(inProgressCount._id, {
-      count: inProgressCount.count - 1,
-    });
-  }
-}
 
 async function beginWork(
   ctx: MutationCtx,
