@@ -376,8 +376,7 @@ export const runMutationWrapper = internalMutation({
 });
 
 async function getMainLoop(ctx: QueryCtx) {
-  // Avoid skipping tombstones with order and first.
-  const mainLoop = await ctx.db.query("mainLoop").order("desc").first();
+  const mainLoop = await ctx.db.query("mainLoop").unique();
   if (!mainLoop) {
     throw new Error("mainLoop doesn't exist");
   }
@@ -397,7 +396,7 @@ export const stopCleanup = mutation({
 async function loopFromMainLoop(ctx: MutationCtx, delayMs: number) {
   const console_ = await console(ctx);
   const mainLoop = await getMainLoop(ctx);
-  if (mainLoop.kind === "idle") {
+  if (mainLoop.state.kind === "idle") {
     throw new Error("mainLoop is idle but `loopFromMainLoop` was called");
   }
   if (delayMs <= 0) {
@@ -405,21 +404,23 @@ async function loopFromMainLoop(ctx: MutationCtx, delayMs: number) {
       "[mainLoop] mainLoop is actively running and wants to keep running"
     );
     await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
-    if (mainLoop.kind !== "running") {
-      await ctx.db.replace(mainLoop._id, { kind: "running" });
+    if (mainLoop.state.kind !== "running") {
+      await ctx.db.patch(mainLoop._id, { state: { kind: "running" } });
     }
   } else if (delayMs < Number.POSITIVE_INFINITY) {
     console_.debug(`[mainLoop] mainLoop wants to run after ${delayMs}ms`);
     const runAtTime = Date.now() + delayMs;
     const fn = await ctx.scheduler.runAt(runAtTime, internal.lib.mainLoop, {});
-    await ctx.db.replace(mainLoop._id, {
-      kind: "scheduled",
-      fn,
-      runAtTime,
+    await ctx.db.patch(mainLoop._id, {
+      state: {
+        kind: "scheduled",
+        fn,
+        runAtTime,
+      },
     });
   } else {
     console_.debug("[mainLoop] mainLoop wants to become idle");
-    await ctx.db.replace(mainLoop._id, { kind: "idle" });
+    await ctx.db.patch(mainLoop._id, { state: { kind: "idle" } });
   }
 }
 
@@ -432,21 +433,21 @@ async function kickMainLoop(
   // Look for mainLoop documents that we want to reschedule.
   // Only kick to run now if we're scheduled or idle.
   const mainLoop = await getMainLoop(ctx);
-  if (mainLoop.kind === "running") {
+  if (mainLoop.state.kind === "running") {
     console_.debug(
       `[${source}] mainLoop is actively running, so we don't need to do anything`
     );
     return;
   }
   // mainLoop is scheduled to run later, so we should cancel it and reschedule.
-  if (mainLoop.kind === "scheduled") {
-    await ctx.scheduler.cancel(mainLoop.fn);
+  if (mainLoop.state.kind === "scheduled") {
+    await ctx.scheduler.cancel(mainLoop.state.fn);
   }
   await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
   console_.debug(
     `[${source}] mainLoop was scheduled later, so reschedule it to run now`
   );
-  await ctx.db.replace(mainLoop._id, { kind: "running" });
+  await ctx.db.patch(mainLoop._id, { state: { kind: "running" } });
 }
 
 export const status = query({
@@ -547,11 +548,11 @@ async function ensurePoolAndLoopExist(
     const console_ = await console(ctx);
     await ctx.db.insert("pool", opts);
     console_.debug(`[${source}] starting mainLoop`);
-    const exists = await ctx.db.query("mainLoop").first();
+    const exists = await ctx.db.query("mainLoop").unique();
     if (exists) {
       throw new Error("mainLoop already exists");
     }
-    await ctx.db.insert("mainLoop", { kind: "running" });
+    await ctx.db.insert("mainLoop", { state: { kind: "running" } });
     await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
   }
   await ensureCleanupCron(ctx, opts.statusTtl);

@@ -78,10 +78,6 @@ export declare const components: {
       >;
       stopCleanup: FunctionReference<"mutation", "internal", {}, any>;
     };
-    stats: {
-      debugCounts: FunctionReference<"query", "internal", {}, any>;
-      queueLength: FunctionReference<"query", "internal", {}, number>;
-    };
   };
   lowpriWorkpool: {
     lib: {
@@ -121,10 +117,6 @@ export declare const components: {
       >;
       stopCleanup: FunctionReference<"mutation", "internal", {}, any>;
     };
-    stats: {
-      debugCounts: FunctionReference<"query", "internal", {}, any>;
-      queueLength: FunctionReference<"query", "internal", {}, number>;
-    };
   };
   highPriWorkpool: {
     lib: {
@@ -163,10 +155,6 @@ export declare const components: {
           }
       >;
       stopCleanup: FunctionReference<"mutation", "internal", {}, any>;
-    };
-    stats: {
-      debugCounts: FunctionReference<"query", "internal", {}, any>;
-      queueLength: FunctionReference<"query", "internal", {}, number>;
     };
   };
 };

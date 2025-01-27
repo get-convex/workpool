@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { Doc } from "./_generated/dataModel";
-import { query } from "./_generated/server";
+import { internalQuery } from "./_generated/server";
 
 /**
  * Record stats about work execution. Intended to be queried by Axiom or Datadog.
@@ -50,7 +50,7 @@ export function recordCompleted(
  * Warning: this should not be used from a mutation, as it will cause conflicts.
  * Use this to debug or diagnose your queue length when it's backed up.
  */
-export const queueLength = query({
+export const queueLength = internalQuery({
   args: {},
   returns: v.number(),
   handler: async (ctx) => {
@@ -63,7 +63,7 @@ export const queueLength = query({
  * Warning: this should not be used from a mutation, as it will cause conflicts.
  * Use this while developing to see the state of the queue.
  */
-export const debugCounts = query({
+export const debugCounts = internalQuery({
   args: {},
   returns: v.any(),
   handler: async (ctx) => {

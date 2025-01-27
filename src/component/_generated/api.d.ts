@@ -63,10 +63,6 @@ export type Mounts = {
     >;
     stopCleanup: FunctionReference<"mutation", "public", {}, any>;
   };
-  stats: {
-    debugCounts: FunctionReference<"query", "public", {}, any>;
-    queueLength: FunctionReference<"query", "public", {}, number>;
-  };
 };
 // For now fullApiWithMounts is only fullApi which provides
 // jump-to-definition in component client code.

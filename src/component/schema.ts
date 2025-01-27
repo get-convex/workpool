@@ -50,8 +50,8 @@ export default defineSchema({
     logLevel,
   }),
 
-  mainLoop: defineTable(
-    v.union(
+  mainLoop: defineTable({
+    state: v.union(
       v.object({ kind: v.literal("running") }),
       v.object({
         kind: v.literal("scheduled"),
@@ -59,8 +59,8 @@ export default defineSchema({
         fn: v.id("_scheduled_functions"),
       }),
       v.object({ kind: v.literal("idle") })
-    )
-  ),
+    ),
+  }),
 
   work: defineTable({
     fnType: v.union(v.literal("action"), v.literal("mutation")),
