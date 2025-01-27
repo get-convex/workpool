@@ -106,16 +106,17 @@ export const mainLoop = internalMutation({
           .unique();
         if (inProgressWork) {
           await ctx.db.delete(inProgressWork._id);
+          await ctx.db.insert("completedWork", {
+            completionStatus: pendingCompletion.completionStatus,
+            workId: pendingCompletion.workId,
+          });
+          const work = (await ctx.db.get(pendingCompletion.workId))!;
+          console_.info(
+            recordCompleted(work, pendingCompletion.completionStatus)
+          );
+          await ctx.db.delete(work._id);
         }
         await ctx.db.delete(pendingCompletion._id);
-        await ctx.db.insert("completedWork", {
-          completionStatus: pendingCompletion.completionStatus,
-          workId: pendingCompletion.workId,
-        });
-        const work = (await ctx.db.get(pendingCompletion.workId))!;
-        console_.info(
-          recordCompleted(work, pendingCompletion.completionStatus)
-        );
         didSomething = true;
       })
     );
@@ -166,6 +167,7 @@ export const mainLoop = internalMutation({
           });
           const work = (await ctx.db.get(pendingCancelation.workId))!;
           console_.info(recordCompleted(work, "canceled"));
+          await ctx.db.delete(work._id);
         }
         await ctx.db.delete(pendingCancelation._id);
         didSomething = true;
@@ -507,7 +509,10 @@ export const cleanup = mutation({
     await Promise.all(
       docs.map(async (doc) => {
         await ctx.db.delete(doc._id);
-        await ctx.db.delete(doc.workId);
+        const work = await ctx.db.get(doc.workId);
+        if (work) {
+          await ctx.db.delete(work._id);
+        }
       })
     );
     if (docs.length === MAX_CLEANUP_DOCS) {
