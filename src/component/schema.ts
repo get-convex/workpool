@@ -76,8 +76,9 @@ export default defineSchema({
     generation: v.number(),
     completionStatus,
     workId: v.id("work"),
-  }).index("workId", ["workId"])
-  .index("generation", ["generation"]),
+  })
+    .index("workId", ["workId"])
+    .index("generation", ["generation"]),
   pendingCancelation: defineTable({
     workId: v.id("work"),
   }),

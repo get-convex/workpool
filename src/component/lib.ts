@@ -102,14 +102,17 @@ export const mainLoop = internalMutation({
     const generation = await ctx.db.query("completionGeneration").unique();
     const generationNumber = generation?.generation ?? 0;
     if (generationNumber !== args.generation) {
-      throw new Error(`generation mismatch: ${generationNumber} !== ${args.generation}`);
+      throw new Error(
+        `generation mismatch: ${generationNumber} !== ${args.generation}`
+      );
     }
     // Collect all pending completions for the previous generation.
     // This won't be too many because the jobs all correspond to being scheduled
     // by a single mainLoop (the previous one), so they're limited by MAX_PARALLELISM.
-    const completed = await ctx.db.query("pendingCompletion")
+    const completed = await ctx.db
+      .query("pendingCompletion")
       .withIndex("generation", (q) => q.eq("generation", generationNumber - 1))
-      .collect()
+      .collect();
     console_.debug(`[mainLoop] completing ${completed.length}`);
     await Promise.all(
       completed.map(async (pendingCompletion) => {
@@ -197,7 +200,8 @@ export const mainLoop = internalMutation({
     // In case there are more pending completions at higher generation numbers,
     // there's more to do.
     if (!didSomething) {
-      const nextPendingCompletion = await ctx.db.query("pendingCompletion")
+      const nextPendingCompletion = await ctx.db
+        .query("pendingCompletion")
         .withIndex("generation", (q) => q.eq("generation", generationNumber))
         .first();
       didSomething = nextPendingCompletion !== null;
@@ -380,7 +384,9 @@ export const saveResult = internalMutation({
     completionStatus,
   },
   handler: async (ctx, args) => {
-    const currentGeneration = await ctx.db.query("completionGeneration").unique();
+    const currentGeneration = await ctx.db
+      .query("completionGeneration")
+      .unique();
     const generation = currentGeneration?.generation ?? 0;
     await ctx.db.insert("pendingCompletion", {
       completionStatus: args.completionStatus,
@@ -394,7 +400,9 @@ export const saveResult = internalMutation({
 export const bumpGeneration = internalMutation({
   args: {},
   handler: async (ctx) => {
-    const currentGeneration = await ctx.db.query("completionGeneration").unique();
+    const currentGeneration = await ctx.db
+      .query("completionGeneration")
+      .unique();
     const generation = (currentGeneration?.generation ?? 0) + 1;
     if (!currentGeneration) {
       await ctx.db.insert("completionGeneration", { generation });
@@ -467,7 +475,11 @@ async function loopFromMainLoop(ctx: MutationCtx, delayMs: number) {
   } else if (delayMs < Number.POSITIVE_INFINITY) {
     console_.debug(`[mainLoop] mainLoop wants to run after ${delayMs}ms`);
     const runAtTime = Date.now() + delayMs;
-    const fn = await ctx.scheduler.runAt(runAtTime, internal.lib.bumpGeneration, {});
+    const fn = await ctx.scheduler.runAt(
+      runAtTime,
+      internal.lib.bumpGeneration,
+      {}
+    );
     await ctx.db.patch(mainLoop._id, {
       state: {
         kind: "scheduled",
@@ -615,7 +627,9 @@ async function ensurePoolAndLoopExist(
       throw new Error("mainLoop already exists");
     }
     await ctx.db.insert("mainLoop", { state: { kind: "running" } });
-    const currentGeneration = await ctx.db.query("completionGeneration").unique();
+    const currentGeneration = await ctx.db
+      .query("completionGeneration")
+      .unique();
     if (currentGeneration) {
       throw new Error("completionGeneration already exists");
     }
