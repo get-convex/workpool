@@ -94,6 +94,8 @@ export const mainLoop = internalMutation({
     const { maxParallelism } = options;
     let didSomething = false;
 
+    let inProgressCountChange = 0;
+
     // Move from pendingCompletion to completedWork, deleting from inProgressWork.
     // Generation is used to avoid OCCs with work completing.
     console_.time("[mainLoop] pendingCompletion");
@@ -117,6 +119,7 @@ export const mainLoop = internalMutation({
           .unique();
         if (inProgressWork) {
           await ctx.db.delete(inProgressWork._id);
+          inProgressCountChange--;
           await ctx.db.insert("completedWork", {
             completionStatus: pendingCompletion.completionStatus,
             workId: pendingCompletion.workId,
@@ -136,14 +139,17 @@ export const mainLoop = internalMutation({
     console_.time("[mainLoop] inProgress count");
     // This is the only function reading and writing inProgressWork,
     // and it's bounded by MAX_POSSIBLE_PARALLELISM, so we can
-    // read it all into memory.
-    const inProgressBefore = await ctx.db.query("inProgressWork").collect();
-    console_.debug(`[mainLoop] ${inProgressBefore.length} in progress`);
+    // read it all into memory. BUT we don't have to -- we can just read
+    // the count from the inProgressCount table.
+    const inProgressCount = await ctx.db.query("inProgressCount").unique();
+    const inProgressBefore =
+      (inProgressCount?.count ?? 0) + inProgressCountChange;
+    console_.debug(`[mainLoop] ${inProgressBefore} in progress`);
     console_.timeEnd("[mainLoop] inProgress count");
 
     // Move from pendingWork to inProgressWork.
     console_.time("[mainLoop] pendingWork");
-    const toSchedule = maxParallelism - inProgressBefore.length;
+    const toSchedule = maxParallelism - inProgressBefore;
     const pending = await ctx.db.query("pendingStart").take(toSchedule);
     console_.debug(`[mainLoop] scheduling ${pending.length} pending work`);
     await Promise.all(
@@ -154,6 +160,7 @@ export const mainLoop = internalMutation({
           timeoutMs,
           workId: pendingWork.workId,
         });
+        inProgressCountChange++;
         await ctx.db.delete(pendingWork._id);
         didSomething = true;
       })
@@ -172,6 +179,7 @@ export const mainLoop = internalMutation({
         if (inProgressWork) {
           await ctx.scheduler.cancel(inProgressWork.running);
           await ctx.db.delete(inProgressWork._id);
+          inProgressCountChange--;
           await ctx.db.insert("completedWork", {
             workId: pendingCancelation.workId,
             completionStatus: "canceled",
@@ -205,6 +213,7 @@ export const mainLoop = internalMutation({
               inProgressWork.workId,
               result
             );
+            inProgressCountChange--;
             await ctx.db.delete(inProgressWork._id);
             await ctx.db.insert("completedWork", {
               workId: inProgressWork.workId,
@@ -217,6 +226,18 @@ export const mainLoop = internalMutation({
         })
       );
       console_.timeEnd("[mainLoop] inProgressWork check for unclean exits");
+    }
+
+    if (inProgressCountChange !== 0) {
+      if (inProgressCount) {
+        await ctx.db.patch(inProgressCount._id, {
+          count: inProgressCount.count + inProgressCountChange,
+        });
+      } else {
+        await ctx.db.insert("inProgressCount", {
+          count: inProgressCountChange,
+        });
+      }
     }
 
     console_.time("[mainLoop] kickMainLoop");

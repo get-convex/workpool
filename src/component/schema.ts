@@ -87,6 +87,9 @@ export default defineSchema({
     timeoutMs: v.union(v.number(), v.null()),
     workId: v.id("work"),
   }).index("workId", ["workId"]),
+  inProgressCount: defineTable({
+    count: v.number(),
+  }),
 
   completedWork: defineTable({
     completionStatus,
