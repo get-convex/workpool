@@ -196,7 +196,12 @@ export const mainLoop = internalMutation({
 
     // In case there are more pending completions at higher generation numbers,
     // there's more to do.
-    didSomething ||= (await ctx.db.query("pendingCompletion").first()) !== null;
+    if (!didSomething) {
+      const nextPendingCompletion = await ctx.db.query("pendingCompletion")
+        .withIndex("generation", (q) => q.eq("generation", generationNumber))
+        .first();
+      didSomething = nextPendingCompletion !== null;
+    }
 
     if (!didSomething) {
       console_.time("[mainLoop] inProgressWork check for unclean exits");
