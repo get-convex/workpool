@@ -157,7 +157,9 @@ export const mainLoop = internalMutation({
     // skip over tombstones of pendingStart documents which haven't been cleaned up yet.
     // WARNING: this might skip over pendingStart documents if their _creationTime
     // was assigned out of order. We handle that below.
-    const pendingStartCursorDoc = await ctx.db.query("pendingStartCursor").unique();
+    const pendingStartCursorDoc = await ctx.db
+      .query("pendingStartCursor")
+      .unique();
     const pendingStartCursor = pendingStartCursorDoc?.cursor ?? 0;
 
     // Schedule as many as needed to reach maxParallelism.
@@ -183,11 +185,18 @@ export const mainLoop = internalMutation({
         didSomething = true;
       })
     );
-    const newPendingStartCursor = pending.length > 0 ? pending[pending.length - 1]._creationTime : pendingStartCursor;
+    const newPendingStartCursor =
+      pending.length > 0
+        ? pending[pending.length - 1]._creationTime
+        : pendingStartCursor;
     if (!pendingStartCursorDoc) {
-      await ctx.db.insert("pendingStartCursor", { cursor: newPendingStartCursor });
+      await ctx.db.insert("pendingStartCursor", {
+        cursor: newPendingStartCursor,
+      });
     } else {
-      await ctx.db.patch(pendingStartCursorDoc._id, { cursor: newPendingStartCursor });
+      await ctx.db.patch(pendingStartCursorDoc._id, {
+        cursor: newPendingStartCursor,
+      });
     }
     console_.timeEnd("[mainLoop] pendingStart");
 
@@ -233,7 +242,7 @@ export const mainLoop = internalMutation({
     // otherwise idle so it doesn't matter if this function takes a while walking
     // tombstones.
     if (!didSomething && pendingStartCursorDoc) {
-      const pendingStartDoc = await ctx.db.query("pendingStart").first();
+      const pendingStartDoc = await ctx.db.query("pendingStart").order("desc").first();
       if (pendingStartDoc) {
         console_.warn(`[mainLoop] missed pendingStart docs; discarding cursor`);
         await ctx.db.delete(pendingStartCursorDoc._id);
