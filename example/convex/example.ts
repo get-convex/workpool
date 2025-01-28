@@ -7,7 +7,7 @@ const highPriPool = new Workpool(components.highPriWorkpool, {
   maxParallelism: 20,
   // For tests, disable completed work cleanup.
   statusTtl: Number.POSITIVE_INFINITY,
-  logLevel: "INFO",
+  logLevel: "DEBUG",
 });
 const pool = new Workpool(components.workpool, {
   maxParallelism: 3,

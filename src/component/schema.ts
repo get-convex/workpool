@@ -100,4 +100,8 @@ export default defineSchema({
   completionGeneration: defineTable({
     generation: v.number(),
   }),
+
+  pendingStartCursor: defineTable({
+    cursor: v.number(),
+  }),
 });

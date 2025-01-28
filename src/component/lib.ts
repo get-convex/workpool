@@ -150,10 +150,25 @@ export const mainLoop = internalMutation({
     console_.debug(`[mainLoop] ${inProgressBefore} in progress`);
     console_.timeEnd("[mainLoop] inProgress count");
 
-    // Move from pendingWork to inProgressWork.
-    console_.time("[mainLoop] pendingWork");
+    // Move from pendingStart to inProgressWork.
+    console_.time("[mainLoop] pendingStart");
+
+    // Start reading from the latest cursor _creationTime, which allows us to
+    // skip over tombstones of pendingStart documents which haven't been cleaned up yet.
+    // WARNING: this might skip over pendingStart documents if their _creationTime
+    // was assigned out of order. We handle that below.
+    const pendingStartCursorDoc = await ctx.db.query("pendingStartCursor").unique();
+    const pendingStartCursor = pendingStartCursorDoc?.cursor ?? 0;
+
+    // Schedule as many as needed to reach maxParallelism.
     const toSchedule = maxParallelism - inProgressBefore;
-    const pending = await ctx.db.query("pendingStart").take(toSchedule);
+
+    const pending = await ctx.db
+      .query("pendingStart")
+      .withIndex("by_creation_time", (q) =>
+        q.gt("_creationTime", pendingStartCursor)
+      )
+      .take(toSchedule);
     console_.debug(`[mainLoop] scheduling ${pending.length} pending work`);
     await Promise.all(
       pending.map(async (pendingWork) => {
@@ -168,7 +183,13 @@ export const mainLoop = internalMutation({
         didSomething = true;
       })
     );
-    console_.timeEnd("[mainLoop] pendingWork");
+    const newPendingStartCursor = pending.length > 0 ? pending[pending.length - 1]._creationTime : pendingStartCursor;
+    if (!pendingStartCursorDoc) {
+      await ctx.db.insert("pendingStartCursor", { cursor: newPendingStartCursor });
+    } else {
+      await ctx.db.patch(pendingStartCursorDoc._id, { cursor: newPendingStartCursor });
+    }
+    console_.timeEnd("[mainLoop] pendingStart");
 
     console_.time("[mainLoop] pendingCancelation");
     const canceled = await ctx.db.query("pendingCancelation").take(BATCH_SIZE);
@@ -205,6 +226,18 @@ export const mainLoop = internalMutation({
         .withIndex("generation", (q) => q.eq("generation", generationNumber))
         .first();
       didSomething = nextPendingCompletion !== null;
+    }
+
+    // In case there are more "pendingStart" items we missed due to out-of-order
+    // _creationTime, we need to check for them. Do that here, when we're
+    // otherwise idle so it doesn't matter if this function takes a while walking
+    // tombstones.
+    if (!didSomething && pendingStartCursorDoc) {
+      const pendingStartDocs = await ctx.db.query("pendingStart").collect();
+      if (pendingStartDocs.length > 0) {
+        await ctx.db.delete(pendingStartCursorDoc._id);
+        didSomething = true;
+      }
     }
 
     if (!didSomething) {
