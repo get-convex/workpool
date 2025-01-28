@@ -81,8 +81,10 @@ const BATCH_SIZE = 10;
 // There should only ever be at most one of these scheduled or running.
 // The scheduled one is in the "mainLoop" table.
 export const mainLoop = internalMutation({
-  args: {},
-  handler: async (ctx, _args) => {
+  args: {
+    generation: v.number(),
+  },
+  handler: async (ctx, args) => {
     const console_ = await console(ctx);
 
     const options = (await ctx.db.query("pool").unique())!;
@@ -95,10 +97,22 @@ export const mainLoop = internalMutation({
     let inProgressCountChange = 0;
 
     // Move from pendingCompletion to completedWork, deleting from inProgressWork.
-    // We could do all of these, but we don't want to OCC with work completing,
-    // so we only do a few at a time.
+    // Generation is used to avoid OCCs with work completing.
     console_.time("[mainLoop] pendingCompletion");
-    const completed = await ctx.db.query("pendingCompletion").take(BATCH_SIZE);
+    const generation = await ctx.db.query("completionGeneration").unique();
+    const generationNumber = generation?.generation ?? 0;
+    if (generationNumber !== args.generation) {
+      throw new Error(
+        `generation mismatch: ${generationNumber} !== ${args.generation}`
+      );
+    }
+    // Collect all pending completions for the previous generation.
+    // This won't be too many because the jobs all correspond to being scheduled
+    // by a single mainLoop (the previous one), so they're limited by MAX_PARALLELISM.
+    const completed = await ctx.db
+      .query("pendingCompletion")
+      .withIndex("generation", (q) => q.eq("generation", generationNumber - 1))
+      .collect();
     console_.debug(`[mainLoop] completing ${completed.length}`);
     await Promise.all(
       completed.map(async (pendingCompletion) => {
@@ -183,7 +197,17 @@ export const mainLoop = internalMutation({
     );
     console_.timeEnd("[mainLoop] pendingCancelation");
 
-    if (completed.length === 0) {
+    // In case there are more pending completions at higher generation numbers,
+    // there's more to do.
+    if (!didSomething) {
+      const nextPendingCompletion = await ctx.db
+        .query("pendingCompletion")
+        .withIndex("generation", (q) => q.eq("generation", generationNumber))
+        .first();
+      didSomething = nextPendingCompletion !== null;
+    }
+
+    if (!didSomething) {
       console_.time("[mainLoop] inProgressWork check for unclean exits");
       // If all completions are handled, check everything in inProgressWork.
       // This will find everything that timed out, failed ungracefully, was
@@ -193,7 +217,7 @@ export const mainLoop = internalMutation({
         inProgress.map(async (inProgressWork) => {
           const result = await checkInProgressWork(ctx, inProgressWork);
           if (result !== null) {
-            console_.debug(
+            console_.warn(
               "[mainLoop] inProgressWork finished uncleanly",
               inProgressWork.workId,
               result
@@ -338,13 +362,15 @@ export const runActionWrapper = internalAction({
     const fnHandle = handleStr as FunctionHandle<"action">;
     try {
       await ctx.runAction(fnHandle, fnArgs);
-      await ctx.runMutation(internal.lib.saveResult, {
+      // NOTE: we could run `ctx.runMutation`, but we want to guarantee execution,
+      // and `ctx.scheduler.runAfter` won't OCC.
+      await ctx.scheduler.runAfter(0, internal.lib.saveResult, {
         workId,
         completionStatus: "success",
       });
     } catch (e: unknown) {
       console_.error(e);
-      await ctx.runMutation(internal.lib.saveResult, {
+      await ctx.scheduler.runAfter(0, internal.lib.saveResult, {
         workId,
         completionStatus: "error",
       });
@@ -355,29 +381,37 @@ export const runActionWrapper = internalAction({
 export const saveResult = internalMutation({
   args: {
     workId: v.id("work"),
-    result: v.optional(v.any()),
-    error: v.optional(v.string()),
     completionStatus,
   },
-  handler: saveResultHandler,
+  handler: async (ctx, args) => {
+    const currentGeneration = await ctx.db
+      .query("completionGeneration")
+      .unique();
+    const generation = currentGeneration?.generation ?? 0;
+    await ctx.db.insert("pendingCompletion", {
+      completionStatus: args.completionStatus,
+      workId: args.workId,
+      generation,
+    });
+    await kickMainLoop(ctx, "saveResult");
+  },
 });
 
-async function saveResultHandler(
-  ctx: MutationCtx,
-  {
-    workId,
-    completionStatus,
-  }: {
-    workId: Id<"work">;
-    completionStatus: "success" | "error" | "canceled" | "timeout";
-  }
-): Promise<void> {
-  await ctx.db.insert("pendingCompletion", {
-    completionStatus,
-    workId,
-  });
-  await kickMainLoop(ctx, "saveResult");
-}
+export const bumpGeneration = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const currentGeneration = await ctx.db
+      .query("completionGeneration")
+      .unique();
+    const generation = (currentGeneration?.generation ?? 0) + 1;
+    if (!currentGeneration) {
+      await ctx.db.insert("completionGeneration", { generation });
+    } else {
+      await ctx.db.patch(currentGeneration._id, { generation });
+    }
+    await ctx.scheduler.runAfter(0, internal.lib.mainLoop, { generation });
+  },
+});
 
 export const runMutationWrapper = internalMutation({
   args: {
@@ -390,10 +424,18 @@ export const runMutationWrapper = internalMutation({
     const fnHandle = handleStr as FunctionHandle<"mutation">;
     try {
       await ctx.runMutation(fnHandle, fnArgs);
-      await saveResultHandler(ctx, { workId, completionStatus: "success" });
+      // NOTE: we could run the `saveResult` handler here, or call `ctx.runMutation`,
+      // but we want the mutation to be a separate transaction to reduce the window for OCCs.
+      await ctx.scheduler.runAfter(0, internal.lib.saveResult, {
+        workId,
+        completionStatus: "success",
+      });
     } catch (e: unknown) {
       console_.error(e);
-      await saveResultHandler(ctx, { workId, completionStatus: "error" });
+      await ctx.scheduler.runAfter(0, internal.lib.saveResult, {
+        workId,
+        completionStatus: "error",
+      });
     }
   },
 });
@@ -426,14 +468,18 @@ async function loopFromMainLoop(ctx: MutationCtx, delayMs: number) {
     console_.debug(
       "[mainLoop] mainLoop is actively running and wants to keep running"
     );
-    await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
+    await ctx.scheduler.runAfter(0, internal.lib.bumpGeneration, {});
     if (mainLoop.state.kind !== "running") {
       await ctx.db.patch(mainLoop._id, { state: { kind: "running" } });
     }
   } else if (delayMs < Number.POSITIVE_INFINITY) {
     console_.debug(`[mainLoop] mainLoop wants to run after ${delayMs}ms`);
     const runAtTime = Date.now() + delayMs;
-    const fn = await ctx.scheduler.runAt(runAtTime, internal.lib.mainLoop, {});
+    const fn = await ctx.scheduler.runAt(
+      runAtTime,
+      internal.lib.bumpGeneration,
+      {}
+    );
     await ctx.db.patch(mainLoop._id, {
       state: {
         kind: "scheduled",
@@ -466,7 +512,9 @@ async function kickMainLoop(
   if (mainLoop.state.kind === "scheduled") {
     await ctx.scheduler.cancel(mainLoop.state.fn);
   }
-  await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
+  const currentGeneration = await ctx.db.query("completionGeneration").unique();
+  const generation = currentGeneration?.generation ?? 0;
+  await ctx.scheduler.runAfter(0, internal.lib.mainLoop, { generation });
   console_.debug(
     `[${source}] mainLoop was scheduled later, so reschedule it to run now`
   );
@@ -579,7 +627,14 @@ async function ensurePoolAndLoopExist(
       throw new Error("mainLoop already exists");
     }
     await ctx.db.insert("mainLoop", { state: { kind: "running" } });
-    await ctx.scheduler.runAfter(0, internal.lib.mainLoop, {});
+    const currentGeneration = await ctx.db
+      .query("completionGeneration")
+      .unique();
+    if (currentGeneration) {
+      throw new Error("completionGeneration already exists");
+    }
+    await ctx.db.insert("completionGeneration", { generation: 0 });
+    await ctx.scheduler.runAfter(0, internal.lib.mainLoop, { generation: 0 });
   }
   await ensureCleanupCron(ctx, opts.statusTtl);
 }

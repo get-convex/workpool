@@ -1,10 +1,4 @@
-import {
-  mutation,
-  action,
-  query,
-  internalMutation,
-  internalAction,
-} from "./_generated/server";
+import { mutation, action, query, internalAction } from "./_generated/server";
 import { api, components, internal } from "./_generated/api";
 import { Workpool } from "@convex-dev/workpool";
 import { v } from "convex/values";
@@ -182,11 +176,11 @@ export const foregroundWork = internalAction({
   },
 });
 
-export const startForegroundWork = internalMutation({
+export const startForegroundWork = internalAction({
   args: {},
   handler: async (ctx, _args) => {
     await Promise.all(
-      Array.from({ length: 20 }, () =>
+      Array.from({ length: 100 }, () =>
         highPriPool.enqueueAction(ctx, internal.example.foregroundWork, {})
       )
     );
