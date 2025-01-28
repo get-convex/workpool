@@ -233,8 +233,9 @@ export const mainLoop = internalMutation({
     // otherwise idle so it doesn't matter if this function takes a while walking
     // tombstones.
     if (!didSomething && pendingStartCursorDoc) {
-      const pendingStartDocs = await ctx.db.query("pendingStart").collect();
-      if (pendingStartDocs.length > 0) {
+      const pendingStartDoc = await ctx.db.query("pendingStart").first();
+      if (pendingStartDoc) {
+        console_.warn(`[mainLoop] missed pendingStart docs; discarding cursor`);
         await ctx.db.delete(pendingStartCursorDoc._id);
         didSomething = true;
       }
