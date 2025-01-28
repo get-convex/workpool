@@ -131,7 +131,8 @@ export const mainLoop = internalMutation({
     // read it all into memory. BUT we don't have to -- we can just read
     // the count from the inProgressCount table.
     const inProgressCount = await ctx.db.query("inProgressCount").unique();
-    const inProgressBefore = (inProgressCount?.count ?? 0) + inProgressCountChange;
+    const inProgressBefore =
+      (inProgressCount?.count ?? 0) + inProgressCountChange;
     console_.debug(`[mainLoop] ${inProgressBefore} in progress`);
     console_.timeEnd("[mainLoop] inProgress count");
 
