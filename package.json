@@ -61,12 +61,12 @@
     }
   },
   "peerDependencies": {
-    "convex": "^1.17.0"
+    "convex": "^1.17.0 || ^1.18.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.1",
     "@types/node": "^18.17.0",
-    "convex-test": "^0.0.35-alpha.0",
+    "convex-test": "^0.0.35",
     "eslint": "^9.9.1",
     "globals": "^15.9.0",
     "prettier": "3.2.5",
