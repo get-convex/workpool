@@ -1,5 +1,5 @@
 {
-  "name": "workpool",
+  "name": "@convex-dev/workpool",
   "description": "A Convex component for managing async work.",
   "repository": "github:get-convex/workpool",
   "homepage": "https://github.com/get-convex/workpool#readme",
