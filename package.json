@@ -7,7 +7,7 @@
     "email": "support@convex.dev",
     "url": "https://github.com/get-convex/workpool/issues"
   },
-  "version": "0.1.1",
+  "version": "0.1.2",
   "license": "Apache-2.0",
   "keywords": [
     "convex",
@@ -61,7 +61,7 @@
     }
   },
   "peerDependencies": {
-    "convex": "^1.17.0 || ^1.18.0"
+    "convex": ">=1.17.0 <1.25.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.1",
