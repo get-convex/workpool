@@ -1,6 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { Infer, v } from "convex/values";
-import { logLevel } from "./logging";
+import { logLevel } from "./logging.js";
 
 export const completionStatus = v.union(
   v.literal("success"),

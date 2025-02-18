@@ -10,9 +10,12 @@ import {
   getFunctionName,
 } from "convex/server";
 import { GenericId } from "convex/values";
-import { api } from "../component/_generated/api";
-import { LogLevel } from "../component/logging";
-import { completionStatus, type CompletionStatus } from "../component/schema";
+import { api } from "../component/_generated/api.js";
+import { LogLevel } from "../component/logging.js";
+import {
+  completionStatus,
+  type CompletionStatus,
+} from "../component/schema.js";
 export { completionStatus, type CompletionStatus };
 
 export type WorkId = string;

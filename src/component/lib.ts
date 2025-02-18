@@ -7,15 +7,15 @@ import {
   MutationCtx,
   query,
   QueryCtx,
-} from "./_generated/server";
+} from "./_generated/server.js";
 import { FunctionHandle, WithoutSystemFields } from "convex/server";
-import { Doc, Id } from "./_generated/dataModel";
-import { api, internal } from "./_generated/api";
-import { createLogger, logLevel } from "./logging";
-import { components } from "./_generated/api";
+import { Doc, Id } from "./_generated/dataModel.js";
+import { api, internal } from "./_generated/api.js";
+import { createLogger, logLevel } from "./logging.js";
+import { components } from "./_generated/api.js";
 import { Crons } from "@convex-dev/crons";
-import { recordCompleted, recordStarted } from "./stats";
-import { completionStatus } from "./schema";
+import { recordCompleted, recordStarted } from "./stats.js";
+import { completionStatus } from "./schema.js";
 
 const crons = new Crons(components.crons);
 
