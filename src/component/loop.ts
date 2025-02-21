@@ -23,6 +23,7 @@ import { recordStarted } from "./stats";
 const MINUTE = 60 * SECOND;
 const RECOVERY_THRESHOLD_MS = 5 * MINUTE; // attempt to recover jobs this old.
 const RECOVERY_PERIOD_SEGMENTS = toSegment(1 * MINUTE); // how often to check.
+const CURSOR_BUFFER_SEGMENTS = toSegment(2 * SECOND); // buffer for cursor updates.
 export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
   generation: 0n,
   segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
@@ -391,8 +392,10 @@ async function getNextUp(
     .withIndex("segment", (q) =>
       range.start
         ? range.end
-          ? q.gte("segment", range.start).lte("segment", range.end)
-          : q.gt("segment", range.start)
+          ? q
+              .gte("segment", range.start - CURSOR_BUFFER_SEGMENTS)
+              .lte("segment", range.end)
+          : q.gt("segment", range.start - CURSOR_BUFFER_SEGMENTS)
         : range.end
           ? q.lt("segment", range.end)
           : q
@@ -411,7 +414,12 @@ async function handleCompletions(
   const completed = await ctx.db
     .query("pendingCompletion")
     .withIndex("segment", (q) =>
-      q.gte("segment", state.segmentCursors.completion).lte("segment", segment)
+      q
+        .gte(
+          "segment",
+          state.segmentCursors.completion - CURSOR_BUFFER_SEGMENTS
+        )
+        .lte("segment", segment)
     )
     .collect();
   state.report.completed += completed.length;
@@ -499,7 +507,12 @@ async function handleCancelation(
   const canceled = await ctx.db
     .query("pendingCancelation")
     .withIndex("segment", (q) =>
-      q.gte("segment", state.segmentCursors.cancelation).lte("segment", segment)
+      q
+        .gte(
+          "segment",
+          state.segmentCursors.cancelation - CURSOR_BUFFER_SEGMENTS
+        )
+        .lte("segment", segment)
     )
     .take(CANCELLATION_BATCH_SIZE);
   state.segmentCursors.cancelation = canceled.at(-1)?.segment ?? segment;
@@ -540,7 +553,9 @@ async function handleStart(
   const pending = await ctx.db
     .query("pendingStart")
     .withIndex("segment", (q) =>
-      q.gte("segment", state.segmentCursors.incoming).lte("segment", segment)
+      q
+        .gte("segment", state.segmentCursors.incoming - CURSOR_BUFFER_SEGMENTS)
+        .lte("segment", segment)
     )
     .take(toSchedule);
   state.segmentCursors.incoming = pending.at(-1)?.segment ?? segment;
