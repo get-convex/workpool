@@ -65,9 +65,9 @@ export type OnComplete = Infer<typeof onComplete>;
 
 export type OnCompleteArgs = {
   /**
-   * The ID of the run that completed.
+   * The ID of the work that completed.
    */
-  runId: string;
+  workId: string;
   /**
    * The context object passed when enqueuing the work.
    * Useful for passing data from the enqueue site to the onComplete site.

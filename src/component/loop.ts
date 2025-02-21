@@ -156,7 +156,7 @@ export const complete = internalMutation({
               void
             >;
             await ctx.runMutation(handle, {
-              runId: work._id,
+              workId: work._id,
               context: work.onComplete.context,
               result: runResult,
             });
@@ -203,7 +203,7 @@ export const complete = internalMutation({
               void
             >;
             await ctx.runMutation(handle, {
-              runId: work._id,
+              workId: work._id,
               context: work.onComplete.context,
               result: { kind: "canceled" },
             });

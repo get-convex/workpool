@@ -13,7 +13,7 @@ import {
   RunResult,
   type LogLevel,
   type RetryBehavior,
-  OnCompleteArgs,
+  OnCompleteArgs as SharedOnCompleteArgs,
   Status,
   logLevel,
 } from "../component/shared.js";
@@ -172,7 +172,7 @@ export type CallbackOptions = {
    * ```ts
    * export const completion = internalMutation({
    *  args: {
-   *    runId: runIdValidator,
+   *    workId: workIdValidator,
    *    context: v.any(),
    *    result: runResult,
    *  },
@@ -193,6 +193,24 @@ export type CallbackOptions = {
    */
   context?: unknown;
 };
+
+export type OnCompleteArgs = {
+  /**
+   * The ID of the work that completed.
+   */
+  workId: WorkId;
+  /**
+   * The context object passed when enqueuing the work.
+   * Useful for passing data from the enqueue site to the onComplete site.
+   */
+  context: unknown;
+  /**
+   * The result of the run that completed.
+   */
+  result: RunResult;
+};
+// ensure OnCompleteArgs satisfies SharedOnCompleteArgs
+const _ = {} as OnCompleteArgs satisfies SharedOnCompleteArgs;
 
 function getRunAt(options?: SchedulerOptions): number {
   if (!options) {
