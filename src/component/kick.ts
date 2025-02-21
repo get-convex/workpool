@@ -45,7 +45,7 @@ export async function kickMainLoop(
     console.debug(
       `[${source}] mainLoop is scheduled to run later, so reschedule it to run now`
     );
-    await ctx.scheduler.cancel(runStatus.state.fn);
+    await ctx.scheduler.cancel(runStatus.state.scheduledId);
   }
   console.debug(
     `[${source}] mainLoop was scheduled later, so reschedule it to run now`

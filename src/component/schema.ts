@@ -61,7 +61,7 @@ export default defineSchema({
       v.object({
         kind: v.literal("scheduled"),
         segment,
-        fn: v.id("_scheduled_functions"),
+        scheduledId: v.id("_scheduled_functions"),
         saturated: v.boolean(),
         generation: v.int64(),
       }),
