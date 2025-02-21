@@ -1,24 +1,36 @@
 import {
   createFunctionHandle,
   DefaultFunctionArgs,
-  Expand,
   FunctionReference,
   FunctionVisibility,
-  GenericDataModel,
-  GenericMutationCtx,
-  GenericQueryCtx,
   getFunctionName,
 } from "convex/server";
-import { GenericId } from "convex/values";
+import { v, VString } from "convex/values";
 import { api } from "../component/_generated/api.js";
-import { LogLevel } from "../component/logging.js";
 import {
   completionStatus,
+  Config,
+  OnComplete,
+  runResult as runResultValidator,
+  RunResult,
   type CompletionStatus,
-} from "../component/schema.js";
+  type LogLevel,
+  type RetryBehavior,
+  OnCompleteArgs,
+} from "../component/shared.js";
+import { RunMutationCtx, RunQueryCtx, UseApi } from "./utils.js";
 export { completionStatus, type CompletionStatus };
+export { runResultValidator, type RunResult };
 
 export type WorkId = string;
+
+export const DEFAULT_RETRY_BEHAVIOR: RetryBehavior = {
+  maxAttempts: 5,
+  initialBackoffMs: 250,
+  base: 2,
+};
+export type RunId = string & { __isRunId: true };
+export const runIdValidator = v.string() as VString<RunId>;
 
 export class Workpool {
   constructor(
@@ -36,24 +48,45 @@ export class Workpool {
        * scheduled.
        */
       logLevel?: LogLevel;
-      /** How long to keep completed work in the database, for access by `status`.
-       * Default 1 day.
+      /** Default retry behavior for enqueued actions. */
+      defaultRetryBehavior?: RetryBehavior;
+      /** Whether to retry actions that fail by default. Default: false.
+       * NOTE: Only do this if your actions are idempotent.
+       * See the docs (README.md) for more details.
        */
-      statusTtl?: number;
+      retryActionsByDefault?: boolean;
     }
   ) {}
   async enqueueAction<Args extends DefaultFunctionArgs, ReturnType>(
     ctx: RunMutationCtx,
     fn: FunctionReference<"action", FunctionVisibility, Args, ReturnType>,
-    fnArgs: Args
+    fnArgs: Args,
+    options?: {
+      /** Whether to retry the action if it fails.
+       * If true, it will use the default retry behavior.
+       * If custom behavior is provided, it will retry using that behavior.
+       * If unset, it will use the Workpool's configured default.
+       */
+      retry?: boolean | RetryBehavior;
+    } & CallbackOptions
   ): Promise<WorkId> {
-    const fnHandle = await createFunctionHandle(fn);
+    const retryBehavior = getRetryBehavior(
+      this.options.defaultRetryBehavior,
+      this.options.retryActionsByDefault,
+      options?.retry
+    );
+    const onComplete: OnComplete | undefined = options?.onComplete
+      ? {
+          fnHandle: await createFunctionHandle(options.onComplete),
+          context: options.context,
+        }
+      : undefined;
     const id = await ctx.runMutation(this.component.lib.enqueue, {
-      fnHandle,
-      fnName: getFunctionName(fn),
+      ...(await defaultEnqueueArgs(fn, this.options)),
       fnArgs,
       fnType: "action",
-      options: this.options,
+      onComplete,
+      retryBehavior,
     });
     return id as WorkId;
   }
@@ -62,63 +95,74 @@ export class Workpool {
     fn: FunctionReference<"mutation", FunctionVisibility, Args, ReturnType>,
     fnArgs: Args
   ): Promise<WorkId> {
-    const fnHandle = await createFunctionHandle(fn);
     const id = await ctx.runMutation(this.component.lib.enqueue, {
-      fnHandle,
-      fnName: getFunctionName(fn),
+      ...(await defaultEnqueueArgs(fn, this.options)),
       fnArgs,
       fnType: "mutation",
-      options: this.options,
     });
     return id as WorkId;
   }
   async cancel(ctx: RunMutationCtx, id: WorkId): Promise<void> {
     await ctx.runMutation(this.component.lib.cancel, { id });
   }
-  async status(
-    ctx: RunQueryCtx,
-    id: WorkId
-  ): Promise<
-    | { kind: "pending" }
-    | { kind: "inProgress" }
-    | { kind: "completed"; completionStatus: CompletionStatus }
-  > {
-    return await ctx.runQuery(this.component.lib.status, { id });
+  async status(ctx: RunQueryCtx, id: WorkId): Promise<RunResult> {
+    return ctx.runQuery(this.component.lib.status, { id });
   }
 }
 
-/* Type utils follow */
+function getRetryBehavior(
+  defaultRetryBehavior: RetryBehavior | undefined,
+  retryActionsByDefault: boolean | undefined,
+  retryOverride: boolean | RetryBehavior | undefined
+): RetryBehavior | undefined {
+  const defaultRetry = defaultRetryBehavior ?? DEFAULT_RETRY_BEHAVIOR;
+  const retryByDefault = retryActionsByDefault ?? false;
+  if (retryOverride === true) {
+    return defaultRetry;
+  }
+  if (retryOverride === false) {
+    return undefined;
+  }
+  return retryOverride ?? (retryByDefault ? defaultRetry : undefined);
+}
 
-type RunQueryCtx = {
-  runQuery: GenericQueryCtx<GenericDataModel>["runQuery"];
+async function defaultEnqueueArgs(
+  fn: FunctionReference<"action" | "mutation", FunctionVisibility>,
+  { logLevel, maxParallelism }: Config
+) {
+  return {
+    fnHandle: await createFunctionHandle(fn),
+    fnName: getFunctionName(fn),
+    config: { logLevel, maxParallelism },
+  };
+}
+
+export type CallbackOptions = {
+  /**
+   * A mutation to run after the function succeeds, fails, or is canceled.
+   * The context type is for your use, feel free to provide a validator for it.
+   * e.g.
+   * ```ts
+   * export const completion = internalMutation({
+   *  args: {
+   *    runId: runIdValidator,
+   *    context: v.any(),
+   *    result: runResult,
+   *  },
+   *  handler: async (ctx, args) => {
+   *    console.log(args.result, "Got Context back -> ", args.context, Date.now() - args.context);
+   *  },
+   * });
+   * ```
+   */
+  onComplete?: FunctionReference<
+    "mutation",
+    FunctionVisibility,
+    OnCompleteArgs
+  > | null;
+
+  /**
+   * A context object to pass to the `onComplete` mutation.
+   */
+  context?: unknown;
 };
-type RunMutationCtx = {
-  runMutation: GenericMutationCtx<GenericDataModel>["runMutation"];
-};
-
-export type OpaqueIds<T> =
-  T extends GenericId<infer _T>
-    ? string
-    : T extends (infer U)[]
-      ? OpaqueIds<U>[]
-      : T extends object
-        ? { [K in keyof T]: OpaqueIds<T[K]> }
-        : T;
-
-export type UseApi<API> = Expand<{
-  [mod in keyof API]: API[mod] extends FunctionReference<
-    infer FType,
-    "public",
-    infer FArgs,
-    infer FReturnType,
-    infer FComponentPath
-  >
-    ? FunctionReference<
-        FType,
-        "internal",
-        OpaqueIds<FArgs>,
-        OpaqueIds<FReturnType>,
-        FComponentPath
-      >
-    : UseApi<API[mod]>;
-}>;

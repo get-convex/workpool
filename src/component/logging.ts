@@ -1,12 +1,4 @@
-import { v, type Infer } from "convex/values";
-
-export const logLevel = v.union(
-  v.literal("DEBUG"),
-  v.literal("INFO"),
-  v.literal("WARN"),
-  v.literal("ERROR")
-);
-export type LogLevel = Infer<typeof logLevel>;
+import { LogLevel } from "./shared.js";
 
 export type Logger = {
   debug: (...args: unknown[]) => void;
