@@ -14,10 +14,10 @@ flowchart LR
     Worker-->|"saveResult"| pendingCompletion
     pendingStart -->|mainLoop| workerRunning["internalState.running"]
     workerRunning-->|"mainLoop(pendingCompletion)"| Retry{"Needs retry?"}
-    Retry-->|no| onComplete
+    Retry-->|no| complete
     Retry-->|yes| pendingStart
-    pendingStart-->|"mainLoop(pendingCancellation)"| onComplete
-    workerRunning-->|"mainLoop(pendingCancellation)"| onComplete
+    pendingStart-->|"mainLoop(pendingCancellation)"| complete
+    workerRunning-->|"mainLoop(pendingCancellation)"| complete
 ```
  *
  * Retention optimization strategy:
@@ -73,7 +73,7 @@ export default defineSchema({
     ),
   }),
 
-  // Written on enqueue. Safe to read. Deleted after onComplete is called.
+  // Written on enqueue. Safe to read. Deleted by `complete`.
   work: defineTable({
     fnType: v.union(v.literal("action"), v.literal("mutation")),
     fnHandle: v.string(),

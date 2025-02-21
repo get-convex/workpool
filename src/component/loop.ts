@@ -11,8 +11,10 @@ import {
   LogLevel,
   nextSegment,
   toSegment,
+  runResult,
+  OnCompleteArgs,
 } from "./shared";
-import { WithoutSystemFields } from "convex/server";
+import { FunctionHandle, WithoutSystemFields } from "convex/server";
 import { recordCompleted, recordReport } from "./stats";
 
 const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
@@ -70,7 +72,6 @@ export const mainLoop = internalMutation({
     // Read pendingCompletions, including retry handling.
     console.time("[mainLoop] pendingCompletion");
     const done = await handleCompletions(ctx, state, args.segment, console);
-    // TODO: schedule calling the onComplete functions.
     console.timeEnd("[mainLoop] pendingCompletion");
 
     // Read pendingCancellation, deleting from pendingStart. If it's still running, queue to cancel.
@@ -116,15 +117,112 @@ export const mainLoop = internalMutation({
     }
 
     await ctx.db.replace(state._id, state);
-    // TODO: dispatch onComplete
+    await ctx.scheduler.runAfter(0, internal.loop.complete, {
+      done,
+      toCancel,
+    });
+    await ctx.scheduler.runAfter(0, internal.loop.updateRunStatus, {
+      generation: state.generation,
+    });
+  },
+});
+
+export const complete = internalMutation({
+  args: {
+    done: v.array(v.object({ runResult, workId: v.id("work") })),
+    toCancel: v.array(
+      v.object({
+        workId: v.id("work"),
+        scheduledId: v.id("_scheduled_functions"),
+        started: v.number(),
+      })
+    ),
+  },
+  handler: async (ctx, args) => {
+    const globals = await getGlobals(ctx);
+    const console = createLogger(globals.logLevel);
+    await Promise.all(
+      args.done.map(async ({ runResult, workId }) => {
+        const work = await ctx.db.get(workId);
+        if (!work) {
+          console.warn(`[complete] ${workId} is done, but its work is gone`);
+          return;
+        }
+        if (work.onComplete) {
+          try {
+            const handle = work.onComplete.fnHandle as FunctionHandle<
+              "mutation",
+              OnCompleteArgs,
+              void
+            >;
+            await ctx.runMutation(handle, {
+              runId: work._id,
+              context: work.onComplete.context,
+              result: runResult,
+            });
+            console.debug(`[complete] onComplete for ${workId} completed`);
+          } catch (e) {
+            console.error(
+              `[complete] error running onComplete for ${workId}`,
+              e
+            );
+          }
+        }
+        await ctx.db.delete(workId);
+      })
+    );
+    await Promise.all(
+      args.toCancel.map(async ({ workId, scheduledId }) => {
+        const job = await ctx.db.system.get(scheduledId);
+        if (!job) {
+          console.warn(
+            `[complete] trying to cancel ${workId} but its job is gone`
+          );
+        } else if (
+          job.state.kind !== "inProgress" &&
+          job.state.kind !== "pending"
+        ) {
+          console.warn(
+            `[complete] trying to cancel ${workId} but its job state is ${job.state.kind}`
+          );
+        } else {
+          await ctx.scheduler.cancel(scheduledId);
+        }
+        const work = await ctx.db.get(workId);
+        if (!work) {
+          console.warn(
+            `[complete] trying to cancel ${workId} but its work is gone`
+          );
+          return;
+        }
+        if (work.onComplete) {
+          try {
+            const handle = work.onComplete.fnHandle as FunctionHandle<
+              "mutation",
+              OnCompleteArgs,
+              void
+            >;
+            await ctx.runMutation(handle, {
+              runId: work._id,
+              context: work.onComplete.context,
+              result: { kind: "canceled" },
+            });
+            console.debug(`[complete] onComplete for ${workId} canceled`);
+          } catch (e) {
+            console.error(
+              `[complete] error running onComplete for ${workId}`,
+              e
+            );
+          }
+        }
+        await ctx.db.delete(workId);
+      })
+    );
   },
 });
 
 export const updateRunStatus = internalMutation({
-  args: {
-    generation: v.int64(),
-    segment: v.int64(),
-  },
+  args: { generation: v.int64() },
   handler: async (ctx, args) => {
     const globals = await getGlobals(ctx);
     const console = createLogger(globals.logLevel);
@@ -310,18 +408,14 @@ async function handleCompletions(
       q.gte("segment", state.segmentCursors.completion).lte("segment", segment)
     )
     .collect();
-  state.segmentCursors.completion = segment;
   state.report.completed += completed.length;
-  console.debug(`[mainLoop] completing ${completed.length}`);
-  state.running = state.running.filter(
-    (r) => !completed.some((c) => c.workId === r.workId)
-  );
+  state.segmentCursors.completion = segment;
   const done: Doc<"pendingCompletion">[] = [];
   await Promise.all(
     completed.map(async (c) => {
       const work = await ctx.db.get(c.workId);
       const maxAttempts = work?.retryBehavior?.maxAttempts;
-      if (work) {
+      if (work && state.running.some((r) => r.workId === c.workId)) {
         if (
           c.runResult.kind === "failed" &&
           maxAttempts &&
@@ -338,13 +432,29 @@ async function handleCompletions(
           done.push(c);
         }
         console.info(recordCompleted(work, c.runResult.kind));
+      } else if (work) {
+        console.warn(
+          `[mainLoop] completing ${c.workId} but it's not in "running"`
+        );
       } else {
         console.warn(`[mainLoop] completing ${c.workId} but it's not found`);
+      }
+      // Ensure there aren't any pending cancellations for this work.
+      const pendingCancelations = await ctx.db
+        .query("pendingCancelation")
+        .withIndex("workId", (q) => q.eq("workId", c.workId))
+        .collect();
+      for (const pendingCancelation of pendingCancelations) {
+        await ctx.db.delete(pendingCancelation._id);
       }
       await ctx.db.delete(c._id);
     })
   );
-  return done;
+  console.debug(`[mainLoop] completing ${done.length}`);
+  state.running = state.running.filter(
+    (r) => !completed.some((c) => c.workId === r.workId)
+  );
+  return done.map((c) => ({ runResult: c.runResult, workId: c.workId }));
 }
 
 async function rescheduleJob(
@@ -387,12 +497,11 @@ async function handleCancelation(
     )
     .take(CANCELLATION_BATCH_SIZE);
   state.segmentCursors.cancelation = canceled.at(-1)?.segment ?? segment;
-  state.report.canceled += canceled.length;
-  console.debug(`[mainLoop] canceling ${canceled.length}`);
-  // TODO: schedule cancellation as part of onComplete
   const toCancel = state.running.filter((r) =>
     canceled.some((c) => c.workId === r.workId)
   );
+  state.report.canceled += toCancel.length;
+  console.debug(`[mainLoop] canceling ${toCancel.length}`);
   state.running = state.running.filter(
     (r) => !canceled.some((c) => c.workId === r.workId)
   );
