@@ -65,7 +65,7 @@ describe("workpool", () => {
     ]);
   });
 
-  test("cancellation", async () => {
+  test("cancelation", async () => {
     const id = await t.mutation(api.example.enqueueOneMutation, { data: 1 });
     await t.mutation(api.example.cancelMutation, { id });
     await t.finishAllScheduledFunctions(vi.runAllTimers);

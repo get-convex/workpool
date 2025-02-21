@@ -8,16 +8,16 @@ const segment = v.int64();
 ```mermaid
 flowchart LR
     Client -->|enqueue| pendingStart
-    Client -->|cancel| pendingCancellation
-    Recovery-->|recover| pendingCancellation
+    Client -->|cancel| pendingCancelation
+    Recovery-->|recover| pendingCancelation
     Recovery-->|recover| pendingCompletion
     Worker-->|"saveResult"| pendingCompletion
     pendingStart -->|mainLoop| workerRunning["internalState.running"]
     workerRunning-->|"mainLoop(pendingCompletion)"| Retry{"Needs retry?"}
     Retry-->|no| complete
     Retry-->|yes| pendingStart
-    pendingStart-->|"mainLoop(pendingCancellation)"| complete
-    workerRunning-->|"mainLoop(pendingCancellation)"| complete
+    pendingStart-->|"mainLoop(pendingCancelation)"| complete
+    workerRunning-->|"mainLoop(pendingCancelation)"| complete
 ```
  *
  * Retention optimization strategy:
@@ -45,7 +45,7 @@ export default defineSchema({
       succeeded: v.number(), // finished successfully, regardless of retries
       failed: v.number(), // failed after all retries
       retries: v.number(), // failure that turned into a retry
-      canceled: v.number(), // cancellations processed
+      canceled: v.number(), // cancelations processed
       lastReportTs: v.number(),
     }),
     running: v.array(
@@ -101,7 +101,7 @@ export default defineSchema({
     .index("workId", ["workId"])
     .index("segment", ["segment"]),
 
-  // Written on cancellation, read & deleted by `mainLoop`.
+  // Written on cancelation, read & deleted by `mainLoop`.
   pendingCancelation: defineTable({
     segment,
     workId: v.id("work"),

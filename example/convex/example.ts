@@ -249,9 +249,9 @@ export const cancel = internalAction({
     id: workIdValidator,
   },
   handler: async (ctx, args) => {
-    console.log("Cancelling", args.id);
+    console.log("Canceling", args.id);
     if (args.id) {
-      console.log("Cancelling", args.id);
+      console.log("Canceling", args.id);
       await bigPool.cancel(ctx, args.id as WorkId);
     } else {
       await bigPool.cancelAll(ctx);

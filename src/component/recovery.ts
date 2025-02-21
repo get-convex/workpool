@@ -28,7 +28,7 @@ export const recover = internalMutation({
           return;
         }
         // This will find everything that timed out, failed ungracefully, was
-        // cancelled, or succeeded without a return value.
+        // canceled, or succeeded without a return value.
         switch (scheduled.state.kind) {
           case "failed": {
             console.debug(`${preamble} failed and detected in recovery`);

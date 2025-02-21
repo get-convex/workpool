@@ -112,7 +112,7 @@ export const status = query({
     if (pendingStart) {
       return { state: "pending", attempt: work.attempts } as const;
     }
-    // Assume it's in progress. It could be pending cancellation
+    // Assume it's in progress. It could be pending cancelation
     return { state: "running", attempt: work.attempts } as const;
   },
 });

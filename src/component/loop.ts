@@ -74,7 +74,7 @@ export const mainLoop = internalMutation({
     const done = await handleCompletions(ctx, state, args.segment, console);
     console.timeEnd("[mainLoop] pendingCompletion");
 
-    // Read pendingCancellation, deleting from pendingStart. If it's still running, queue to cancel.
+    // Read pendingCancelation, deleting from pendingStart. If it's still running, queue to cancel.
     console.time("[mainLoop] pendingCancelation");
     const toCancel = await handleCancelation(ctx, state, args.segment, console);
     console.timeEnd("[mainLoop] pendingCancelation");
@@ -234,15 +234,14 @@ export const updateRunStatus = internalMutation({
       );
     }
 
-    console.time("[updateRunStatus] outstandingCancellations");
+    console.time("[updateRunStatus] outstandingCancelations");
     const thisSegment = currentSegment();
-    const outstandingCancellations = await getNextUp(
-      ctx,
-      "pendingCancelation",
-      { start: state.segmentCursors.cancelation, end: thisSegment }
-    );
-    console.timeEnd("[updateRunStatus] outstandingCancellations");
-    if (outstandingCancellations) {
+    const outstandingCancelations = await getNextUp(ctx, "pendingCancelation", {
+      start: state.segmentCursors.cancelation,
+      end: thisSegment,
+    });
+    console.timeEnd("[updateRunStatus] outstandingCancelations");
+    if (outstandingCancelations) {
       await ctx.scheduler.runAfter(0, internal.loop.mainLoop, {
         generation: args.generation,
         segment: thisSegment,
@@ -446,7 +445,7 @@ async function handleCompletions(
       } else {
         console.warn(`[mainLoop] completing ${c.workId} but it's not found`);
       }
-      // Ensure there aren't any pending cancellations for this work.
+      // Ensure there aren't any pending cancelations for this work.
       const pendingCancelations = await ctx.db
         .query("pendingCancelation")
         .withIndex("workId", (q) => q.eq("workId", c.workId))
