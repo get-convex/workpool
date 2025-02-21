@@ -17,15 +17,14 @@ Data flow:
   future segments, and `mainLoop` reading from past segments.
 - State machine:
   {start} --client--> pendingStart (and writes to work)
-  pendingStart --mainLoop--> inProgressWork // to start work
+  pendingStart --mainLoop--> running // to start work
    --worker--> pendingCompletion // when work succeeds or fails
-  inProgressWork, pendingCompletion --mainLoop--> {end} // when work reports success or failure.
-  inProgressWork, pendingCompletion --mainLoop--> pendingStart // when retry is needed.
-  inProgressWork --mainLoop--> {end} // fails due to timeout / internal failure
-  inProgressWork --mainLoop--> pendingStart // retries due to timeout / internal failure
+  running, pendingCompletion --mainLoop--> {end} // when work reports success or failure.
+  running, pendingCompletion --mainLoop--> pendingStart // when retry is needed.
+  running --recovery--> pendingCompletion // fails due to timeout / internal failure
    --client--> pendingCancelation // cancel requested
   pendingCancelation, pendingStart --mainLoop--> {end} // when canceled before work starts.
-  pendingCancelation, inProgressWork --mainLoop--> {end} // attempts to cancel
+  pendingCancelation, running --mainLoop--> {end} // attempts to cancel
   pendingCancelation, pendingCompletion --mainLoop--> {end} // no-op, work is alreadydone.
   {end}: calls onComplete, then deletes work in the same transaction.
  */
@@ -39,8 +38,7 @@ export default defineSchema({
       completion: segment,
       cancelation: segment,
     }),
-    numRunning: v.number(),
-    lastRecoveryTs: v.number(),
+    lastRecovery: segment,
     report: v.object({
       completed: v.int64(),
       failed: v.int64(),
@@ -48,6 +46,13 @@ export default defineSchema({
       timedOut: v.int64(),
       lastReportTs: v.number(),
     }),
+    running: v.array(
+      v.object({
+        workId: v.id("work"),
+        scheduledId: v.id("_scheduled_functions"),
+        started: v.number(),
+      })
+    ),
   }),
 
   // Singleton, written by `mainLoop` when running, by client or worker otherwise.
@@ -101,11 +106,4 @@ export default defineSchema({
   })
     .index("workId", ["workId"])
     .index("segment", ["segment"]),
-
-  // Read, written, and deleted by `mainLoop`.
-  inProgressWork: defineTable({
-    running: v.id("_scheduled_functions"),
-    started: v.number(),
-    workId: v.id("work"),
-  }).index("workId", ["workId"]),
 });
