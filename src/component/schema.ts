@@ -9,7 +9,9 @@ const segment = v.int64();
 flowchart LR
     Client -->|enqueue| pendingStart
     Client -->|cancel| pendingCancellation
-    Worker-->|"saveResult or recovery"| pendingCompletion
+    Recovery-->|recover| pendingCancellation
+    Recovery-->|recover| pendingCompletion
+    Worker-->|"saveResult"| pendingCompletion
     pendingStart -->|mainLoop| workerRunning["internalState.running"]
     workerRunning-->|"mainLoop(pendingCompletion)"| Retry{"Needs retry?"}
     Retry-->|no| onComplete

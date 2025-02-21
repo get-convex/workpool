@@ -5,7 +5,7 @@ import { kickMainLoop } from "./kick";
 import schema from "./schema";
 import { RunResult, nextSegment } from "./shared";
 
-export const recoverOrKill = internalMutation({
+export const recover = internalMutation({
   args: {
     jobs: schema.tables.internalState.validator.fields.running,
   },

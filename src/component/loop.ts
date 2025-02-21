@@ -132,7 +132,7 @@ export const mainLoop = internalMutation({
         (r) => r.started < Date.now() - RECOVERY_THRESHOLD_MS
       );
       if (jobs.length) {
-        await ctx.scheduler.runAfter(0, internal.recovery.recoverOrKill, {
+        await ctx.scheduler.runAfter(0, internal.recovery.recover, {
           jobs,
         });
       }
