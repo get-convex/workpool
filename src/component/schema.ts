@@ -85,7 +85,6 @@ export default defineSchema({
   // Written on enqueue, read & deleted by `mainLoop`.
   pendingStart: defineTable({
     workId: v.id("work"),
-    config,
     segment,
   })
     .index("workId", ["workId"])

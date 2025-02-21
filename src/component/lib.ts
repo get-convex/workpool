@@ -42,7 +42,6 @@ export const enqueue = mutation({
     });
     await ctx.db.insert("pendingStart", {
       workId,
-      config,
       segment: toSegment(runAt),
     });
     await kickMainLoop(ctx, "enqueue", config);
