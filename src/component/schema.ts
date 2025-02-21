@@ -30,6 +30,8 @@ export default defineSchema({
   globals: defineTable(config),
   // Singleton, only read & written by `mainLoop`.
   internalState: defineTable({
+    // Ensure that only one mainLoop is running at a time.
+    generation: v.int64(),
     segmentCursors: v.object({
       incoming: segment,
       completion: segment,
@@ -51,18 +53,19 @@ export default defineSchema({
     ),
   }),
 
-  // Singleton, written by `mainLoop` when running, by client or worker otherwise.
+  // Singleton, written by `updateRunStatus` when running, by client or worker otherwise.
   // Safe to read from kickLoop, since it should update infrequently.
   runStatus: defineTable({
     state: v.union(
       v.object({ kind: v.literal("running") }),
-      // Only when scheduled >1 segment in the future.
       v.object({
         kind: v.literal("scheduled"),
         segment,
         fn: v.id("_scheduled_functions"),
+        saturated: v.boolean(),
+        generation: v.int64(),
       }),
-      v.object({ kind: v.literal("idle") })
+      v.object({ kind: v.literal("idle"), generation: v.int64() })
     ),
   }),
 

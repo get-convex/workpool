@@ -9,7 +9,7 @@ import { internalAction, internalMutation } from "./_generated/server";
 import { createLogger } from "./logging.js";
 import { logLevel, nextSegment, runResult } from "./shared";
 import { FunctionHandle } from "convex/server";
-import { kickMainLoop } from "./loop";
+import { kickMainLoop } from "./kick";
 
 export const runMutationWrapper = internalMutation({
   args: {

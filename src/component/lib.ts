@@ -9,7 +9,7 @@ import {
   status as statusValidator,
   toSegment,
 } from "./shared.js";
-import { kickMainLoop } from "./loop.js";
+import { kickMainLoop } from "./kick.js";
 
 const MAX_POSSIBLE_PARALLELISM = 100;
 
