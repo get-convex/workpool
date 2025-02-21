@@ -40,11 +40,7 @@ export function createLogger(level?: LogLevel): Logger {
     time: (label: string) => {
       if (levelIndex <= 0) {
         console.time(label);
-        return () => {
-          console.timeEnd(label);
-        };
       }
-      return () => {};
     },
     timeEnd: (label: string) => {
       if (levelIndex <= 0) {
