@@ -50,7 +50,7 @@ export const queryData = query({
 
 export const enqueueOneMutation = mutation({
   args: { data: v.number() },
-  handler: async (ctx, { data }): Promise<string> => {
+  handler: async (ctx, { data }): Promise<WorkId> => {
     return await smallPool.enqueueMutation(ctx, api.example.addMutation, {
       data,
     });
@@ -160,8 +160,11 @@ export const startBackgroundWork = internalAction({
 
 // Example foreground work: calling an API on behalf of a user.
 export const foregroundWork = internalAction({
-  args: {},
-  handler: async () => {
+  args: { ms: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    if (args.ms) {
+      await new Promise((resolve) => setTimeout(resolve, args.ms));
+    }
     await sampleWork();
   },
 });
@@ -170,9 +173,88 @@ export const startForegroundWork = internalAction({
   args: {},
   handler: async (ctx, _args) => {
     await Promise.all(
-      Array.from({ length: 100 }, () =>
-        bigPool.enqueueAction(ctx, internal.example.foregroundWork, {})
+      Array.from(
+        { length: 100 },
+        async () =>
+          await bigPool.enqueueAction(ctx, internal.example.foregroundWork, {})
       )
     );
+  },
+});
+
+const fate = v.union(
+  v.literal("succeed"),
+  v.literal("fail randomly"),
+  v.literal("fail always")
+);
+
+export const myAction = internalAction({
+  args: { fate, ms: v.optional(v.number()) },
+  handler: async (_ctx, { fate, ms }) => {
+    if (ms) {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+    }
+    switch (fate) {
+      case "succeed":
+        console.log("success");
+        break;
+      case "fail randomly":
+        if (Math.random() < 0.8) {
+          throw new Error("action failed.");
+        }
+        if (Math.random() < 0.01) {
+          // Incur a timeout.
+          console.log("I'm a baaaad timeout job.");
+          await new Promise((resolve) => setTimeout(resolve, 15 * 60 * 1000));
+        }
+        console.log("action succeded.");
+        break;
+      case "fail always":
+        throw new Error("action failed.");
+      default:
+        throw new Error("invalid action");
+    }
+  },
+});
+
+const N = 500;
+const BASE_MS = 1000;
+const MAX_MS = 10000;
+const CONCURRENCY = 50;
+export const runPaced = internalAction({
+  args: { n: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const ids: WorkId[] = [];
+    for (let i = 0; i < (args.n ?? N); i++) {
+      const id: WorkId = await bigPool.enqueueAction(
+        ctx,
+        internal.example.myAction,
+        {
+          fate: "succeed",
+          ms: BASE_MS + (MAX_MS - BASE_MS) * Math.random(),
+        }
+      );
+      console.log("enqueued", Date.now());
+      ids.push(id);
+      // exponential distribution of time to wait.
+      const avgRate = CONCURRENCY / ((BASE_MS + MAX_MS) / 2);
+      const t = -Math.log(Math.random()) / avgRate;
+      await new Promise((resolve) => setTimeout(resolve, t));
+    }
+  },
+});
+
+export const cancel = internalAction({
+  args: {
+    id: workIdValidator,
+  },
+  handler: async (ctx, args) => {
+    console.log("Cancelling", args.id);
+    if (args.id) {
+      console.log("Cancelling", args.id);
+      await bigPool.cancel(ctx, args.id as WorkId);
+    } else {
+      await bigPool.cancelAll(ctx);
+    }
   },
 });
