@@ -42,26 +42,31 @@ export declare const internal: FilterApi<
 export declare const components: {
   workpool: {
     lib: {
-      cancel: FunctionReference<"mutation", "internal", { id: string }, any>;
-      cleanup: FunctionReference<
+      cancel: FunctionReference<
         "mutation",
         "internal",
-        { maxAgeMs: number },
+        { id: string; logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR" },
         any
       >;
       enqueue: FunctionReference<
         "mutation",
         "internal",
         {
+          config: {
+            logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
+            maxParallelism: number;
+          };
           fnArgs: any;
           fnHandle: string;
           fnName: string;
           fnType: "action" | "mutation";
-          options: {
-            logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
-            maxParallelism: number;
-            statusTtl?: number;
+          onComplete?: { context?: any; fnHandle: string };
+          retryBehavior?: {
+            base: number;
+            initialBackoffMs: number;
+            maxAttempts: number;
           };
+          runAt: number;
         },
         string
       >;
@@ -69,38 +74,39 @@ export declare const components: {
         "query",
         "internal",
         { id: string },
-        | { kind: "pending" }
-        | { kind: "inProgress" }
-        | {
-            completionStatus: "success" | "error" | "canceled" | "timeout";
-            kind: "completed";
-          }
+        | { attempt: number; state: "pending" }
+        | { attempt: number; state: "running" }
+        | { state: "done" }
       >;
-      stopCleanup: FunctionReference<"mutation", "internal", {}, any>;
     };
   };
   lowpriWorkpool: {
     lib: {
-      cancel: FunctionReference<"mutation", "internal", { id: string }, any>;
-      cleanup: FunctionReference<
+      cancel: FunctionReference<
         "mutation",
         "internal",
-        { maxAgeMs: number },
+        { id: string; logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR" },
         any
       >;
       enqueue: FunctionReference<
         "mutation",
         "internal",
         {
+          config: {
+            logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
+            maxParallelism: number;
+          };
           fnArgs: any;
           fnHandle: string;
           fnName: string;
           fnType: "action" | "mutation";
-          options: {
-            logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
-            maxParallelism: number;
-            statusTtl?: number;
+          onComplete?: { context?: any; fnHandle: string };
+          retryBehavior?: {
+            base: number;
+            initialBackoffMs: number;
+            maxAttempts: number;
           };
+          runAt: number;
         },
         string
       >;
@@ -108,38 +114,39 @@ export declare const components: {
         "query",
         "internal",
         { id: string },
-        | { kind: "pending" }
-        | { kind: "inProgress" }
-        | {
-            completionStatus: "success" | "error" | "canceled" | "timeout";
-            kind: "completed";
-          }
+        | { attempt: number; state: "pending" }
+        | { attempt: number; state: "running" }
+        | { state: "done" }
       >;
-      stopCleanup: FunctionReference<"mutation", "internal", {}, any>;
     };
   };
   highPriWorkpool: {
     lib: {
-      cancel: FunctionReference<"mutation", "internal", { id: string }, any>;
-      cleanup: FunctionReference<
+      cancel: FunctionReference<
         "mutation",
         "internal",
-        { maxAgeMs: number },
+        { id: string; logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR" },
         any
       >;
       enqueue: FunctionReference<
         "mutation",
         "internal",
         {
+          config: {
+            logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
+            maxParallelism: number;
+          };
           fnArgs: any;
           fnHandle: string;
           fnName: string;
           fnType: "action" | "mutation";
-          options: {
-            logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
-            maxParallelism: number;
-            statusTtl?: number;
+          onComplete?: { context?: any; fnHandle: string };
+          retryBehavior?: {
+            base: number;
+            initialBackoffMs: number;
+            maxAttempts: number;
           };
+          runAt: number;
         },
         string
       >;
@@ -147,14 +154,10 @@ export declare const components: {
         "query",
         "internal",
         { id: string },
-        | { kind: "pending" }
-        | { kind: "inProgress" }
-        | {
-            completionStatus: "success" | "error" | "canceled" | "timeout";
-            kind: "completed";
-          }
+        | { attempt: number; state: "pending" }
+        | { attempt: number; state: "running" }
+        | { state: "done" }
       >;
-      stopCleanup: FunctionReference<"mutation", "internal", {}, any>;
     };
   };
 };

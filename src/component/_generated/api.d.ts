@@ -10,6 +10,7 @@
 
 import type * as lib from "../lib.js";
 import type * as logging from "../logging.js";
+import type * as shared from "../shared.js";
 import type * as stats from "../stats.js";
 
 import type {
@@ -28,25 +29,36 @@ import type {
 declare const fullApi: ApiFromModules<{
   lib: typeof lib;
   logging: typeof logging;
+  shared: typeof shared;
   stats: typeof stats;
 }>;
 export type Mounts = {
   lib: {
-    cancel: FunctionReference<"mutation", "public", { id: string }, any>;
-    cleanup: FunctionReference<"mutation", "public", { maxAgeMs: number }, any>;
+    cancel: FunctionReference<
+      "mutation",
+      "public",
+      { id: string; logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR" },
+      any
+    >;
     enqueue: FunctionReference<
       "mutation",
       "public",
       {
+        config: {
+          logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
+          maxParallelism: number;
+        };
         fnArgs: any;
         fnHandle: string;
         fnName: string;
         fnType: "action" | "mutation";
-        options: {
-          logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
-          maxParallelism: number;
-          statusTtl?: number;
+        onComplete?: { context?: any; fnHandle: string };
+        retryBehavior?: {
+          base: number;
+          initialBackoffMs: number;
+          maxAttempts: number;
         };
+        runAt: number;
       },
       string
     >;
@@ -54,14 +66,10 @@ export type Mounts = {
       "query",
       "public",
       { id: string },
-      | { kind: "pending" }
-      | { kind: "inProgress" }
-      | {
-          completionStatus: "success" | "error" | "canceled" | "timeout";
-          kind: "completed";
-        }
+      | { attempt: number; state: "pending" }
+      | { attempt: number; state: "running" }
+      | { state: "done" }
     >;
-    stopCleanup: FunctionReference<"mutation", "public", {}, any>;
   };
 };
 // For now fullApiWithMounts is only fullApi which provides
