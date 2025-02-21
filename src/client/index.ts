@@ -68,7 +68,8 @@ export class Workpool {
        * If unset, it will use the Workpool's configured default.
        */
       retry?: boolean | RetryBehavior;
-    } & CallbackOptions
+    } & CallbackOptions &
+      SchedulerOptions
   ): Promise<WorkId> {
     const retryBehavior = getRetryBehavior(
       this.options.defaultRetryBehavior,
@@ -85,6 +86,7 @@ export class Workpool {
       ...(await defaultEnqueueArgs(fn, this.options)),
       fnArgs,
       fnType: "action",
+      runAt: getRunAt(options),
       onComplete,
       retryBehavior,
     });
@@ -93,17 +95,22 @@ export class Workpool {
   async enqueueMutation<Args extends DefaultFunctionArgs, ReturnType>(
     ctx: RunMutationCtx,
     fn: FunctionReference<"mutation", FunctionVisibility, Args, ReturnType>,
-    fnArgs: Args
+    fnArgs: Args,
+    options?: CallbackOptions & SchedulerOptions
   ): Promise<WorkId> {
     const id = await ctx.runMutation(this.component.lib.enqueue, {
       ...(await defaultEnqueueArgs(fn, this.options)),
       fnArgs,
       fnType: "mutation",
+      runAt: getRunAt(options),
     });
     return id as WorkId;
   }
   async cancel(ctx: RunMutationCtx, id: WorkId): Promise<void> {
-    await ctx.runMutation(this.component.lib.cancel, { id });
+    await ctx.runMutation(this.component.lib.cancel, {
+      id,
+      logLevel: this.options.logLevel,
+    });
   }
   async status(ctx: RunQueryCtx, id: WorkId): Promise<RunResult> {
     return ctx.runQuery(this.component.lib.status, { id });
@@ -137,6 +144,24 @@ async function defaultEnqueueArgs(
   };
 }
 
+export type SchedulerOptions =
+  | {
+      /**
+       * The time (ms since epoch) to run the action at.
+       * If not provided, the action will be run as soon as possible.
+       * Note: this is advisory only. It may run later.
+       */
+      runAt?: number;
+    }
+  | {
+      /**
+       * The number of milliseconds to run the action after.
+       * If not provided, the action will be run as soon as possible.
+       * Note: this is advisory only. It may run later.
+       */
+      runAfter?: number;
+    };
+
 export type CallbackOptions = {
   /**
    * A mutation to run after the function succeeds, fails, or is canceled.
@@ -166,3 +191,16 @@ export type CallbackOptions = {
    */
   context?: unknown;
 };
+
+function getRunAt(options?: SchedulerOptions): number {
+  if (!options) {
+    return Date.now();
+  }
+  if ("runAt" in options && options.runAt !== undefined) {
+    return options.runAt;
+  }
+  if ("runAfter" in options && options.runAfter !== undefined) {
+    return Date.now() + options.runAfter;
+  }
+  return Date.now();
+}
