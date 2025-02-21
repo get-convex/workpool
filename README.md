@@ -6,6 +6,16 @@
 
 This Convex component pools actions and mutations to restrict parallel requests.
 
+- Configure multiple pools with different parallelism.
+- Retry failed actions (with backoff and jitter) for
+  [idempotent actions](#idempotency), fully configurable (respecting parallelism).
+- An `onComplete` callback so you can build durable, reliable workflows. Called
+  when the work is finished, whether it succeeded, failed, or was canceled.
+
+## Use cases
+
+### Separating and throttling async workloads
+
 Suppose you have some important async work, like sending verification emails,
 and some less important async work, like scraping data from an API. If all of
 these are scheduled with `ctx.scheduler.runAfter`, they'll compete with each
@@ -16,13 +26,14 @@ To resolve this problem, you can separate work into different pools.
 
 ```ts
 const emailPool = new Workpool(components.emailWorkpool, {
-  maxParallelism: 5,
+  maxParallelism: 10,
 });
 const scrapePool = new Workpool(components.scrapeWorkpool, {
-  maxParallelism: 1,
+  maxParallelism: 5,
 });
 
-export const signUp = mutation({
+export const userSignUp = mutation({
+  args: {...},
   handler: async (ctx, args) => {
     const userId = await ctx.db.insert("users", args);
     await emailPool.enqueueAction(ctx, internal.auth.sendEmailVerification, {
@@ -39,6 +50,95 @@ export const downloadLatestWeather = mutation({
   },
 });
 ```
+
+### Durable, reliable workflows meet workpool
+
+#### Retry management
+
+Imagine that the payment processor is a 3rd party API, and they temporarily have an
+outage. Now imagine you implement your own action retrying logic for your busy app.
+You'll find very quickly that your entire backend is overwhelmed with retrying actions.
+This could bog down live traffic with background work, and/or cause you to exceed
+rate limits with the payment provider.
+
+Creating an upper bound on how much work will be done in parallel is a good way to
+mitigate this risk. Actions that are currently backing off awaiting retry will not tie
+up a thread in the workpool.
+
+#### Completion handling
+
+By handing off asynchronous work, it will be guaranteed to run, and with retries
+you can account for temporary failures, while avoiding a "stampeding herd"
+during third party outages.
+
+With the `onComplete` callback, you can define how to proceed after each step,
+whether that enqueues another job to the workpool, updates the database, etc.
+It will always be called, whether the work was successful, failed, or was
+canceled. See [below](#options-for-enqueueing-work) for more info.
+
+Example:
+
+```ts
+const pool = new Workpool(components.emailWorkpool, {
+  retryActionsByDefault: true,
+  defaultRetryBehavior: { maxAttempts: 3, initialBackoffMs: 1000, base: 2 },
+});
+
+//...
+
+await pool.enqueueAction(ctx, internal.email.send, args, {
+  onComplete: internal.email.emailSent,
+  context: { emailType, userId },
+  retry: false, // don't retry this action, as we can't guarantee idempotency.
+});
+
+export const emailSent = internalMutation({
+  args: {
+    workId: workIdValidator,
+    context: v.object({ emailType: v.string(), userId: v.id("users") }),
+    result: runResultValidator,
+  },
+  handler: async (ctx, args) => {
+    if (args.result.kind === "canceled") return;
+    await ctx.db.insert("userEmailLog", {
+      userId: args.context.userId,
+      emailType: args.context.emailType,
+      result: args.result.kind === "success" ? args.result.returnValue : null,
+      error: args.result.kind === "failed" ? args.result.error : null,
+    });
+    if (args.result.kind === "failed") {
+      await pool.enqueueAction(ctx, internal.email.checkResendStatus, args, {
+        retry: { maxAttempts: 10, initialBackoffMs: 250, base: 2 }, // custom
+        onComplete: internal.email.handleEmailStatus,
+        context: args.context,
+      });
+    }
+  },
+});
+```
+
+#### Idempotency?
+
+Idempotent actions are actions that can be run multiple times safely. This typically
+means they don't cause any side effects that would be a problem if executed twice or more.
+
+As an example of an unsafe, non-idempotent action, consider an action that charges
+a user's credit card without providing a unique transaction id to the payment
+processor. The first time the action is run, imagine that the API call succeeds to the
+payment provider, but then the action throws an exception before the transaction is marked
+finished in our Convex database. If the action is run twice, the user may be
+double charged for the transaction!
+
+If we alter this action to provide a consistent transaction id to the payment provider, they
+can simply NOOP the second payment attempt. The this makes the action idempotent, and
+it can safely be retried.
+
+If you're creating complex workflows with many steps involving 3rd party APIs:
+
+1.  You should ensure that each step is an idempotent Convex action.
+2.  You should use this component to manage these actions so it all just works!
+
+### Optimize OCC errors
 
 With limited parallelism, you can reduce
 [OCC errors](https://docs.convex.dev/error#1)
@@ -133,6 +233,41 @@ await pool.cancel(id);
 
 See more example usage in [example.ts](./example/convex/example.ts).
 
+### Configuring the Workpool
+
+Check out the [docstrings](./src/client/index.ts), but notable options include:
+
+- `maxParallelism`: How many actions/mutations can run at once within this pool.
+- `retryActionsByDefault`: Whether to retry actions that fail by default.
+- `defaultRetryBehavior`: The default retry behavior for enqueued actions.
+
+You can override the retry behavior per-call with the `retry` option.
+
+### Options for enqueueing work
+
+See the [docstrings](./src/client/index.ts) for more details, but notable options include:
+
+- `retry`: Whether to retry the action if it fails. Overrides defaults.
+  If it's set to `true`, it will use the `defaultRetryBehavior`.
+  If it's set to a custom config, it will use that (and do retries).
+- `onComplete`: A mutation to run after the function finishes.
+- `context`: Any data you want to pass to the `onComplete` mutation.
+- `runAt` and `runAfter`: Similar to `ctx.scheduler.run*`, allows you to
+  schedule the work to run later. By default it's immediate.
+
+### Retry behavior
+
+The retry options work like this:
+
+- The first request runs as it's scheduled.
+- If it fails, it will wait _around_ `initialBackoffMs` and then try again.
+- Each subsequent retry waits `initialBackoffMs * base^<retryNumber - 1>`.
+- The standard base is 2.
+- The actual wait time uses "jitter" to avoid all retries happening at once,
+  if they all failed at the same time.
+
+You can override the retry behavior per-call with the `retry` option.
+
 ## Optimizations with and without Workpool
 
 The benefit of Workpool is that it won't fall over if there are many jobs
@@ -185,6 +320,12 @@ The `CompletionStatus` type is one of:
 You can cancel work by calling `pool.cancel(id)`.
 
 This will remove the work from the queue and mark it as canceled.
-If
+If the work has already started, it will try its best, but it may not succeed
+and in-progress work may show up as success, failure, or canceled.
+In particular, it's possible that the work succeeds but is marked as canceled.
 
 <!-- END: Include on https://convex.dev/components -->
+
+```
+
+```
