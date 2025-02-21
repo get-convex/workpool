@@ -44,18 +44,18 @@ export type RetryBehavior = Infer<typeof retryBehavior>;
 
 export const runResult = v.union(
   v.object({
-    type: v.literal("success"),
+    kind: v.literal("success"),
     returnValue: v.any(),
   }),
   v.object({
-    type: v.literal("failed"),
+    kind: v.literal("failed"),
     error: v.string(),
   }),
   v.object({
-    type: v.literal("canceled"),
+    kind: v.literal("canceled"),
   }),
   v.object({
-    type: v.literal("timeout"),
+    kind: v.literal("timeout"),
   })
 );
 export type RunResult = Infer<typeof runResult>;
