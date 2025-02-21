@@ -13,7 +13,7 @@ import {
   toSegment,
 } from "./shared";
 import { WithoutSystemFields } from "convex/server";
-import { recordCompleted } from "./stats";
+import { recordCompleted, recordReport } from "./stats";
 
 const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
 const SECOND = 1000;
@@ -95,8 +95,25 @@ export const mainLoop = internalMutation({
     console.time("[mainLoop] pendingStart");
     await handleStart(ctx, state, args.segment, console, globals);
     console.timeEnd("[mainLoop] pendingStart");
-    // If minute rollover since last report, log report.
-    // runStatus update (schedulable?):
+
+    if (Date.now() - state.report.lastReportTs >= MINUTE) {
+      // If minute rollover since last report, log report.
+      // Try to avoid clock skew by shifting by a minute.
+      let lastReportTs = state.report.lastReportTs + MINUTE;
+      if (Date.now() > lastReportTs + MINUTE / 2) {
+        // It's been a while, let's start fresh.
+        lastReportTs = Date.now();
+      }
+      console.info(recordReport(state));
+      state.report = {
+        completed: 0,
+        succeeded: 0,
+        failed: 0,
+        retries: 0,
+        canceled: 0,
+        lastReportTs,
+      };
+    }
 
     await ctx.db.replace(state._id, state);
     // TODO: dispatch onComplete

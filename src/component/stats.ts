@@ -46,6 +46,21 @@ export function recordCompleted(
   });
 }
 
+export function recordReport(state: Doc<"internalState">): string {
+  const { completed, succeeded, failed, retries, canceled } = state.report;
+  const withoutRetries = completed - retries;
+  return JSON.stringify({
+    event: "report",
+    completed,
+    succeeded,
+    failed,
+    retries,
+    canceled,
+    failureRate: completed ? (failed + retries) / completed : 0,
+    permanentFailureRate: withoutRetries ? failed / withoutRetries : 0,
+  });
+}
+
 /**
  * Warning: this should not be used from a mutation, as it will cause conflicts.
  * Use this to debug or diagnose your queue length when it's backed up.
