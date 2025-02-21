@@ -535,6 +535,9 @@ async function handleCancelation(
     canceled.map(async ({ _id, workId }) => {
       const work = await ctx.db.get(workId);
       if (work) console.info(recordCompleted(work, "canceled"));
+      // Ensure it doesn't retry.
+      await ctx.db.patch(workId, { retryBehavior: undefined });
+
       const pendingStart = await ctx.db
         .query("pendingStart")
         .withIndex("workId", (q) => q.eq("workId", workId))
