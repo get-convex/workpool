@@ -83,7 +83,7 @@ export const debugCounts = internalQuery({
       inProgressWork,
       pendingCompletion,
       pendingCancelation,
-      active: inProgressWork - pendingCompletion - pendingCancelation,
+      active: inProgressWork - pendingCompletion,
     };
   },
 });
