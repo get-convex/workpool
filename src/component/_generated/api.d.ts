@@ -48,6 +48,12 @@ export type Mounts = {
       { id: string; logLevel: "DEBUG" | "INFO" | "WARN" | "ERROR" },
       any
     >;
+    cancelAll: FunctionReference<
+      "mutation",
+      "public",
+      { before?: number; logLevel: "DEBUG" | "INFO" | "WARN" | "ERROR" },
+      any
+    >;
     enqueue: FunctionReference<
       "mutation",
       "public",

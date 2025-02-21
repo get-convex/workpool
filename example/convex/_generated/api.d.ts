@@ -48,6 +48,12 @@ export declare const components: {
         { id: string; logLevel: "DEBUG" | "INFO" | "WARN" | "ERROR" },
         any
       >;
+      cancelAll: FunctionReference<
+        "mutation",
+        "internal",
+        { before?: number; logLevel: "DEBUG" | "INFO" | "WARN" | "ERROR" },
+        any
+      >;
       enqueue: FunctionReference<
         "mutation",
         "internal",
@@ -88,6 +94,12 @@ export declare const components: {
         { id: string; logLevel: "DEBUG" | "INFO" | "WARN" | "ERROR" },
         any
       >;
+      cancelAll: FunctionReference<
+        "mutation",
+        "internal",
+        { before?: number; logLevel: "DEBUG" | "INFO" | "WARN" | "ERROR" },
+        any
+      >;
       enqueue: FunctionReference<
         "mutation",
         "internal",
@@ -126,6 +138,12 @@ export declare const components: {
         "mutation",
         "internal",
         { id: string; logLevel: "DEBUG" | "INFO" | "WARN" | "ERROR" },
+        any
+      >;
+      cancelAll: FunctionReference<
+        "mutation",
+        "internal",
+        { before?: number; logLevel: "DEBUG" | "INFO" | "WARN" | "ERROR" },
         any
       >;
       enqueue: FunctionReference<

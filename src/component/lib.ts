@@ -10,6 +10,7 @@ import {
   toSegment,
 } from "./shared.js";
 import { kickMainLoop } from "./kick.js";
+import { api } from "./_generated/api.js";
 
 const MAX_POSSIBLE_PARALLELISM = 100;
 
@@ -59,6 +60,40 @@ export const cancel = mutation({
     });
     await kickMainLoop(ctx, "cancel", { logLevel });
     // TODO: stats event
+  },
+});
+
+const PAGE_SIZE = 64;
+export const cancelAll = mutation({
+  args: { logLevel, before: v.optional(v.number()) },
+  handler: async (ctx, { logLevel, before }) => {
+    const beforeTime = before ?? Date.now();
+    const segment = nextSegment();
+    const pageOfWork = await ctx.db
+      .query("work")
+      .withIndex("by_creation_time", (q) => q.lte("_creationTime", beforeTime))
+      .order("desc")
+      .take(PAGE_SIZE);
+    await Promise.all(
+      pageOfWork.map(async ({ _id }) => {
+        if (
+          await ctx.db
+            .query("pendingCancelation")
+            .withIndex("workId", (q) => q.eq("workId", _id))
+            .first()
+        ) {
+          return;
+        }
+        await ctx.db.insert("pendingCancelation", { workId: _id, segment });
+      })
+    );
+    if (pageOfWork.length === PAGE_SIZE) {
+      await ctx.scheduler.runAfter(0, api.lib.cancelAll, {
+        logLevel,
+        before: pageOfWork[pageOfWork.length - 1]._creationTime,
+      });
+    }
+    await kickMainLoop(ctx, "cancel", { logLevel });
   },
 });
 

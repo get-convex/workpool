@@ -111,6 +111,11 @@ export class Workpool {
       logLevel: this.options.logLevel ?? getDefaultLogLevel(),
     });
   }
+  async cancelAll(ctx: RunMutationCtx): Promise<void> {
+    await ctx.runMutation(this.component.lib.cancelAll, {
+      logLevel: this.options.logLevel ?? getDefaultLogLevel(),
+    });
+  }
   async status(ctx: RunQueryCtx, id: WorkId): Promise<Status> {
     return ctx.runQuery(this.component.lib.status, { id });
   }
