@@ -9,8 +9,10 @@ export type Logger = {
   timeEnd: (label: string) => void;
 };
 
-export function createLogger(level: LogLevel): Logger {
-  const levelIndex = ["DEBUG", "INFO", "WARN", "ERROR"].indexOf(level);
+export function createLogger(level?: LogLevel): Logger {
+  const levelIndex = ["DEBUG", "INFO", "WARN", "ERROR"].indexOf(
+    level ?? "WARN"
+  );
   if (levelIndex === -1) {
     throw new Error(`Invalid log level: ${level}`);
   }
@@ -38,7 +40,11 @@ export function createLogger(level: LogLevel): Logger {
     time: (label: string) => {
       if (levelIndex <= 0) {
         console.time(label);
+        return () => {
+          console.timeEnd(label);
+        };
       }
+      return () => {};
     },
     timeEnd: (label: string) => {
       if (levelIndex <= 0) {
