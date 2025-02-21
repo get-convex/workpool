@@ -13,9 +13,6 @@ import { kickMainLoop } from "./kick.js";
 
 const MAX_POSSIBLE_PARALLELISM = 100;
 
-/* TODO
- * Support scheduling & retries
- */
 export const enqueue = mutation({
   args: {
     fnHandle: v.string(),
@@ -71,7 +68,7 @@ export const status = query({
   handler: async (ctx, { id }) => {
     const work = await ctx.db.get(id);
     if (!work) {
-      return { state: "done" } as const;
+      return { state: "finished" } as const;
     }
     const pendingStart = await ctx.db
       .query("pendingStart")

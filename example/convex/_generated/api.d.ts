@@ -76,7 +76,7 @@ export declare const components: {
         { id: string },
         | { attempt: number; state: "pending" }
         | { attempt: number; state: "running" }
-        | { state: "done" }
+        | { state: "finished" }
       >;
     };
   };
@@ -116,7 +116,7 @@ export declare const components: {
         { id: string },
         | { attempt: number; state: "pending" }
         | { attempt: number; state: "running" }
-        | { state: "done" }
+        | { state: "finished" }
       >;
     };
   };
@@ -156,7 +156,7 @@ export declare const components: {
         { id: string },
         | { attempt: number; state: "pending" }
         | { attempt: number; state: "running" }
-        | { state: "done" }
+        | { state: "finished" }
       >;
     };
   };

@@ -90,8 +90,7 @@ export const status = v.union(
       attempt: v.number(),
     }),
     v.object({
-      // TODO: better name that implies it might have succeeded, failed, or been canceled
-      state: v.literal("done"),
+      state: v.literal("finished"),
     })
   )
 );
