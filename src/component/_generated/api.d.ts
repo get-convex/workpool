@@ -12,6 +12,7 @@ import type * as lib from "../lib.js";
 import type * as logging from "../logging.js";
 import type * as shared from "../shared.js";
 import type * as stats from "../stats.js";
+import type * as worker from "../worker.js";
 
 import type {
   ApiFromModules,
@@ -31,6 +32,7 @@ declare const fullApi: ApiFromModules<{
   logging: typeof logging;
   shared: typeof shared;
   stats: typeof stats;
+  worker: typeof worker;
 }>;
 export type Mounts = {
   lib: {
