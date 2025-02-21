@@ -1,11 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import {
-  completionStatus,
-  config,
-  onComplete,
-  retryBehavior,
-} from "./shared.js";
+import { config, onComplete, retryBehavior, runResult } from "./shared.js";
 
 // Represents a slice of time to process work.
 const segment = v.int64();
@@ -98,7 +93,7 @@ export default defineSchema({
   // Written by job, read & deleted by `mainLoop`.
   pendingCompletion: defineTable({
     segment,
-    completionStatus,
+    runResult,
     workId: v.id("work"),
   })
     .index("workId", ["workId"])

@@ -8,18 +8,15 @@ import {
 import { v, VString } from "convex/values";
 import { api } from "../component/_generated/api.js";
 import {
-  completionStatus,
   Config,
   OnComplete,
   runResult as runResultValidator,
   RunResult,
-  type CompletionStatus,
   type LogLevel,
   type RetryBehavior,
   OnCompleteArgs,
 } from "../component/shared.js";
 import { RunMutationCtx, RunQueryCtx, UseApi } from "./utils.js";
-export { completionStatus, type CompletionStatus };
 export { runResultValidator, type RunResult };
 
 export type WorkId = string;

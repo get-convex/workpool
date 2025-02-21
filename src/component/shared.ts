@@ -21,14 +21,6 @@ export function fromWheelSegment(segment: bigint): number {
   return Number(segment) * WHEEL_SEGMENT_MS;
 }
 
-export const completionStatus = v.union(
-  v.literal("success"),
-  v.literal("error"),
-  v.literal("canceled"),
-  v.literal("timeout")
-);
-export type CompletionStatus = Infer<typeof completionStatus>;
-
 export const logLevel = v.union(
   v.literal("DEBUG"),
   v.literal("INFO"),
