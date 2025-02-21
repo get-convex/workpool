@@ -3,22 +3,24 @@ import { api, components, internal } from "./_generated/api";
 import { Workpool } from "@convex-dev/workpool";
 import { v } from "convex/values";
 
-const highPriPool = new Workpool(components.highPriWorkpool, {
+const bigPool = new Workpool(components.bigPool, {
   maxParallelism: 20,
-  // For tests, disable completed work cleanup.
-  statusTtl: Number.POSITIVE_INFINITY,
+  defaultRetryBehavior: {
+    maxAttempts: 3,
+    initialBackoffMs: 100,
+    base: 2,
+  },
+  retryActionsByDefault: true,
   logLevel: "INFO",
 });
-const pool = new Workpool(components.workpool, {
+const smallPool = new Workpool(components.smallPool, {
   maxParallelism: 3,
-  // For tests, disable completed work cleanup.
-  statusTtl: Number.POSITIVE_INFINITY,
+  retryActionsByDefault: true,
   logLevel: "INFO",
 });
-const lowpriPool = new Workpool(components.lowpriWorkpool, {
+const serializedPool = new Workpool(components.serializedPool, {
   maxParallelism: 1,
-  // For tests, disable completed work cleanup.
-  statusTtl: Number.POSITIVE_INFINITY,
+  retryActionsByDefault: true,
   logLevel: "INFO",
 });
 
@@ -49,21 +51,23 @@ export const queryData = query({
 export const enqueueOneMutation = mutation({
   args: { data: v.number() },
   handler: async (ctx, { data }): Promise<string> => {
-    return await pool.enqueueMutation(ctx, api.example.addMutation, { data });
+    return await smallPool.enqueueMutation(ctx, api.example.addMutation, {
+      data,
+    });
   },
 });
 
 export const cancelMutation = mutation({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
-    await pool.cancel(ctx, id);
+    await smallPool.cancel(ctx, id);
   },
 });
 
 export const status = query({
   args: { id: v.string() },
   handler: async (ctx, { id }) => {
-    return await pool.status(ctx, id);
+    return await smallPool.status(ctx, id);
   },
 });
 
@@ -72,7 +76,7 @@ export const enqueueABunchOfMutations = action({
   handler: async (ctx, _args) => {
     await Promise.all(
       Array.from({ length: 30 }, () =>
-        pool.enqueueMutation(ctx, api.example.addMutation, {})
+        smallPool.enqueueMutation(ctx, api.example.addMutation, {})
       )
     );
   },
@@ -92,7 +96,7 @@ export const enqueueLowPriMutations = action({
   handler: async (ctx, _args) => {
     await Promise.all(
       Array.from({ length: 30 }, () =>
-        lowpriPool.enqueueMutation(ctx, api.example.addLowPri, {})
+        serializedPool.enqueueMutation(ctx, api.example.addLowPri, {})
       )
     );
   },
@@ -101,7 +105,7 @@ export const enqueueLowPriMutations = action({
 export const highPriMutation = mutation({
   args: { data: v.number() },
   handler: async (ctx, { data }) => {
-    await highPriPool.enqueueMutation(ctx, api.example.addMutation, { data });
+    await bigPool.enqueueMutation(ctx, api.example.addMutation, { data });
   },
 });
 
@@ -110,7 +114,7 @@ export const enqueueABunchOfActions = action({
   handler: async (ctx, _args) => {
     await Promise.all(
       Array.from({ length: 30 }, () =>
-        pool.enqueueAction(ctx, api.example.addAction, {})
+        bigPool.enqueueAction(ctx, api.example.addAction, {})
       )
     );
   },
@@ -119,7 +123,7 @@ export const enqueueABunchOfActions = action({
 export const enqueueAnAction = mutation({
   args: {},
   handler: async (ctx, _args): Promise<void> => {
-    await pool.enqueueAction(ctx, api.example.addAction, {});
+    await bigPool.enqueueAction(ctx, api.example.addAction, {});
   },
 });
 
@@ -133,20 +137,6 @@ export const echo = query({
 async function sampleWork() {
   const index = Math.floor(Math.random() * 1000) + 1;
   await new Promise((resolve) => setTimeout(resolve, Math.random() * index));
-  const url = `${process.env.CONVEX_CLOUD_URL}/api/query`;
-  const start = Date.now();
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      path: "example:echo",
-      args: { num: index },
-    }),
-  });
-  const data = await response.json();
-  console.log(data.value === index, Date.now() - start);
 }
 
 // Example background work: scraping from a website.
@@ -162,7 +152,7 @@ export const startBackgroundWork = internalAction({
   handler: async (ctx, _args) => {
     await Promise.all(
       Array.from({ length: 20 }, () =>
-        lowpriPool.enqueueAction(ctx, internal.example.backgroundWork, {})
+        serializedPool.enqueueAction(ctx, internal.example.backgroundWork, {})
       )
     );
   },
@@ -181,7 +171,7 @@ export const startForegroundWork = internalAction({
   handler: async (ctx, _args) => {
     await Promise.all(
       Array.from({ length: 100 }, () =>
-        highPriPool.enqueueAction(ctx, internal.example.foregroundWork, {})
+        bigPool.enqueueAction(ctx, internal.example.foregroundWork, {})
       )
     );
   },

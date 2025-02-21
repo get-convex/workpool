@@ -40,7 +40,7 @@ export declare const internal: FilterApi<
 >;
 
 export declare const components: {
-  workpool: {
+  smallPool: {
     lib: {
       cancel: FunctionReference<
         "mutation",
@@ -80,7 +80,7 @@ export declare const components: {
       >;
     };
   };
-  lowpriWorkpool: {
+  bigPool: {
     lib: {
       cancel: FunctionReference<
         "mutation",
@@ -120,7 +120,7 @@ export declare const components: {
       >;
     };
   };
-  highPriWorkpool: {
+  serializedPool: {
     lib: {
       cancel: FunctionReference<
         "mutation",
