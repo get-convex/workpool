@@ -39,9 +39,9 @@ export default defineSchema({
     }),
     lastRecovery: segment,
     report: v.object({
-      completed: v.int64(),
-      failed: v.int64(),
-      canceled: v.int64(),
+      completed: v.number(),
+      failed: v.number(),
+      canceled: v.number(),
       lastReportTs: v.number(),
     }),
     running: v.array(
