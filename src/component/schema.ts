@@ -6,17 +6,16 @@ import { config, onComplete, retryBehavior, runResult } from "./shared.js";
 const segment = v.int64();
 /** State machine
 ```mermaid
-flowchart TD
+flowchart LR
     Client -->|enqueue| pendingStart
     Client -->|cancel| pendingCancellation
+    Worker-->|"saveResult or recovery"| pendingCompletion
     pendingStart -->|mainLoop| workerRunning["internalState.running"]
-    workerRunning-->|saveResult| pendingCompletion
-    workerRunning-->|recovery| pendingCompletion
-    pendingCompletion-->|mainLoop| Retry{"Needs retry?"}
+    workerRunning-->|"mainLoop(pendingCompletion)"| Retry{"Needs retry?"}
     Retry-->|no| onComplete
     Retry-->|yes| pendingStart
-    pendingStart-->|"mainLoop(cancelled)"| onComplete
-    workerRunning-->|"mainLoop(cancelled)"| onComplete
+    pendingStart-->|"mainLoop(pendingCancellation)"| onComplete
+    workerRunning-->|"mainLoop(pendingCancellation)"| onComplete
 ```
  *
  * Retention optimization strategy:
