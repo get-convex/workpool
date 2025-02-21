@@ -31,7 +31,7 @@ export type LogLevel = Infer<typeof logLevel>;
 
 export const config = v.object({
   maxParallelism: v.number(),
-  logLevel: v.optional(logLevel),
+  logLevel,
 });
 export type Config = Infer<typeof config>;
 

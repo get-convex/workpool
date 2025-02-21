@@ -54,7 +54,7 @@ export const enqueue = mutation({
 export const cancel = mutation({
   args: {
     id: v.id("work"),
-    logLevel: v.optional(logLevel),
+    logLevel,
   },
   handler: async (ctx, { id, logLevel }) => {
     await ctx.db.insert("pendingCancelation", {

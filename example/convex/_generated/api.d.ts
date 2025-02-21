@@ -45,7 +45,7 @@ export declare const components: {
       cancel: FunctionReference<
         "mutation",
         "internal",
-        { id: string; logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR" },
+        { id: string; logLevel: "DEBUG" | "INFO" | "WARN" | "ERROR" },
         any
       >;
       enqueue: FunctionReference<
@@ -53,7 +53,7 @@ export declare const components: {
         "internal",
         {
           config: {
-            logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
+            logLevel: "DEBUG" | "INFO" | "WARN" | "ERROR";
             maxParallelism: number;
           };
           fnArgs: any;
@@ -85,7 +85,7 @@ export declare const components: {
       cancel: FunctionReference<
         "mutation",
         "internal",
-        { id: string; logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR" },
+        { id: string; logLevel: "DEBUG" | "INFO" | "WARN" | "ERROR" },
         any
       >;
       enqueue: FunctionReference<
@@ -93,7 +93,7 @@ export declare const components: {
         "internal",
         {
           config: {
-            logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
+            logLevel: "DEBUG" | "INFO" | "WARN" | "ERROR";
             maxParallelism: number;
           };
           fnArgs: any;
@@ -125,7 +125,7 @@ export declare const components: {
       cancel: FunctionReference<
         "mutation",
         "internal",
-        { id: string; logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR" },
+        { id: string; logLevel: "DEBUG" | "INFO" | "WARN" | "ERROR" },
         any
       >;
       enqueue: FunctionReference<
@@ -133,7 +133,7 @@ export declare const components: {
         "internal",
         {
           config: {
-            logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
+            logLevel: "DEBUG" | "INFO" | "WARN" | "ERROR";
             maxParallelism: number;
           };
           fnArgs: any;

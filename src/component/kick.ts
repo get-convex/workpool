@@ -1,6 +1,6 @@
 import { internal } from "./_generated/api";
 import { MutationCtx } from "./_generated/server";
-import { createLogger } from "./logging";
+import { createLogger, DEFAULT_LOG_LEVEL } from "./logging";
 import { INITIAL_STATE } from "./loop";
 import { Config, nextSegment } from "./shared";
 
@@ -82,7 +82,7 @@ async function getOrUpdateGlobals(ctx: MutationCtx, config?: Partial<Config>) {
   if (!globals) {
     const id = await ctx.db.insert("globals", {
       maxParallelism: config?.maxParallelism ?? DEFAULT_MAX_PARALLELISM,
-      logLevel: config?.logLevel,
+      logLevel: config?.logLevel ?? DEFAULT_LOG_LEVEL,
     });
     return (await ctx.db.get(id))!;
   } else if (config) {

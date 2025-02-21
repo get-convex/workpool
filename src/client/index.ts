@@ -8,7 +8,6 @@ import {
 import { v, VString } from "convex/values";
 import { api } from "../component/_generated/api.js";
 import {
-  Config,
   OnComplete,
   runResult as runResultValidator,
   RunResult,
@@ -16,8 +15,10 @@ import {
   type RetryBehavior,
   OnCompleteArgs,
   Status,
+  logLevel,
 } from "../component/shared.js";
 import { RunMutationCtx, RunQueryCtx, UseApi } from "./utils.js";
+import { DEFAULT_LOG_LEVEL } from "../component/logging.js";
 export { runResultValidator, type RunResult };
 
 export type WorkId = string;
@@ -107,7 +108,7 @@ export class Workpool {
   async cancel(ctx: RunMutationCtx, id: WorkId): Promise<void> {
     await ctx.runMutation(this.component.lib.cancel, {
       id,
-      logLevel: this.options.logLevel,
+      logLevel: this.options.logLevel ?? getDefaultLogLevel(),
     });
   }
   async status(ctx: RunQueryCtx, id: WorkId): Promise<Status> {
@@ -133,12 +134,12 @@ function getRetryBehavior(
 
 async function defaultEnqueueArgs(
   fn: FunctionReference<"action" | "mutation", FunctionVisibility>,
-  { logLevel, maxParallelism }: Config
+  { logLevel, maxParallelism }: { logLevel?: LogLevel; maxParallelism: number }
 ) {
   return {
     fnHandle: await createFunctionHandle(fn),
     fnName: getFunctionName(fn),
-    config: { logLevel, maxParallelism },
+    config: { logLevel: logLevel ?? getDefaultLogLevel(), maxParallelism },
   };
 }
 
@@ -201,4 +202,21 @@ function getRunAt(options?: SchedulerOptions): number {
     return Date.now() + options.runAfter;
   }
   return Date.now();
+}
+
+function getDefaultLogLevel(): LogLevel {
+  if (process.env.WORKPOOL_LOG_LEVEL) {
+    if (
+      !logLevel.members
+        .map((m) => m.value as string)
+        .includes(process.env.WORKPOOL_LOG_LEVEL)
+    ) {
+      console.warn(
+        `Invalid log level (${process.env.WORKPOOL_LOG_LEVEL}), defaulting to "INFO"`
+      );
+    } else {
+      return process.env.WORKPOOL_LOG_LEVEL as LogLevel;
+    }
+  }
+  return DEFAULT_LOG_LEVEL;
 }

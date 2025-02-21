@@ -1,5 +1,7 @@
 import { LogLevel } from "./shared.js";
 
+export const DEFAULT_LOG_LEVEL: LogLevel = "WARN";
+
 export type Logger = {
   debug: (...args: unknown[]) => void;
   info: (...args: unknown[]) => void;
@@ -11,7 +13,7 @@ export type Logger = {
 
 export function createLogger(level?: LogLevel): Logger {
   const levelIndex = ["DEBUG", "INFO", "WARN", "ERROR"].indexOf(
-    level ?? "WARN"
+    level ?? DEFAULT_LOG_LEVEL
   );
   if (levelIndex === -1) {
     throw new Error(`Invalid log level: ${level}`);

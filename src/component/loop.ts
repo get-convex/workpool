@@ -2,9 +2,10 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, MutationCtx } from "./_generated/server";
-import { createLogger } from "./logging.js";
+import { createLogger, DEFAULT_LOG_LEVEL, Logger } from "./logging.js";
 import { DEFAULT_MAX_PARALLELISM } from "./kick";
 import {
+  Config,
   currentSegment,
   fromSegment,
   LogLevel,
@@ -56,8 +57,8 @@ export const mainLoop = internalMutation({
     }
     state.generation++;
 
-    const globals = await ctx.db.query("globals").unique();
-    const console = createLogger(globals?.logLevel);
+    const globals = await getGlobals(ctx);
+    const console = createLogger(globals.logLevel);
 
     // Read pendingCompletions, including retry handling.
     console.time("[mainLoop] pendingCompletion");
@@ -179,9 +180,9 @@ export const updateRunStatus = internalMutation({
     segment: v.int64(),
   },
   handler: async (ctx, args) => {
-    const globals = await ctx.db.query("globals").unique();
-    const console = createLogger(globals?.logLevel);
-    const maxParallelism = globals?.maxParallelism ?? DEFAULT_MAX_PARALLELISM;
+    const globals = await getGlobals(ctx);
+    const console = createLogger(globals.logLevel);
+    const maxParallelism = globals.maxParallelism;
     const state = await getOrCreateState(ctx);
     if (args.generation !== state.generation) {
       throw new Error(
@@ -352,7 +353,7 @@ async function getNextUp(
 async function beginWork(
   ctx: MutationCtx,
   workId: Id<"work">,
-  logLevel: LogLevel | undefined
+  logLevel: LogLevel
 ): Promise<Id<"_scheduled_functions">> {
   const console = createLogger(logLevel);
   const work = await ctx.db.get(workId);
@@ -379,11 +380,22 @@ async function beginWork(
   }
 }
 
+async function getGlobals(ctx: MutationCtx) {
+  const globals = await ctx.db.query("globals").unique();
+  if (!globals) {
+    return {
+      maxParallelism: DEFAULT_MAX_PARALLELISM,
+      logLevel: DEFAULT_LOG_LEVEL,
+    };
+  }
+  return globals;
+}
+
 async function getOrCreateState(ctx: MutationCtx) {
   const state = await ctx.db.query("internalState").unique();
   if (state) return state;
-  const globals = await ctx.db.query("globals").unique();
-  const console = createLogger(globals?.logLevel);
+  const globals = await getGlobals(ctx);
+  const console = createLogger(globals.logLevel);
   console.error("No internalState in running loop! Re-creating empty one...");
   return (await ctx.db.get(
     await ctx.db.insert("internalState", INITIAL_STATE)
@@ -393,8 +405,8 @@ async function getOrCreateState(ctx: MutationCtx) {
 async function getOrCreateRunningStatus(ctx: MutationCtx) {
   const runStatus = await ctx.db.query("runStatus").unique();
   if (runStatus) return runStatus;
-  const globals = await ctx.db.query("globals").unique();
-  const console = createLogger(globals?.logLevel);
+  const globals = await getGlobals(ctx);
+  const console = createLogger(globals.logLevel);
   console.error("No runStatus in running loop! Re-creating one...");
   return (await ctx.db.get(
     await ctx.db.insert("runStatus", { state: { kind: "running" } })
