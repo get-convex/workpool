@@ -433,6 +433,7 @@ async function handleCompletions(
   const done: Doc<"pendingCompletion">[] = [];
   await Promise.all(
     completed.map(async (c) => {
+      await ctx.db.delete(c._id);
       const work = await ctx.db.get(c.workId);
       const maxAttempts = work?.retryBehavior?.maxAttempts;
       const pendingCancelations = await ctx.db
@@ -468,7 +469,6 @@ async function handleCompletions(
       } else {
         console.warn(`[mainLoop] completing ${c.workId} but it's not found`);
       }
-      await ctx.db.delete(c._id);
     })
   );
   console.debug(`[mainLoop] completing ${done.length}`);
@@ -534,9 +534,11 @@ async function handleCancelation(
   await Promise.all(
     canceled.map(async ({ _id, workId }) => {
       const work = await ctx.db.get(workId);
-      if (work) console.info(recordCompleted(work, "canceled"));
-      // Ensure it doesn't retry.
-      await ctx.db.patch(workId, { retryBehavior: undefined });
+      if (work) {
+        console.info(recordCompleted(work, "canceled"));
+        // Ensure it doesn't retry.
+        await ctx.db.patch(workId, { retryBehavior: undefined });
+      }
 
       const pendingStart = await ctx.db
         .query("pendingStart")
