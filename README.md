@@ -25,7 +25,7 @@ const scrapePool = new Workpool(components.scrapeWorkpool, {
 export const signUp = mutation({
   handler: async (ctx, args) => {
     const userId = await ctx.db.insert("users", args);
-    await emailPool.enqueueAction(internal.auth.sendEmailVerification, {
+    await emailPool.enqueueAction(ctx, internal.auth.sendEmailVerification, {
       userId,
     });
   },
@@ -34,7 +34,7 @@ export const signUp = mutation({
 export const downloadLatestWeather = mutation({
   handler: async (ctx, args) => {
     for (const city of allCities) {
-      await scrapePool.enqueueAction(internal.weather.scrape, { city });
+      await scrapePool.enqueueAction(ctx, internal.weather.scrape, { city });
     }
   },
 });
@@ -56,7 +56,7 @@ const counterPool = new Workpool(components.counterWorkpool, {
 export const doSomethingAndCount = action({
   handler: async (ctx) => {
     const doSomething = await fetch("https://example.com");
-    await counterPool.enqueueMutation(internal.counter.increment, {});
+    await counterPool.enqueueMutation(ctx, internal.counter.increment, {});
   },
 });
 
@@ -120,9 +120,9 @@ Then you have the following interface on `pool`:
 
 ```ts
 // Schedule functions to run in the background.
-const id = await pool.enqueueMutation(internal.foo.bar, args);
+const id = await pool.enqueueMutation(ctx, internal.foo.bar, args);
 // Or for an action:
-const id = await pool.enqueueAction(internal.foo.baz, args);
+const id = await pool.enqueueAction(ctx, internal.foo.baz, args);
 
 // Is it done yet? Did it succeed or fail?
 const status = await pool.status(id);
@@ -179,5 +179,12 @@ The `CompletionStatus` type is one of:
 - `"error"`: The function threw an error.
 - `"canceled"`: The function was canceled.
 - `"timeout"`: The function timed out.
+
+## Canceling work
+
+You can cancel work by calling `pool.cancel(id)`.
+
+This will remove the work from the queue and mark it as canceled.
+If
 
 <!-- END: Include on https://convex.dev/components -->

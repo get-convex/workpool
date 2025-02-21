@@ -8,9 +8,14 @@
  * @module
  */
 
+import type * as kick from "../kick.js";
 import type * as lib from "../lib.js";
 import type * as logging from "../logging.js";
+import type * as loop from "../loop.js";
+import type * as recovery from "../recovery.js";
+import type * as shared from "../shared.js";
 import type * as stats from "../stats.js";
+import type * as worker from "../worker.js";
 
 import type {
   ApiFromModules,
@@ -26,27 +31,48 @@ import type {
  * ```
  */
 declare const fullApi: ApiFromModules<{
+  kick: typeof kick;
   lib: typeof lib;
   logging: typeof logging;
+  loop: typeof loop;
+  recovery: typeof recovery;
+  shared: typeof shared;
   stats: typeof stats;
+  worker: typeof worker;
 }>;
 export type Mounts = {
   lib: {
-    cancel: FunctionReference<"mutation", "public", { id: string }, any>;
-    cleanup: FunctionReference<"mutation", "public", { maxAgeMs: number }, any>;
+    cancel: FunctionReference<
+      "mutation",
+      "public",
+      { id: string; logLevel: "DEBUG" | "INFO" | "WARN" | "ERROR" },
+      any
+    >;
+    cancelAll: FunctionReference<
+      "mutation",
+      "public",
+      { before?: number; logLevel: "DEBUG" | "INFO" | "WARN" | "ERROR" },
+      any
+    >;
     enqueue: FunctionReference<
       "mutation",
       "public",
       {
+        config: {
+          logLevel: "DEBUG" | "INFO" | "WARN" | "ERROR";
+          maxParallelism: number;
+        };
         fnArgs: any;
         fnHandle: string;
         fnName: string;
         fnType: "action" | "mutation";
-        options: {
-          logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
-          maxParallelism: number;
-          statusTtl?: number;
+        onComplete?: { context?: any; fnHandle: string };
+        retryBehavior?: {
+          base: number;
+          initialBackoffMs: number;
+          maxAttempts: number;
         };
+        runAt: number;
       },
       string
     >;
@@ -54,14 +80,10 @@ export type Mounts = {
       "query",
       "public",
       { id: string },
-      | { kind: "pending" }
-      | { kind: "inProgress" }
-      | {
-          completionStatus: "success" | "error" | "canceled" | "timeout";
-          kind: "completed";
-        }
+      | { attempt: number; state: "pending" }
+      | { attempt: number; state: "running" }
+      | { state: "finished" }
     >;
-    stopCleanup: FunctionReference<"mutation", "public", {}, any>;
   };
 };
 // For now fullApiWithMounts is only fullApi which provides
@@ -78,56 +100,4 @@ export declare const internal: FilterApi<
   FunctionReference<any, "internal">
 >;
 
-export declare const components: {
-  crons: {
-    public: {
-      del: FunctionReference<
-        "mutation",
-        "internal",
-        { identifier: { id: string } | { name: string } },
-        null
-      >;
-      get: FunctionReference<
-        "query",
-        "internal",
-        { identifier: { id: string } | { name: string } },
-        {
-          args: Record<string, any>;
-          functionHandle: string;
-          id: string;
-          name?: string;
-          schedule:
-            | { kind: "interval"; ms: number }
-            | { cronspec: string; kind: "cron" };
-        } | null
-      >;
-      list: FunctionReference<
-        "query",
-        "internal",
-        {},
-        Array<{
-          args: Record<string, any>;
-          functionHandle: string;
-          id: string;
-          name?: string;
-          schedule:
-            | { kind: "interval"; ms: number }
-            | { cronspec: string; kind: "cron" };
-        }>
-      >;
-      register: FunctionReference<
-        "mutation",
-        "internal",
-        {
-          args: Record<string, any>;
-          functionHandle: string;
-          name?: string;
-          schedule:
-            | { kind: "interval"; ms: number }
-            | { cronspec: string; kind: "cron" };
-        },
-        string
-      >;
-    };
-  };
-};
+export declare const components: {};

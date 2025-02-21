@@ -1,6 +1,6 @@
 import { v } from "convex/values";
-import { Doc } from "./_generated/dataModel";
-import { internalQuery } from "./_generated/server";
+import { Doc } from "./_generated/dataModel.js";
+import { internalQuery } from "./_generated/server.js";
 
 /**
  * Record stats about work execution. Intended to be queried by Axiom or Datadog.
@@ -34,7 +34,7 @@ export function recordStarted(work: Doc<"work">): string {
 
 export function recordCompleted(
   work: Doc<"work">,
-  status: "success" | "error" | "canceled" | "timeout"
+  status: "success" | "failed" | "canceled"
 ): string {
   return JSON.stringify({
     workId: work._id,
@@ -43,6 +43,21 @@ export function recordCompleted(
     completedAt: Date.now(),
     status,
     lagSinceEnqueued: Date.now() - work._creationTime,
+  });
+}
+
+export function recordReport(state: Doc<"internalState">): string {
+  const { completed, succeeded, failed, retries, canceled } = state.report;
+  const withoutRetries = completed - retries;
+  return JSON.stringify({
+    event: "report",
+    completed,
+    succeeded,
+    failed,
+    retries,
+    canceled,
+    failureRate: completed ? (failed + retries) / completed : 0,
+    permanentFailureRate: withoutRetries ? failed / withoutRetries : 0,
   });
 }
 
@@ -67,10 +82,9 @@ export const debugCounts = internalQuery({
   args: {},
   returns: v.any(),
   handler: async (ctx) => {
+    const inProgressWork =
+      (await ctx.db.query("internalState").unique())?.running.length ?? 0;
     /* eslint-disable @typescript-eslint/no-explicit-any */
-    const inProgressWork = await (
-      ctx.db.query("inProgressWork") as any
-    ).count();
     const pendingStart = await (ctx.db.query("pendingStart") as any).count();
     const pendingCompletion = await (
       ctx.db.query("pendingCompletion") as any
@@ -78,13 +92,13 @@ export const debugCounts = internalQuery({
     const pendingCancelation = await (
       ctx.db.query("pendingCancelation") as any
     ).count();
+    /* eslint-enable @typescript-eslint/no-explicit-any */
     return {
       pendingStart,
       inProgressWork,
       pendingCompletion,
       pendingCancelation,
-      active: inProgressWork - pendingCompletion - pendingCancelation,
+      active: inProgressWork - pendingCompletion,
     };
-    /* eslint-enable @typescript-eslint/no-explicit-any */
   },
 });

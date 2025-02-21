@@ -4,22 +4,16 @@ import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import componentSchema from "../../src/component/schema";
-import cronsSchema from "../../node_modules/@convex-dev/crons/src/component/schema";
 import { api } from "./_generated/api";
 
 const modules = import.meta.glob("./**/*.ts");
 const componentModules = import.meta.glob("../../src/component/**/*.ts");
-const cronsModules = import.meta.glob(
-  "../../node_modules/@convex-dev/crons/src/component/**/*.ts"
-);
 
 describe("workpool", () => {
   async function setupTest() {
     const t = convexTest(schema, modules);
-    t.registerComponent("workpool", componentSchema, componentModules);
-    t.registerComponent("workpool/crons", cronsSchema, cronsModules);
-    t.registerComponent("highPriWorkpool", componentSchema, componentModules);
-    t.registerComponent("highPriWorkpool/crons", cronsSchema, cronsModules);
+    t.registerComponent("bigPool", componentSchema, componentModules);
+    t.registerComponent("smallPool", componentSchema, componentModules);
     return t;
   }
 
