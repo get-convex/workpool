@@ -1,6 +1,17 @@
-import { mutation, action, query, internalAction } from "./_generated/server";
+import {
+  mutation,
+  action,
+  query,
+  internalAction,
+  internalMutation,
+} from "./_generated/server";
 import { api, components, internal } from "./_generated/api";
-import { WorkId, workIdValidator, Workpool } from "@convex-dev/workpool";
+import {
+  WorkId,
+  workIdValidator,
+  Workpool,
+  runResultValidator,
+} from "@convex-dev/workpool";
 import { v } from "convex/values";
 
 const bigPool = new Workpool(components.bigPool, {
@@ -217,6 +228,17 @@ export const myAction = internalAction({
   },
 });
 
+export const onComplete = internalMutation({
+  args: {
+    workId: workIdValidator,
+    context: v.object({ fate: fate, ms: v.optional(v.number()) }),
+    result: runResultValidator,
+  },
+  handler: async (ctx, args) => {
+    console.log("onComplete", args);
+  },
+});
+
 const N = 500;
 const BASE_MS = 1000;
 const MAX_MS = 10000;
@@ -226,13 +248,15 @@ export const runPaced = internalAction({
   handler: async (ctx, args) => {
     const ids: WorkId[] = [];
     for (let i = 0; i < (args.n ?? N); i++) {
+      const args = {
+        fate: "succeed",
+        ms: BASE_MS + (MAX_MS - BASE_MS) * Math.random(),
+      } as const;
       const id: WorkId = await bigPool.enqueueAction(
         ctx,
         internal.example.myAction,
-        {
-          fate: "succeed",
-          ms: BASE_MS + (MAX_MS - BASE_MS) * Math.random(),
-        }
+        args,
+        { onComplete: internal.example.onComplete, context: args }
       );
       console.log("enqueued", Date.now());
       ids.push(id);
