@@ -403,6 +403,12 @@ async function getNextUp(
     .first();
 }
 
+/**
+ * Handles the completion of pending completions.
+
+ * Important: It should handle retries before cancelations are processed,
+ * to allow retries to be canceled.
+ */
 async function handleCompletions(
   ctx: MutationCtx,
   state: Doc<"internalState">,
@@ -429,10 +435,15 @@ async function handleCompletions(
     completed.map(async (c) => {
       const work = await ctx.db.get(c.workId);
       const maxAttempts = work?.retryBehavior?.maxAttempts;
+      const pendingCancelations = await ctx.db
+        .query("pendingCancelation")
+        .withIndex("workId", (q) => q.eq("workId", c.workId))
+        .collect();
       if (work && state.running.some((r) => r.workId === c.workId)) {
         if (
           c.runResult.kind === "failed" &&
           maxAttempts &&
+          pendingCancelations.length === 0 &&
           work.attempts < maxAttempts
         ) {
           await rescheduleJob(ctx, work);
@@ -443,6 +454,10 @@ async function handleCompletions(
           } else if (c.runResult.kind === "failed") {
             state.report.failed++;
           }
+          // Ensure there aren't any pending cancelations for this work.
+          for (const pendingCancelation of pendingCancelations) {
+            await ctx.db.delete(pendingCancelation._id);
+          }
           done.push(c);
         }
         console.info(recordCompleted(work, c.runResult.kind));
@@ -452,14 +467,6 @@ async function handleCompletions(
         );
       } else {
         console.warn(`[mainLoop] completing ${c.workId} but it's not found`);
-      }
-      // Ensure there aren't any pending cancelations for this work.
-      const pendingCancelations = await ctx.db
-        .query("pendingCancelation")
-        .withIndex("workId", (q) => q.eq("workId", c.workId))
-        .collect();
-      for (const pendingCancelation of pendingCancelations) {
-        await ctx.db.delete(pendingCancelation._id);
       }
       await ctx.db.delete(c._id);
     })
