@@ -1,6 +1,6 @@
 import { mutation, action, query, internalAction } from "./_generated/server";
 import { api, components, internal } from "./_generated/api";
-import { Workpool } from "@convex-dev/workpool";
+import { WorkId, workIdValidator, Workpool } from "@convex-dev/workpool";
 import { v } from "convex/values";
 
 const bigPool = new Workpool(components.bigPool, {
@@ -58,14 +58,14 @@ export const enqueueOneMutation = mutation({
 });
 
 export const cancelMutation = mutation({
-  args: { id: v.string() },
+  args: { id: workIdValidator },
   handler: async (ctx, { id }) => {
     await smallPool.cancel(ctx, id);
   },
 });
 
 export const status = query({
-  args: { id: v.string() },
+  args: { id: workIdValidator },
   handler: async (ctx, { id }) => {
     return await smallPool.status(ctx, id);
   },

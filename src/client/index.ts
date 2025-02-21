@@ -21,15 +21,13 @@ import { RunMutationCtx, RunQueryCtx, UseApi } from "./utils.js";
 import { DEFAULT_LOG_LEVEL } from "../component/logging.js";
 export { runResultValidator, type RunResult };
 
-export type WorkId = string;
-
 export const DEFAULT_RETRY_BEHAVIOR: RetryBehavior = {
   maxAttempts: 5,
   initialBackoffMs: 250,
   base: 2,
 };
-export type RunId = string & { __isRunId: true };
-export const runIdValidator = v.string() as VString<RunId>;
+export type WorkId = string & { __isWorkId: true };
+export const workIdValidator = v.string() as VString<WorkId>;
 
 export class Workpool {
   constructor(
