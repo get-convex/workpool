@@ -16,7 +16,7 @@ export const runMutationWrapper = internalMutation({
     workId: v.id("work"),
     fnHandle: v.string(),
     fnArgs: v.any(),
-    logLevel,
+    logLevel: v.optional(logLevel),
   },
   handler: async (ctx, { workId, fnHandle: handleStr, fnArgs, logLevel }) => {
     const console = createLogger(logLevel);
@@ -51,7 +51,7 @@ export const runActionWrapper = internalAction({
     workId: v.id("work"),
     fnHandle: v.string(),
     fnArgs: v.any(),
-    logLevel,
+    logLevel: v.optional(logLevel),
   },
   handler: async (ctx, { workId, fnHandle: handleStr, fnArgs, logLevel }) => {
     const console = createLogger(logLevel);
