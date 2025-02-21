@@ -9,6 +9,7 @@ export type Logger = {
   error: (...args: unknown[]) => void;
   time: (label: string) => void;
   timeEnd: (label: string) => void;
+  event: (event: string, payload: Record<string, unknown>) => void;
 };
 
 export function createLogger(level?: LogLevel): Logger {
@@ -47,6 +48,16 @@ export function createLogger(level?: LogLevel): Logger {
     timeEnd: (label: string) => {
       if (levelIndex <= 0) {
         console.timeEnd(label);
+      }
+    },
+    event: (event: string, payload: Record<string, unknown>) => {
+      if (levelIndex <= 1) {
+        const fullPayload = {
+          system: "idempotent-workpool-component",
+          event,
+          payload,
+        };
+        console.info(JSON.stringify(fullPayload));
       }
     },
   };
