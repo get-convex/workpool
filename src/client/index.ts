@@ -16,11 +16,14 @@ import {
   OnCompleteArgs as SharedOnCompleteArgs,
   Status,
   logLevel,
+  Config,
 } from "../component/shared.js";
 import { RunMutationCtx, RunQueryCtx, UseApi } from "./utils.js";
 import { DEFAULT_LOG_LEVEL } from "../component/logging.js";
+import { DEFAULT_MAX_PARALLELISM } from "../component/kick.js";
 export { runResultValidator, type RunResult };
 
+// Attempts will run with delay [0, 250, 500, 1000, 2000] (ms)
 export const DEFAULT_RETRY_BEHAVIOR: RetryBehavior = {
   maxAttempts: 5,
   initialBackoffMs: 250,
@@ -36,7 +39,7 @@ export class Workpool {
       /** How many actions/mutations can be running at once within this pool.
        * Min 1, Max 300.
        */
-      maxParallelism: number;
+      maxParallelism?: number;
       /** How much to log.
        * Default WARN.
        * With INFO, you can see events for started and completed work, which can
@@ -137,12 +140,15 @@ function getRetryBehavior(
 
 async function defaultEnqueueArgs(
   fn: FunctionReference<"action" | "mutation", FunctionVisibility>,
-  { logLevel, maxParallelism }: { logLevel?: LogLevel; maxParallelism: number }
+  { logLevel, maxParallelism }: Partial<Config>
 ) {
   return {
     fnHandle: await createFunctionHandle(fn),
     fnName: getFunctionName(fn),
-    config: { logLevel: logLevel ?? getDefaultLogLevel(), maxParallelism },
+    config: {
+      logLevel: logLevel ?? getDefaultLogLevel(),
+      maxParallelism: maxParallelism ?? DEFAULT_MAX_PARALLELISM,
+    },
   };
 }
 
