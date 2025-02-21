@@ -28,14 +28,12 @@ export const runMutationWrapper = internalMutation({
       await ctx.scheduler.runAfter(0, internal.worker.saveResult, {
         workId,
         runResult: { kind: "success", returnValue },
-        logLevel,
       });
     } catch (e: unknown) {
       console.error(e);
       await ctx.scheduler.runAfter(0, internal.worker.saveResult, {
         workId,
         runResult: { kind: "failed", error: formatError(e) },
-        logLevel,
       });
     }
   },
@@ -65,7 +63,6 @@ export const runActionWrapper = internalAction({
       await ctx.scheduler.runAfter(0, internal.worker.saveResult, {
         workId,
         runResult: { kind: "success", returnValue },
-        logLevel,
       });
     } catch (e: unknown) {
       console.error(e);
@@ -73,7 +70,6 @@ export const runActionWrapper = internalAction({
       await ctx.scheduler.runAfter(0, internal.worker.saveResult, {
         workId,
         runResult: { kind: "failed", error: formatError(e) },
-        logLevel,
       });
     }
   },
@@ -83,15 +79,14 @@ export const saveResult = internalMutation({
   args: {
     workId: v.id("work"),
     runResult,
-    logLevel,
   },
-  handler: async (ctx, { workId, runResult, logLevel }) => {
+  handler: async (ctx, { workId, runResult }) => {
     await ctx.db.insert("pendingCompletion", {
       runResult,
       workId,
       segment: nextSegment(),
     });
-    await kickMainLoop(ctx, "saveResult", { logLevel });
+    await kickMainLoop(ctx, "saveResult");
   },
 });
 

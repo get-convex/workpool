@@ -1,17 +1,17 @@
 import { Id } from "./_generated/dataModel";
 import { internalMutation } from "./_generated/server";
 import { createLogger } from "./logging";
-import { kickMainLoop } from "./loop";
+import { kickMainLoop } from "./kick";
 import schema from "./schema";
-import { RunResult, nextSegment, logLevel } from "./shared";
+import { RunResult, nextSegment } from "./shared";
 
 export const recoverOrKill = internalMutation({
   args: {
     jobs: schema.tables.internalState.validator.fields.running,
-    logLevel,
   },
-  handler: async (ctx, { jobs, logLevel }) => {
-    const console = createLogger(logLevel);
+  handler: async (ctx, { jobs }) => {
+    const globals = await ctx.db.query("globals").unique();
+    const console = createLogger(globals?.logLevel);
     const completed: { workId: Id<"work">; runResult: RunResult }[] = [];
     let didAnything = false;
     const segment = nextSegment();
@@ -73,7 +73,7 @@ export const recoverOrKill = internalMutation({
       })
     );
     if (didAnything) {
-      await kickMainLoop(ctx, "recovery", { logLevel });
+      await kickMainLoop(ctx, "recovery");
     }
   },
 });

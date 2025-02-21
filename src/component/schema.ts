@@ -26,9 +26,10 @@ flowchart LR
  */
 
 export default defineSchema({
+  // Written from kickLoop, read everywhere.
+  globals: defineTable(config),
   // Singleton, only read & written by `mainLoop`.
   internalState: defineTable({
-    config,
     segmentCursors: v.object({
       incoming: segment,
       completion: segment,
