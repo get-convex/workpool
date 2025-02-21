@@ -15,6 +15,7 @@ import {
   type LogLevel,
   type RetryBehavior,
   OnCompleteArgs,
+  Status,
 } from "../component/shared.js";
 import { RunMutationCtx, RunQueryCtx, UseApi } from "./utils.js";
 export { runResultValidator, type RunResult };
@@ -109,7 +110,7 @@ export class Workpool {
       logLevel: this.options.logLevel,
     });
   }
-  async status(ctx: RunQueryCtx, id: WorkId): Promise<RunResult> {
+  async status(ctx: RunQueryCtx, id: WorkId): Promise<Status> {
     return ctx.runQuery(this.component.lib.status, { id });
   }
 }

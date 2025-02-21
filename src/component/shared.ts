@@ -81,3 +81,21 @@ export type OnCompleteArgs = {
    */
   result: RunResult;
 };
+
+export const status = v.union(
+  v.union(
+    v.object({
+      state: v.literal("pending"),
+      attempt: v.number(),
+    }),
+    v.object({
+      state: v.literal("running"),
+      attempt: v.number(),
+    }),
+    v.object({
+      // TODO: better name that implies it might have succeeded, failed, or been canceled
+      state: v.literal("done"),
+    })
+  )
+);
+export type Status = Infer<typeof status>;
