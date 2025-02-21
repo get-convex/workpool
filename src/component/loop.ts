@@ -25,7 +25,14 @@ export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
   generation: 0n,
   segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
   lastRecovery: 0n,
-  report: { completed: 0, failed: 0, canceled: 0, lastReportTs: 0 },
+  report: {
+    completed: 0,
+    succeeded: 0,
+    failed: 0,
+    retries: 0,
+    canceled: 0,
+    lastReportTs: 0,
+  },
   running: [],
 };
 
@@ -62,65 +69,13 @@ export const mainLoop = internalMutation({
 
     // Read pendingCompletions, including retry handling.
     console.time("[mainLoop] pendingCompletion");
-    // This won't be too many because the jobs all correspond to being scheduled
-    // by a single mainLoop (the previous one), so they're limited by MAX_PARALLELISM.
-    const completed = await ctx.db
-      .query("pendingCompletion")
-      .withIndex("segment", (q) =>
-        q
-          .gte("segment", state.segmentCursors.completion)
-          .lte("segment", args.segment)
-      )
-      .collect();
-    state.segmentCursors.completion = args.segment;
-    state.report.completed += completed.length;
-    console.debug(`[mainLoop] completing ${completed.length}`);
-    state.running = state.running.filter(
-      (r) => !completed.some((c) => c.workId === r.workId)
-    );
-    await Promise.all(
-      completed.map(async (c) => {
-        // TODO: handle retries, adding to pendingStart
-        const work = await ctx.db.get(c.workId);
-        if (work) console.info(recordCompleted(work, c.runResult.kind));
-        await ctx.db.delete(c._id);
-      })
-    );
+    const done = await handleCompletions(ctx, state, args.segment, console);
     // TODO: schedule calling the onComplete functions.
     console.timeEnd("[mainLoop] pendingCompletion");
 
     // Read pendingCancellation, deleting from pendingStart. If it's still running, queue to cancel.
     console.time("[mainLoop] pendingCancelation");
-    const canceled = await ctx.db
-      .query("pendingCancelation")
-      .withIndex("segment", (q) =>
-        q
-          .gte("segment", state.segmentCursors.cancelation)
-          .lte("segment", args.segment)
-      )
-      .take(CANCELLATION_BATCH_SIZE);
-    state.segmentCursors.cancelation = canceled.at(-1)?.segment ?? args.segment;
-    state.report.canceled += canceled.length;
-    console.debug(`[mainLoop] canceling ${canceled.length}`);
-    // TODO: schedule cancellation as part of onComplete
-    const toCancel = state.running.filter((r) =>
-      canceled.some((c) => c.workId === r.workId)
-    );
-    state.running = state.running.filter(
-      (r) => !canceled.some((c) => c.workId === r.workId)
-    );
-    await Promise.all(
-      canceled.map(async ({ _id, workId }) => {
-        const work = await ctx.db.get(workId);
-        if (work) console.info(recordCompleted(work, "canceled"));
-        const pendingStart = await ctx.db
-          .query("pendingStart")
-          .withIndex("workId", (q) => q.eq("workId", workId))
-          .unique();
-        if (pendingStart) await ctx.db.delete(pendingStart._id);
-        await ctx.db.delete(_id);
-      })
-    );
+    const toCancel = await handleCancelation(ctx, state, args.segment, console);
     console.timeEnd("[mainLoop] pendingCancelation");
 
     if (state.running.length === 0) {
@@ -128,43 +83,17 @@ export const mainLoop = internalMutation({
       state.lastRecovery = args.segment;
     } else if (args.segment - state.lastRecovery >= RECOVERY_PERIOD_SEGMENTS) {
       // Otherwise schedule recovery for any old jobs.
-      const jobs = state.running.filter(
-        (r) => r.started < Date.now() - RECOVERY_THRESHOLD_MS
-      );
+      const oldEnoughToConsider = Date.now() - RECOVERY_THRESHOLD_MS;
+      const jobs = state.running.filter((r) => r.started < oldEnoughToConsider);
       if (jobs.length) {
-        await ctx.scheduler.runAfter(0, internal.recovery.recover, {
-          jobs,
-        });
+        await ctx.scheduler.runAfter(0, internal.recovery.recover, { jobs });
       }
       state.lastRecovery = args.segment;
     }
 
     // Read pendingStart up to max capacity. Update the config, and incomingSegmentCursor.
     console.time("[mainLoop] pendingStart");
-    const maxParallelism = globals?.maxParallelism ?? DEFAULT_MAX_PARALLELISM;
-    // Schedule as many as needed to reach maxParallelism.
-    const toSchedule = maxParallelism - state.running.length;
-
-    const pending = await ctx.db
-      .query("pendingStart")
-      .withIndex("segment", (q) =>
-        q
-          .gte("segment", state.segmentCursors.incoming)
-          .lte("segment", args.segment)
-      )
-      .take(toSchedule);
-    state.segmentCursors.incoming = pending.at(-1)?.segment ?? args.segment;
-    console.debug(`[mainLoop] scheduling ${pending.length} pending work`);
-    // Start new work.
-    state.running.push(
-      ...(await Promise.all(
-        pending.map(async ({ _id, workId }) => {
-          const scheduledId = await beginWork(ctx, workId, globals?.logLevel);
-          await ctx.db.delete(_id);
-          return { scheduledId, workId, started: Date.now() };
-        })
-      ))
-    );
+    await handleStart(ctx, state, args.segment, console, globals);
     console.timeEnd("[mainLoop] pendingStart");
     // If minute rollover since last report, log report.
     // runStatus update (schedulable?):
@@ -348,6 +277,152 @@ async function getNextUp(
           : q
     )
     .first();
+}
+
+async function handleCompletions(
+  ctx: MutationCtx,
+  state: Doc<"internalState">,
+  segment: bigint,
+  console: Logger
+) {
+  // This won't be too many because the jobs all correspond to being scheduled
+  // by a single mainLoop (the previous one), so they're limited by MAX_PARALLELISM.
+  const completed = await ctx.db
+    .query("pendingCompletion")
+    .withIndex("segment", (q) =>
+      q.gte("segment", state.segmentCursors.completion).lte("segment", segment)
+    )
+    .collect();
+  state.segmentCursors.completion = segment;
+  state.report.completed += completed.length;
+  console.debug(`[mainLoop] completing ${completed.length}`);
+  state.running = state.running.filter(
+    (r) => !completed.some((c) => c.workId === r.workId)
+  );
+  const done: Doc<"pendingCompletion">[] = [];
+  await Promise.all(
+    completed.map(async (c) => {
+      const work = await ctx.db.get(c.workId);
+      const maxAttempts = work?.retryBehavior?.maxAttempts;
+      if (work) {
+        if (
+          c.runResult.kind === "failed" &&
+          maxAttempts &&
+          work.attempts < maxAttempts
+        ) {
+          await rescheduleJob(ctx, work);
+          state.report.retries++;
+        } else {
+          if (c.runResult.kind === "success") {
+            state.report.succeeded++;
+          } else if (c.runResult.kind === "failed") {
+            state.report.failed++;
+          }
+          done.push(c);
+        }
+        console.info(recordCompleted(work, c.runResult.kind));
+      } else {
+        console.warn(`[mainLoop] completing ${c.workId} but it's not found`);
+      }
+      await ctx.db.delete(c._id);
+    })
+  );
+  return done;
+}
+
+async function rescheduleJob(
+  ctx: MutationCtx,
+  work: Doc<"work">
+): Promise<number> {
+  if (!work.retryBehavior) {
+    throw new Error("work has no retryBehavior");
+  }
+  const backoffMs =
+    work.retryBehavior.initialBackoffMs *
+    Math.pow(work.retryBehavior.base, work.attempts - 1);
+  const nextAttempt = withJitter(backoffMs);
+  const startTime = Date.now() + nextAttempt;
+  const segment = toSegment(startTime);
+  await ctx.db.patch(work._id, {
+    attempts: work.attempts + 1,
+  });
+  await ctx.db.insert("pendingStart", {
+    workId: work._id,
+    segment,
+  });
+  return nextAttempt;
+}
+
+export function withJitter(delay: number) {
+  return delay * (0.5 + Math.random());
+}
+
+async function handleCancelation(
+  ctx: MutationCtx,
+  state: Doc<"internalState">,
+  segment: bigint,
+  console: Logger
+) {
+  const canceled = await ctx.db
+    .query("pendingCancelation")
+    .withIndex("segment", (q) =>
+      q.gte("segment", state.segmentCursors.cancelation).lte("segment", segment)
+    )
+    .take(CANCELLATION_BATCH_SIZE);
+  state.segmentCursors.cancelation = canceled.at(-1)?.segment ?? segment;
+  state.report.canceled += canceled.length;
+  console.debug(`[mainLoop] canceling ${canceled.length}`);
+  // TODO: schedule cancellation as part of onComplete
+  const toCancel = state.running.filter((r) =>
+    canceled.some((c) => c.workId === r.workId)
+  );
+  state.running = state.running.filter(
+    (r) => !canceled.some((c) => c.workId === r.workId)
+  );
+  await Promise.all(
+    canceled.map(async ({ _id, workId }) => {
+      const work = await ctx.db.get(workId);
+      if (work) console.info(recordCompleted(work, "canceled"));
+      const pendingStart = await ctx.db
+        .query("pendingStart")
+        .withIndex("workId", (q) => q.eq("workId", workId))
+        .unique();
+      if (pendingStart) await ctx.db.delete(pendingStart._id);
+      await ctx.db.delete(_id);
+    })
+  );
+  return toCancel;
+}
+
+async function handleStart(
+  ctx: MutationCtx,
+  state: Doc<"internalState">,
+  segment: bigint,
+  console: Logger,
+  globals: Config
+) {
+  const maxParallelism = globals.maxParallelism;
+  // Schedule as many as needed to reach maxParallelism.
+  const toSchedule = maxParallelism - state.running.length;
+
+  const pending = await ctx.db
+    .query("pendingStart")
+    .withIndex("segment", (q) =>
+      q.gte("segment", state.segmentCursors.incoming).lte("segment", segment)
+    )
+    .take(toSchedule);
+  state.segmentCursors.incoming = pending.at(-1)?.segment ?? segment;
+  console.debug(`[mainLoop] scheduling ${pending.length} pending work`);
+  // Start new work.
+  state.running.push(
+    ...(await Promise.all(
+      pending.map(async ({ _id, workId }) => {
+        const scheduledId = await beginWork(ctx, workId, globals.logLevel);
+        await ctx.db.delete(_id);
+        return { scheduledId, workId, started: Date.now() };
+      })
+    ))
+  );
 }
 
 async function beginWork(

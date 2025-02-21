@@ -41,9 +41,11 @@ export default defineSchema({
     }),
     lastRecovery: segment,
     report: v.object({
-      completed: v.number(),
-      failed: v.number(),
-      canceled: v.number(),
+      completed: v.number(), // finished running, counts retries & failures
+      succeeded: v.number(), // finished successfully, regardless of retries
+      failed: v.number(), // failed after all retries
+      retries: v.number(), // failure that turned into a retry
+      canceled: v.number(), // cancellations processed
       lastReportTs: v.number(),
     }),
     running: v.array(
