@@ -14,10 +14,9 @@ flowchart LR
     Worker-->|"saveResult"| pendingCompletion
     pendingStart -->|mainLoop| workerRunning["internalState.running"]
     workerRunning-->|"mainLoop(pendingCompletion)"| Retry{"Needs retry?"}
-    Retry-->|no| complete
+    Retry-->|"no / canceled"| complete
     Retry-->|yes| pendingStart
     pendingStart-->|"mainLoop(pendingCancelation)"| complete
-    workerRunning-->|"mainLoop(pendingCancelation)"| complete
 ```
  *
  * Retention optimization strategy:
