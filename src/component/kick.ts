@@ -19,7 +19,6 @@ export async function kickMainLoop(
   const runStatus = await getOrCreateRunStatus(ctx);
 
   // Only kick to run now if we're scheduled or idle.
-  // TODO: is this a race?
   if (runStatus.state.kind === "running") {
     console.debug(
       `[${source}] mainLoop is actively running, so we don't need to kick it`
@@ -41,11 +40,17 @@ export async function kickMainLoop(
       );
       return;
     }
-    // TODO: check that it's still pending first
     console.debug(
       `[${source}] mainLoop is scheduled to run later, so reschedule it to run now`
     );
-    await ctx.scheduler.cancel(runStatus.state.scheduledId);
+    const scheduled = await ctx.db.system.get(runStatus.state.scheduledId);
+    if (scheduled && scheduled.state.kind === "pending") {
+      await ctx.scheduler.cancel(runStatus.state.scheduledId);
+    } else {
+      console.warn(
+        `[${source}] mainLoop is marked as scheduled, but it's status is ${scheduled?.state.kind}`
+      );
+    }
   }
   console.debug(
     `[${source}] mainLoop was scheduled later, so reschedule it to run now`

@@ -41,7 +41,6 @@ flowchart TD
  */
 
 // There should only ever be at most one of these scheduled or running.
-// TODO: use segment as a generation number to enforce only one running at a time.
 export const mainLoop = internalMutation({
   args: {
     generation: v.int64(),
