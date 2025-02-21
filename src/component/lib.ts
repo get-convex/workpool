@@ -1,13 +1,13 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server.js";
 import {
-  nextWheelSegment,
+  nextSegment,
   logLevel,
   onComplete,
   retryBehavior,
   config,
   status as statusValidator,
-  toWheelSegment,
+  toSegment,
 } from "./shared.js";
 import { kickMainLoop } from "./loop.js";
 
@@ -43,7 +43,7 @@ export const enqueue = mutation({
     await ctx.db.insert("pendingStart", {
       workId,
       config,
-      segment: toWheelSegment(runAt),
+      segment: toSegment(runAt),
     });
     await kickMainLoop(ctx, "enqueue", config);
     // TODO: stats event
@@ -59,7 +59,7 @@ export const cancel = mutation({
   handler: async (ctx, { id, logLevel }) => {
     await ctx.db.insert("pendingCancelation", {
       workId: id,
-      segment: nextWheelSegment(),
+      segment: nextSegment(),
     });
     await kickMainLoop(ctx, "cancel", { logLevel });
     // TODO: stats event

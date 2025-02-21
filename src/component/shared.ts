@@ -3,22 +3,22 @@ import { Infer } from "convex/values";
 import { v } from "convex/values";
 
 // TODO: p95 of mainLoop
-const WHEEL_SEGMENT_MS = 125;
+const SEGMENT_MS = 125;
 
-export function toWheelSegment(ms: number): bigint {
-  return BigInt(Math.floor(ms / WHEEL_SEGMENT_MS));
+export function toSegment(ms: number): bigint {
+  return BigInt(Math.floor(ms / SEGMENT_MS));
 }
 
-export function currentWheelSegment(): bigint {
-  return toWheelSegment(Date.now());
+export function currentSegment(): bigint {
+  return toSegment(Date.now());
 }
 
-export function nextWheelSegment(): bigint {
-  return toWheelSegment(Date.now()) + 1n;
+export function nextSegment(): bigint {
+  return toSegment(Date.now()) + 1n;
 }
 
-export function fromWheelSegment(segment: bigint): number {
-  return Number(segment) * WHEEL_SEGMENT_MS;
+export function fromSegment(segment: bigint): number {
+  return Number(segment) * SEGMENT_MS;
 }
 
 export const logLevel = v.union(
