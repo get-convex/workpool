@@ -10,6 +10,7 @@
 
 import type * as lib from "../lib.js";
 import type * as logging from "../logging.js";
+import type * as recovery from "../recovery.js";
 import type * as shared from "../shared.js";
 import type * as stats from "../stats.js";
 import type * as worker from "../worker.js";
@@ -30,6 +31,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   lib: typeof lib;
   logging: typeof logging;
+  recovery: typeof recovery;
   shared: typeof shared;
   stats: typeof stats;
   worker: typeof worker;
