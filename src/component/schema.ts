@@ -27,6 +27,11 @@ Data flow:
   pendingCancelation, running --mainLoop--> {end} // attempts to cancel
   pendingCancelation, pendingCompletion --mainLoop--> {end} // no-op, work is alreadydone.
   {end}: calls onComplete, then deletes work in the same transaction.
+
+  Retention issues strategy:
+  - Patch singletons to avoid tombstones.
+  - Do point reads.
+  - Use segements & cursors to bound reads to latest data.
  */
 
 export default defineSchema({
