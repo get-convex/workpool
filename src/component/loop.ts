@@ -247,10 +247,11 @@ export const updateRunStatus = internalMutation({
         generation: args.generation,
         segment: thisSegment,
       });
+      return;
     }
 
     console.time("[updateRunStatus] nextSegmentIsActionable");
-    const nextIsActionable = await nextSegmentIsActionable(
+    const [nextIsActionable, cursors] = await nextSegmentIsActionable(
       ctx,
       state,
       maxParallelism
@@ -259,6 +260,12 @@ export const updateRunStatus = internalMutation({
 
     const start = nextSegment();
     if (nextIsActionable) {
+      await ctx.db.patch(state._id, {
+        segmentCursors: {
+          ...state.segmentCursors,
+          ...cursors,
+        },
+      });
       await ctx.scheduler.runAt(fromSegment(start), internal.loop.mainLoop, {
         generation: args.generation,
         segment: start,
@@ -306,6 +313,7 @@ export const updateRunStatus = internalMutation({
           segment,
         },
       });
+      return;
     }
     // There seems to be nothing in the future to do, so go idle.
     await ctx.db.patch(runStatus._id, {
@@ -318,7 +326,9 @@ async function nextSegmentIsActionable(
   ctx: MutationCtx,
   state: Doc<"internalState">,
   maxParallelism: number
-) {
+): Promise<
+  [boolean, { completion?: bigint; cancelation?: bigint; incoming?: bigint }]
+> {
   // First, try with our cursor range, up to next segment.
   const end = nextSegment();
   if (
@@ -327,7 +337,7 @@ async function nextSegmentIsActionable(
       end,
     })
   ) {
-    return true;
+    return [true, {}];
   }
   if (
     await getNextUp(ctx, "pendingCompletion", {
@@ -335,7 +345,7 @@ async function nextSegmentIsActionable(
       end,
     })
   ) {
-    return true;
+    return [true, {}];
   }
   if (state.running.length < maxParallelism) {
     if (
@@ -344,34 +354,31 @@ async function nextSegmentIsActionable(
         end,
       })
     ) {
-      return true;
+      return [true, {}];
     }
   }
   // Next, we look for out-of-order additions we may have missed.
-  if (
-    await getNextUp(ctx, "pendingCompletion", {
-      end: state.segmentCursors.completion,
-    })
-  ) {
-    return true;
+  const oldCompletion = await getNextUp(ctx, "pendingCompletion", {
+    end: state.segmentCursors.completion,
+  });
+  if (oldCompletion) {
+    return [true, { completion: oldCompletion.segment }];
   }
-  if (
-    await getNextUp(ctx, "pendingCancelation", {
-      end: state.segmentCursors.cancelation,
-    })
-  ) {
-    return true;
+  const oldCancelation = await getNextUp(ctx, "pendingCancelation", {
+    end: state.segmentCursors.cancelation,
+  });
+  if (oldCancelation) {
+    return [true, { cancelation: oldCancelation.segment }];
   }
   if (state.running.length < maxParallelism) {
-    if (
-      await getNextUp(ctx, "pendingStart", {
-        end: state.segmentCursors.incoming,
-      })
-    ) {
-      return true;
+    const oldStart = await getNextUp(ctx, "pendingStart", {
+      end: state.segmentCursors.incoming,
+    });
+    if (oldStart) {
+      return [true, { incoming: oldStart.segment }];
     }
   }
-  return false;
+  return [false, {}];
 }
 
 // Fetch the next item. If only one of start & end are provided, it's exclusive.
