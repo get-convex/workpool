@@ -53,9 +53,6 @@ export const runResult = v.union(
   }),
   v.object({
     kind: v.literal("canceled"),
-  }),
-  v.object({
-    kind: v.literal("timeout"),
   })
 );
 export type RunResult = Infer<typeof runResult>;

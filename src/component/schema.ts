@@ -43,7 +43,6 @@ export default defineSchema({
       completed: v.int64(),
       failed: v.int64(),
       canceled: v.int64(),
-      timedOut: v.int64(),
       lastReportTs: v.number(),
     }),
     running: v.array(
