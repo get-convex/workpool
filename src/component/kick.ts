@@ -65,24 +65,23 @@ export async function kickMainLoop(
 export const forceKick = internalMutation({
   args: {},
   handler: async (ctx) => {
-    await getOrUpdateGlobals(ctx);
-    await getOrCreateRunStatus(ctx);
-    const state = await ctx.db.query("internalState").unique();
-    await ctx.scheduler.runAfter(0, internal.loop.mainLoop, {
-      generation: state?.generation ?? INITIAL_STATE.generation,
-      segment: currentSegment(),
-    });
+    const runStatus = await getOrCreateRunStatus(ctx);
+    await ctx.db.delete(runStatus._id);
+    await kickMainLoop(ctx, "recovery");
   },
 });
 
 async function getOrCreateRunStatus(ctx: MutationCtx) {
   let runStatus = await ctx.db.query("runStatus").unique();
   if (!runStatus) {
+    const state = await ctx.db.query("internalState").unique();
     const id = await ctx.db.insert("runStatus", {
-      state: { kind: "idle", generation: 0n },
+      state: {
+        kind: "idle",
+        generation: state?.generation ?? INITIAL_STATE.generation,
+      },
     });
     runStatus = (await ctx.db.get(id))!;
-    const state = await ctx.db.query("internalState").unique();
     if (!state) {
       await ctx.db.insert("internalState", INITIAL_STATE);
     }
