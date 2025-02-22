@@ -4,27 +4,6 @@ import { config, onComplete, retryBehavior, runResult } from "./shared.js";
 
 // Represents a slice of time to process work.
 const segment = v.int64();
-/** State machine
-```mermaid
-flowchart LR
-    Client -->|enqueue| pendingStart
-    Client -->|cancel| pendingCancelation
-    Recovery-->|recover| pendingCancelation
-    Recovery-->|recover| pendingCompletion
-    Worker-->|"saveResult"| pendingCompletion
-    pendingStart -->|mainLoop| workerRunning["internalState.running"]
-    workerRunning-->|"mainLoop(pendingCompletion)"| Retry{"Needs retry?"}
-    Retry-->|"no / canceled"| complete
-    Retry-->|yes| pendingStart
-    pendingStart-->|"mainLoop(pendingCancelation)"| complete
-```
- *
- * Retention optimization strategy:
- * - Patch singletons to avoid tombstones.
- * - Use segements & cursors to bound reads to latest data.
- *   - Do scans outside of the critical path (during load).
- * - Do point reads otherwise.
- */
 
 export default defineSchema({
   // Written from kickLoop, read everywhere.

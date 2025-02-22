@@ -39,18 +39,6 @@ export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
   running: [],
 };
 
-/** State machine
-```mermaid
-flowchart TD
-    idle -->|enqueue| running
-    running-->|"all started, leftover capacity"| scheduled
-    scheduled -->|"enqueue, cancel, saveResult, recovery"| running
-    running -->|"maxed out"| saturated
-    saturated -->|"cancel, saveResult, recovery"| running
-    running-->|"all done"| idle
-```
- */
-
 // There should only ever be at most one of these scheduled or running.
 export const mainLoop = internalMutation({
   args: {
