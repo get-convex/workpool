@@ -320,9 +320,8 @@ The `CompletionStatus` type is one of:
 You can cancel work by calling `pool.cancel(id)`.
 
 This will remove the work from the queue and mark it as canceled.
-If the work has already started, it will try its best, but it may not succeed
-and in-progress work may show up as success, failure, or canceled.
-In particular, it's possible that the work succeeds but is marked as canceled.
+If the work has already started, it will wait for it to finish, but not allow
+retries.
 
 <!-- END: Include on https://convex.dev/components -->
 
