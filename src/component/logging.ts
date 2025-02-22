@@ -1,4 +1,4 @@
-import { LogLevel } from "./shared.js";
+import { v, Infer } from "convex/values";
 
 export const DEFAULT_LOG_LEVEL: LogLevel = "WARN";
 
@@ -62,3 +62,10 @@ export function createLogger(level?: LogLevel): Logger {
     },
   };
 }
+export const logLevel = v.union(
+  v.literal("DEBUG"),
+  v.literal("INFO"),
+  v.literal("WARN"),
+  v.literal("ERROR")
+);
+export type LogLevel = Infer<typeof logLevel>;

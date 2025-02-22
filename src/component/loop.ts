@@ -8,12 +8,12 @@ import {
   Config,
   currentSegment,
   fromSegment,
-  LogLevel,
   nextSegment,
   toSegment,
   runResult,
   OnCompleteArgs,
 } from "./shared";
+import { LogLevel } from "./logging";
 import { FunctionHandle, WithoutSystemFields } from "convex/server";
 import { recordCompleted, recordReport } from "./stats";
 

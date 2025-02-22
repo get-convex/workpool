@@ -2,13 +2,13 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server.js";
 import {
   nextSegment,
-  logLevel,
   onComplete,
   retryBehavior,
   config,
   status as statusValidator,
   toSegment,
 } from "./shared.js";
+import { logLevel } from "./logging.js";
 import { kickMainLoop } from "./kick.js";
 import { api } from "./_generated/api.js";
 

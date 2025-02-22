@@ -1,6 +1,7 @@
 import { Infer } from "convex/values";
 
 import { v } from "convex/values";
+import { Logger, logLevel } from "./logging";
 
 // TODO: p95 of mainLoop
 const SEGMENT_MS = 125;
@@ -20,14 +21,6 @@ export function nextSegment(): bigint {
 export function fromSegment(segment: bigint): number {
   return Number(segment) * SEGMENT_MS;
 }
-
-export const logLevel = v.union(
-  v.literal("DEBUG"),
-  v.literal("INFO"),
-  v.literal("WARN"),
-  v.literal("ERROR")
-);
-export type LogLevel = Infer<typeof logLevel>;
 
 export const config = v.object({
   maxParallelism: v.number(),

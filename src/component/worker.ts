@@ -7,7 +7,8 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalAction, internalMutation } from "./_generated/server";
 import { createLogger } from "./logging.js";
-import { logLevel, nextSegment, runResult } from "./shared";
+import { nextSegment, runResult } from "./shared";
+import { logLevel } from "./logging";
 import { FunctionHandle } from "convex/server";
 import { kickMainLoop } from "./kick";
 

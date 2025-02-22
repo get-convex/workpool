@@ -11,13 +11,12 @@ import {
   OnComplete,
   runResult as runResultValidator,
   RunResult,
-  type LogLevel,
   type RetryBehavior,
   OnCompleteArgs as SharedOnCompleteArgs,
   Status,
-  logLevel,
   Config,
 } from "../component/shared.js";
+import { type LogLevel, logLevel } from "../component/logging.js";
 import { RunMutationCtx, RunQueryCtx, UseApi } from "./utils.js";
 import { DEFAULT_LOG_LEVEL } from "../component/logging.js";
 import { DEFAULT_MAX_PARALLELISM } from "../component/kick.js";
