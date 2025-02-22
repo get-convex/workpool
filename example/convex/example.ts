@@ -13,6 +13,7 @@ import {
   runResultValidator,
 } from "@convex-dev/workpool";
 import { v } from "convex/values";
+import { createLogger } from "../../src/component/logging";
 
 const bigPool = new Workpool(components.bigPool, {
   maxParallelism: 20,
@@ -22,7 +23,7 @@ const bigPool = new Workpool(components.bigPool, {
     base: 2,
   },
   retryActionsByDefault: true,
-  logLevel: "INFO",
+  logLevel: "DEBUG",
 });
 const smallPool = new Workpool(components.smallPool, {
   maxParallelism: 3,
@@ -34,6 +35,7 @@ const serializedPool = new Workpool(components.serializedPool, {
   retryActionsByDefault: true,
   logLevel: "INFO",
 });
+const console = createLogger("WARN");
 
 export const addMutation = mutation({
   args: { data: v.optional(v.number()) },
@@ -207,7 +209,7 @@ export const myAction = internalAction({
     }
     switch (fate) {
       case "succeed":
-        console.log("success");
+        console.debug("success");
         break;
       case "fail randomly":
         if (Math.random() < 0.8) {
@@ -215,10 +217,10 @@ export const myAction = internalAction({
         }
         if (Math.random() < 0.01) {
           // Incur a timeout.
-          console.log("I'm a baaaad timeout job.");
+          console.debug("I'm a baaaad timeout job.");
           await new Promise((resolve) => setTimeout(resolve, 15 * 60 * 1000));
         }
-        console.log("action succeded.");
+        console.debug("action succeded.");
         break;
       case "fail always":
         throw new Error("action failed.");
@@ -235,7 +237,7 @@ export const onComplete = internalMutation({
     result: runResultValidator,
   },
   handler: async (ctx, args) => {
-    console.log("onComplete", args);
+    console.info("total", args.result, (Date.now() - args.context) / 1000);
   },
 });
 
@@ -258,7 +260,7 @@ export const runPaced = internalAction({
         args,
         { onComplete: internal.example.onComplete, context: args }
       );
-      console.log("enqueued", Date.now());
+      console.debug("enqueued", Date.now());
       ids.push(id);
       // exponential distribution of time to wait.
       const avgRate = CONCURRENCY / ((BASE_MS + MAX_MS) / 2);
@@ -273,9 +275,9 @@ export const cancel = internalAction({
     id: workIdValidator,
   },
   handler: async (ctx, args) => {
-    console.log("Canceling", args.id);
+    console.debug("Canceling", args.id);
     if (args.id) {
-      console.log("Canceling", args.id);
+      console.debug("Canceling", args.id);
       await bigPool.cancel(ctx, args.id as WorkId);
     } else {
       await bigPool.cancelAll(ctx);
