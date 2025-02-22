@@ -32,13 +32,13 @@ describe("workpool", () => {
   test("enqueue and get status", async () => {
     const id = await t.mutation(api.example.enqueueOneMutation, { data: 1 });
     expect(await t.query(api.example.status, { id })).toEqual({
-      kind: "pending",
+      state: "pending",
+      attempt: 0,
     });
     expect(await t.query(api.example.queryData, {})).toEqual([]);
     await t.finishAllScheduledFunctions(vi.runAllTimers);
     expect(await t.query(api.example.status, { id })).toEqual({
-      kind: "completed",
-      completionStatus: "success",
+      state: "finished",
     });
     expect(await t.query(api.example.queryData, {})).toEqual([1]);
   });
