@@ -12,6 +12,7 @@ import {
   toSegment,
   runResult,
   OnCompleteArgs,
+  boundScheduledTime,
 } from "./shared";
 import { LogLevel } from "./logging";
 import { FunctionHandle, WithoutSystemFields } from "convex/server";
@@ -378,7 +379,7 @@ async function handleCompletions(
           pendingCancelations.length === 0 &&
           work.attempts < maxAttempts
         ) {
-          await rescheduleJob(ctx, work);
+          await rescheduleJob(ctx, work, console);
           state.report.retries++;
         } else {
           if (c.runResult.kind === "success") {
@@ -411,7 +412,8 @@ async function handleCompletions(
 
 async function rescheduleJob(
   ctx: MutationCtx,
-  work: Doc<"work">
+  work: Doc<"work">,
+  console: Logger
 ): Promise<number> {
   if (!work.retryBehavior) {
     throw new Error("work has no retryBehavior");
@@ -420,7 +422,7 @@ async function rescheduleJob(
     work.retryBehavior.initialBackoffMs *
     Math.pow(work.retryBehavior.base, work.attempts - 1);
   const nextAttempt = withJitter(backoffMs);
-  const startTime = Date.now() + nextAttempt;
+  const startTime = boundScheduledTime(Date.now() + nextAttempt, console);
   const segment = toSegment(startTime);
   await ctx.db.patch(work._id, {
     attempts: work.attempts + 1,

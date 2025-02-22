@@ -7,10 +7,12 @@ import {
   config,
   status as statusValidator,
   toSegment,
+  boundScheduledTime,
 } from "./shared.js";
 import { logLevel } from "./logging.js";
 import { kickMainLoop } from "./kick.js";
 import { api } from "./_generated/api.js";
+import { createLogger } from "./logging.js";
 
 const MAX_POSSIBLE_PARALLELISM = 100;
 
@@ -28,12 +30,14 @@ export const enqueue = mutation({
   },
   returns: v.id("work"),
   handler: async (ctx, { config, runAt, ...workArgs }) => {
+    const console = createLogger(config.logLevel);
     if (config.maxParallelism > MAX_POSSIBLE_PARALLELISM) {
       throw new Error(`maxParallelism must be <= ${MAX_POSSIBLE_PARALLELISM}`);
     }
     if (config.maxParallelism < 1) {
       throw new Error("maxParallelism must be >= 1");
     }
+    runAt = boundScheduledTime(runAt, console);
     const workId = await ctx.db.insert("work", {
       ...workArgs,
       attempts: 0,

@@ -5,6 +5,11 @@ import { Logger, logLevel } from "./logging";
 
 // TODO: p95 of mainLoop
 const SEGMENT_MS = 125;
+export const SECOND = 1000;
+export const MINUTE = 60 * SECOND;
+export const HOUR = 60 * MINUTE;
+export const DAY = 24 * HOUR;
+export const YEAR = 365 * DAY;
 
 export function toSegment(ms: number): bigint {
   return BigInt(Math.floor(ms / SEGMENT_MS));
@@ -106,3 +111,18 @@ export const status = v.union(
   )
 );
 export type Status = Infer<typeof status>;
+
+export function boundScheduledTime(ms: number, console: Logger): number {
+  if (ms < Date.now() - YEAR) {
+    console.warn("runAt is too far in the past, defaulting to now", ms);
+    return Date.now();
+  }
+  if (ms > Date.now() + 4 * YEAR) {
+    console.warn(
+      "runAt is too far in the future, defaulting to 1 year from now",
+      ms
+    );
+    return Date.now() + YEAR;
+  }
+  return ms;
+}
