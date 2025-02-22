@@ -1,8 +1,8 @@
 import { internal } from "./_generated/api";
-import { MutationCtx } from "./_generated/server";
+import { internalMutation, MutationCtx } from "./_generated/server";
 import { createLogger, DEFAULT_LOG_LEVEL } from "./logging";
 import { INITIAL_STATE } from "./loop";
-import { Config, nextSegment } from "./shared";
+import { Config, currentSegment, nextSegment } from "./shared";
 
 export const DEFAULT_MAX_PARALLELISM = 10;
 /**
@@ -61,6 +61,19 @@ export async function kickMainLoop(
     segment,
   });
 }
+
+export const forceKick = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    await getOrUpdateGlobals(ctx);
+    await getOrCreateRunStatus(ctx);
+    const state = await ctx.db.query("internalState").unique();
+    await ctx.scheduler.runAfter(0, internal.loop.mainLoop, {
+      generation: state?.generation ?? INITIAL_STATE.generation,
+      segment: currentSegment(),
+    });
+  },
+});
 
 async function getOrCreateRunStatus(ctx: MutationCtx) {
   let runStatus = await ctx.db.query("runStatus").unique();
