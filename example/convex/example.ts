@@ -233,7 +233,7 @@ export const myAction = internalAction({
 export const onComplete = internalMutation({
   args: {
     workId: workIdValidator,
-    context: v.object({ fate: fate, ms: v.optional(v.number()) }),
+    context: v.number(),
     result: runResultValidator,
   },
   handler: async (ctx, args) => {
@@ -241,24 +241,25 @@ export const onComplete = internalMutation({
   },
 });
 
-const N = 500;
-const BASE_MS = 1000;
-const MAX_MS = 10000;
-const CONCURRENCY = 50;
+const N = 100;
+const BASE_MS = 500;
+const MAX_MS = 1000;
+const CONCURRENCY = 20;
 export const runPaced = internalAction({
   args: { n: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const ids: WorkId[] = [];
+    const start = Date.now();
     for (let i = 0; i < (args.n ?? N); i++) {
       const args = {
-        fate: "succeed",
+        fate: "fail randomly",
         ms: BASE_MS + (MAX_MS - BASE_MS) * Math.random(),
       } as const;
       const id: WorkId = await bigPool.enqueueAction(
         ctx,
         internal.example.myAction,
         args,
-        { onComplete: internal.example.onComplete, context: args }
+        { onComplete: internal.example.onComplete, context: start }
       );
       console.debug("enqueued", Date.now());
       ids.push(id);
