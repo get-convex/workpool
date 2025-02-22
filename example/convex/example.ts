@@ -14,9 +14,10 @@ import {
 } from "@convex-dev/workpool";
 import { v } from "convex/values";
 import { createLogger } from "../../src/component/logging";
+import { FunctionArgs } from "convex/server";
 
 const bigPool = new Workpool(components.bigPool, {
-  maxParallelism: 20,
+  maxParallelism: 10,
   defaultRetryBehavior: {
     maxAttempts: 3,
     initialBackoffMs: 100,
@@ -237,14 +238,14 @@ export const onComplete = internalMutation({
     result: runResultValidator,
   },
   handler: async (ctx, args) => {
-    console.info("total", args.result, (Date.now() - args.context) / 1000);
+    console.warn("total", (Date.now() - args.context) / 1000);
   },
 });
 
 const N = 100;
-const BASE_MS = 500;
+const BASE_MS = 100;
 const MAX_MS = 1000;
-const CONCURRENCY = 20;
+const CONCURRENCY = 15;
 export const runPaced = internalAction({
   args: { n: v.optional(v.number()) },
   handler: async (ctx, args) => {
@@ -252,9 +253,9 @@ export const runPaced = internalAction({
     const start = Date.now();
     for (let i = 0; i < (args.n ?? N); i++) {
       const args = {
-        fate: "fail randomly",
+        fate: "succeed",
         ms: BASE_MS + (MAX_MS - BASE_MS) * Math.random(),
-      } as const;
+      } as FunctionArgs<typeof internal.example.myAction>;
       const id: WorkId = await bigPool.enqueueAction(
         ctx,
         internal.example.myAction,
