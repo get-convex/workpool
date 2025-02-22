@@ -33,6 +33,17 @@ export type WorkId = string & { __isWorkId: true };
 export const workIdValidator = v.string() as VString<WorkId>;
 
 export class Workpool {
+  /**
+   * Initializes a Workpool.
+   *
+   * Note: if you want different pools, you need to *create different instances*
+   * of Workpool in convex.config.ts. It isn't sufficient to have different
+   * instances of this class.
+   *
+   * @param component - The component to use, like `components.workpool` from
+   *   `./_generated/api.ts`.
+   * @param options - The options for the Workpool.
+   */
   constructor(
     private component: UseApi<typeof api>,
     private options: {
@@ -40,10 +51,11 @@ export class Workpool {
        * Min 1, Max 300.
        */
       maxParallelism?: number;
-      /** How much to log.
-       * Default WARN.
+      /** How much to log. This is updated on each call to `enqueue*`,
+       * `status`, or `cancel*`.
+       * Default is WARN.
        * With INFO, you can see events for started and completed work, which can
-       * be parsed.
+       * be parsed by tools like [Axiom](https://axiom.co) for monitoring.
        * With DEBUG, you can see timers and internal events for work being
        * scheduled.
        */
@@ -57,6 +69,16 @@ export class Workpool {
       retryActionsByDefault?: boolean;
     }
   ) {}
+  /**
+   * Enqueues an action to be run.
+   *
+   * @param ctx - The mutation or action context that can call ctx.runMutation.
+   * @param fn - The action to run, like `internal.example.myAction`.
+   * @param fnArgs - The arguments to pass to the action.
+   * @param options - The options for the action to specify retry behavior,
+   *   onComplete handling, and scheduling via `runAt` or `runAfter`.
+   * @returns The ID of the work that was enqueued.
+   */
   async enqueueAction<Args extends DefaultFunctionArgs, ReturnType>(
     ctx: RunMutationCtx,
     fn: FunctionReference<"action", FunctionVisibility, Args, ReturnType>,
@@ -92,6 +114,20 @@ export class Workpool {
     });
     return id as WorkId;
   }
+
+  /**
+   * Enqueues a mutation to be run.
+   *
+   * Note: mutations are not retried by the workpool. Convex automatically
+   * retries them on database conflicts and transient failures.
+   * Because they're deterministic, external retries don't provide any benefit.
+   *
+   * @param ctx - The mutation or action context that can call ctx.runMutation.
+   * @param fn - The mutation to run, like `internal.example.myMutation`.
+   * @param fnArgs - The arguments to pass to the mutation.
+   * @param options - The options for the mutation to specify onComplete handling
+   *   and scheduling via `runAt` or `runAfter`.
+   */
   async enqueueMutation<Args extends DefaultFunctionArgs, ReturnType>(
     ctx: RunMutationCtx,
     fn: FunctionReference<"mutation", FunctionVisibility, Args, ReturnType>,
@@ -196,6 +232,7 @@ export type CallbackOptions = {
 
   /**
    * A context object to pass to the `onComplete` mutation.
+   * Useful for passing data from the enqueue site to the onComplete site.
    */
   context?: unknown;
 };

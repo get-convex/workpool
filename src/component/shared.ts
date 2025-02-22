@@ -40,7 +40,25 @@ export const retryBehavior = v.object({
   initialBackoffMs: v.number(),
   base: v.number(),
 });
-export type RetryBehavior = Infer<typeof retryBehavior>;
+export type RetryBehavior = {
+  /**
+   * The maximum number of attempts to make. 2 means one retry.
+   */
+  maxAttempts: number;
+  /**
+   * The initial backoff time in milliseconds. 100 means wait 100ms before the
+   * first retry.
+   */
+  initialBackoffMs: number;
+  /**
+   * The base for the backoff. 2 means double the backoff each time.
+   * e.g. if the initial backoff is 100ms, and the base is 2, then the first
+   * retry will wait 200ms, the second will wait 400ms, etc.
+   */
+  base: number;
+};
+// This ensures that the type satisfies the schema.
+const _ = {} as RetryBehavior satisfies Infer<typeof retryBehavior>;
 
 export const runResult = v.union(
   v.object({
