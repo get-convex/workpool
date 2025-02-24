@@ -27,7 +27,7 @@
     "prepare": "npm run build",
     "prepack": "node node10stubs.mjs",
     "postpack": "node node10stubs.mjs --cleanup",
-    "test": "vitest run",
+    "test": "vitest",
     "lint": "tsc --noEmit && eslint . && prettier --check .",
     "format": "prettier --write .",
     "test:debug": "vitest --inspect-brk --no-file-parallelism",
@@ -66,7 +66,7 @@
   "devDependencies": {
     "@eslint/js": "^9.9.1",
     "@types/node": "^18.17.0",
-    "convex-test": "^0.0.35",
+    "convex-test": "^0.0.36-alpha.0",
     "eslint": "^9.9.1",
     "globals": "^15.9.0",
     "prettier": "3.2.5",

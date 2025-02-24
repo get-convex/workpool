@@ -12,9 +12,9 @@ import schema from "./schema.js";
 import { modules } from "./setup.test.js";
 import { DEFAULT_MAX_PARALLELISM, kickMainLoop } from "./kick.js";
 import { DEFAULT_LOG_LEVEL } from "./logging.js";
-import { INITIAL_STATE } from "./loop.js";
 import { internal } from "./_generated/api";
-import { toSegment, fromSegment } from "./shared";
+import { toSegment, fromSegment, nextSegment } from "./shared";
+import { Id } from "./_generated/dataModel.js";
 
 describe("kickMainLoop", () => {
   beforeEach(() => {
@@ -256,6 +256,31 @@ describe("kickMainLoop", () => {
       assert(globals);
       expect(globals.maxParallelism).toBe(5);
       expect(globals.logLevel).toBe("DEBUG");
+    });
+  });
+
+  test("cancels and starts running when scheduled", async () => {
+    const t = convexTest(schema, modules);
+    await t.run(async (ctx) => {
+      await kickMainLoop(ctx, "enqueue");
+      const runStatus = await ctx.db.query("runStatus").unique();
+      assert(runStatus);
+      const segment = nextSegment() + 10n;
+      await ctx.db.patch(runStatus._id, {
+        state: {
+          generation: 0n,
+          saturated: false,
+          kind: "scheduled",
+          segment,
+          scheduledId: "" as Id<"_scheduled_functions">,
+        },
+      });
+      // await all scheduled functions to run
+      await kickMainLoop(ctx, "enqueue");
+      const afterStatus = await ctx.db.query("runStatus").unique();
+      assert(afterStatus);
+      expect(afterStatus.state.kind).toBe("running");
+      assert(afterStatus.state.kind === "running");
     });
   });
 });

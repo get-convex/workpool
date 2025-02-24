@@ -70,8 +70,7 @@ describe("workpool", () => {
     await t.mutation(api.example.cancelMutation, { id });
     await t.finishAllScheduledFunctions(vi.runAllTimers);
     expect(await t.query(api.example.status, { id })).toEqual({
-      kind: "completed",
-      completionStatus: "canceled",
+      state: "finished",
     });
   });
 });
