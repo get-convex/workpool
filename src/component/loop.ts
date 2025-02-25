@@ -1,4 +1,4 @@
-import { FunctionHandle, WithoutSystemFields } from "convex/server";
+import { WithoutSystemFields } from "convex/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api.js";
 import { Doc, Id } from "./_generated/dataModel.js";
@@ -11,13 +11,10 @@ import {
   LogLevel,
 } from "./logging.js";
 import {
-  boundScheduledTime,
   Config,
   currentSegment,
   fromSegment,
   nextSegment,
-  OnCompleteArgs,
-  runResult,
   toSegment,
 } from "./shared.js";
 import { recordCompleted, recordReport, recordStarted } from "./stats.js";
@@ -64,12 +61,12 @@ export const main = internalMutation({
 
     // Read pendingCompletions, including retry handling.
     console.time("[main] pendingCompletion");
-    const done = await handleCompletions(ctx, state, args.segment, console);
+    await handleCompletions(ctx, state, args.segment, console);
     console.timeEnd("[main] pendingCompletion");
 
     // Read pendingCancelation, deleting from pendingStart. If it's still running, queue to cancel.
     console.time("[main] pendingCancelation");
-    done.push(...(await handleCancelation(ctx, state, args.segment, console)));
+    await handleCancelation(ctx, state, args.segment, console);
     console.timeEnd("[main] pendingCancelation");
 
     if (state.running.length === 0) {
@@ -110,50 +107,9 @@ export const main = internalMutation({
     }
 
     await ctx.db.replace(state._id, state);
-    await ctx.scheduler.runAfter(0, internal.loop.complete, { done });
     await ctx.scheduler.runAfter(0, internal.loop.updateRunStatus, {
       generation: state.generation,
     });
-  },
-});
-
-export const complete = internalMutation({
-  args: {
-    done: v.array(v.object({ runResult, workId: v.id("work") })),
-  },
-  handler: async (ctx, args) => {
-    const globals = await getGlobals(ctx);
-    const console = createLogger(globals.logLevel);
-    await Promise.all(
-      args.done.map(async ({ runResult, workId }) => {
-        const work = await ctx.db.get(workId);
-        if (!work) {
-          console.warn(`[complete] ${workId} is done, but its work is gone`);
-          return;
-        }
-        if (work.onComplete) {
-          try {
-            const handle = work.onComplete.fnHandle as FunctionHandle<
-              "mutation",
-              OnCompleteArgs,
-              void
-            >;
-            await ctx.runMutation(handle, {
-              workId: work._id,
-              context: work.onComplete.context,
-              result: runResult,
-            });
-            console.debug(`[complete] onComplete for ${workId} completed`);
-          } catch (e) {
-            console.error(
-              `[complete] error running onComplete for ${workId}`,
-              e
-            );
-          }
-        }
-        await ctx.db.delete(workId);
-      })
-    );
   },
 });
 
@@ -359,80 +315,33 @@ async function handleCompletions(
       q.gte("segment", startSegment).lte("segment", segment)
     )
     .collect();
-  state.report.completed += completed.length;
   state.segmentCursors.completion = segment;
-  const done: Doc<"pendingCompletion">[] = [];
-  await Promise.all(
-    completed.map(async (c) => {
-      await ctx.db.delete(c._id);
-      const work = await ctx.db.get(c.workId);
-      const maxAttempts = work?.retryBehavior?.maxAttempts;
-      const pendingCancelations = await ctx.db
-        .query("pendingCancelation")
-        .withIndex("workId", (q) => q.eq("workId", c.workId))
-        .collect();
-      if (work && state.running.some((r) => r.workId === c.workId)) {
-        if (
-          c.runResult.kind === "failed" &&
-          maxAttempts &&
-          pendingCancelations.length === 0 &&
-          work.attempts < maxAttempts
-        ) {
-          await rescheduleJob(ctx, work, console);
-          state.report.retries++;
-        } else {
-          if (c.runResult.kind === "success") {
-            state.report.succeeded++;
-          } else if (c.runResult.kind === "failed") {
-            state.report.failed++;
-          }
-          // Ensure there aren't any pending cancelations for this work.
-          for (const pendingCancelation of pendingCancelations) {
-            await ctx.db.delete(pendingCancelation._id);
-          }
-          done.push(c);
-        }
-        console.info(recordCompleted(work, c.runResult.kind));
-      } else if (work) {
-        console.warn(`[main] completing ${c.workId} but it's not in "running"`);
-      } else {
-        console.warn(`[main] completing ${c.workId} but it's not found`);
-      }
-    })
-  );
-  console.debug(`[main] completing ${done.length}`);
+  const before = state.running.length;
   state.running = state.running.filter(
     (r) => !completed.some((c) => c.workId === r.workId)
   );
-  return done.map((c) => ({ runResult: c.runResult, workId: c.workId }));
-}
+  const numCompleted = before - state.running.length;
+  console.debug(`[main] completed ${numCompleted} work`);
+  state.report.completed += numCompleted;
+  await Promise.all(
+    completed.map(async (c) => {
+      await ctx.db.delete(c._id);
 
-async function rescheduleJob(
-  ctx: MutationCtx,
-  work: Doc<"work">,
-  console: Logger
-): Promise<number> {
-  if (!work.retryBehavior) {
-    throw new Error("work has no retryBehavior");
-  }
-  const backoffMs =
-    work.retryBehavior.initialBackoffMs *
-    Math.pow(work.retryBehavior.base, work.attempts - 1);
-  const nextAttempt = withJitter(backoffMs);
-  const startTime = boundScheduledTime(Date.now() + nextAttempt, console);
-  const segment = toSegment(startTime);
-  await ctx.db.patch(work._id, {
-    attempts: work.attempts + 1,
-  });
-  await ctx.db.insert("pendingStart", {
-    workId: work._id,
-    segment,
-  });
-  return nextAttempt;
-}
-
-export function withJitter(delay: number) {
-  return delay * (0.5 + Math.random());
+      if (state.running.some((r) => r.workId === c.workId)) {
+        if (c.runResult.kind === "success") {
+          state.report.succeeded++;
+        } else if (c.runResult.kind === "failed") {
+          state.report.failed++;
+          if (await ctx.db.get(c.workId)) {
+            // We don't delete the work when we retry.
+            state.report.retries++;
+          }
+        }
+      } else {
+        console.warn(`[main] completing ${c.workId} but it's not in "running"`);
+      }
+    })
+  );
 }
 
 async function handleCancelation(
@@ -474,10 +383,12 @@ async function handleCancelation(
       }
     })
   );
-  return Array.from(canceledWork).map((id) => ({
-    runResult: { kind: "canceled" as const },
-    workId: id,
-  }));
+  await ctx.scheduler.runAfter(0, internal.complete.complete, {
+    jobs: canceled.map((c) => ({
+      workId: c.workId,
+      runResult: { kind: "canceled" as const },
+    })),
+  });
 }
 
 async function handleStart(

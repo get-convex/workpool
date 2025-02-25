@@ -7,9 +7,7 @@ import { FunctionHandle } from "convex/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api.js";
 import { internalAction, internalMutation } from "./_generated/server.js";
-import { kickMainLoop } from "./kick.js";
 import { createLogger, logLevel } from "./logging.js";
-import { nextSegment, runResult } from "./shared.js";
 
 export const runMutationWrapper = internalMutation({
   args: {
@@ -25,15 +23,15 @@ export const runMutationWrapper = internalMutation({
       const returnValue = await ctx.runMutation(fnHandle, fnArgs);
       // NOTE: we could run the `saveResult` handler here, or call `ctx.runMutation`,
       // but we want the mutation to be a separate transaction to reduce the window for OCCs.
-      await ctx.scheduler.runAfter(0, internal.worker.saveResult, {
-        workId,
-        runResult: { kind: "success", returnValue },
+      await ctx.scheduler.runAfter(0, internal.complete.complete, {
+        jobs: [{ workId, runResult: { kind: "success", returnValue } }],
       });
     } catch (e: unknown) {
       console.error(e);
-      await ctx.scheduler.runAfter(0, internal.worker.saveResult, {
-        workId,
-        runResult: { kind: "failed", error: formatError(e) },
+      await ctx.scheduler.runAfter(0, internal.complete.complete, {
+        jobs: [
+          { workId, runResult: { kind: "failed", error: formatError(e) } },
+        ],
       });
     }
   },
@@ -60,33 +58,18 @@ export const runActionWrapper = internalAction({
       const returnValue = await ctx.runAction(fnHandle, fnArgs);
       // NOTE: we could run `ctx.runMutation`, but we want to guarantee execution,
       // and `ctx.scheduler.runAfter` won't OCC.
-      await ctx.scheduler.runAfter(0, internal.worker.saveResult, {
-        workId,
-        runResult: { kind: "success", returnValue },
+      await ctx.scheduler.runAfter(0, internal.complete.complete, {
+        jobs: [{ workId, runResult: { kind: "success", returnValue } }],
       });
     } catch (e: unknown) {
       console.error(e);
       // We let the main loop handle the retries.
-      await ctx.scheduler.runAfter(0, internal.worker.saveResult, {
-        workId,
-        runResult: { kind: "failed", error: formatError(e) },
+      await ctx.scheduler.runAfter(0, internal.complete.complete, {
+        jobs: [
+          { workId, runResult: { kind: "failed", error: formatError(e) } },
+        ],
       });
     }
-  },
-});
-
-export const saveResult = internalMutation({
-  args: {
-    workId: v.id("work"),
-    runResult,
-  },
-  handler: async (ctx, { workId, runResult }) => {
-    await ctx.db.insert("pendingCompletion", {
-      runResult,
-      workId,
-      segment: nextSegment(),
-    });
-    await kickMainLoop(ctx, "saveResult");
   },
 });
 
