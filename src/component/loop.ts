@@ -350,17 +350,13 @@ async function handleCompletions(
   segment: bigint,
   console: Logger
 ) {
+  const startSegment = state.segmentCursors.completion - CURSOR_BUFFER_SEGMENTS;
   // This won't be too many because the jobs all correspond to being scheduled
   // by a single mainLoop (the previous one), so they're limited by MAX_PARALLELISM.
   const completed = await ctx.db
     .query("pendingCompletion")
     .withIndex("segment", (q) =>
-      q
-        .gte(
-          "segment",
-          state.segmentCursors.completion - CURSOR_BUFFER_SEGMENTS
-        )
-        .lte("segment", segment)
+      q.gte("segment", startSegment).lte("segment", segment)
     )
     .collect();
   state.report.completed += completed.length;
@@ -447,15 +443,11 @@ async function handleCancelation(
   segment: bigint,
   console: Logger
 ) {
+  const start = state.segmentCursors.cancelation - CURSOR_BUFFER_SEGMENTS;
   const canceled = await ctx.db
     .query("pendingCancelation")
     .withIndex("segment", (q) =>
-      q
-        .gte(
-          "segment",
-          state.segmentCursors.cancelation - CURSOR_BUFFER_SEGMENTS
-        )
-        .lte("segment", segment)
+      q.gte("segment", start).lte("segment", segment)
     )
     .take(CANCELLATION_BATCH_SIZE);
   state.segmentCursors.cancelation = canceled.at(-1)?.segment ?? segment;
