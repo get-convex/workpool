@@ -6,7 +6,7 @@ import {
   getFunctionName,
 } from "convex/server";
 import { v, VString } from "convex/values";
-import { api } from "../component/_generated/api.js";
+import { Mounts } from "../component/_generated/api.js";
 import {
   OnComplete,
   runResult as runResultValidator,
@@ -44,7 +44,7 @@ export class Workpool {
    * @param options - The options for the Workpool.
    */
   constructor(
-    private component: UseApi<typeof api>,
+    private component: UseApi<Mounts>, // UseApi<api> for jump to definition
     private options: {
       /** How many actions/mutations can be running at once within this pool.
        * Min 1, Max 300.
