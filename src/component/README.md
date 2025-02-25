@@ -25,14 +25,12 @@ Concepts:
 flowchart LR
     Client -->|enqueue| pendingStart
     Client -->|cancel| pendingCancelation
-    Recovery-->|recover| pendingCancelation
-    Recovery-->|recover| pendingCompletion
-    Worker-->|"saveResult"| pendingCompletion
+    Recovery-->|complete| pendingCompletion
     pendingStart -->|main| workerRunning["internalState.running"]
-    workerRunning-->|"main(pendingCompletion)"| Retry{"Needs retry?"}
-    Retry-->|"no / canceled"| complete
-    Retry-->|yes| pendingStart
-    pendingStart-->|"main(pendingCancelation)"| complete
+    workerRunning-->|"complete(retry)"| pendingStart
+    workerRunning-->|complete| pendingCompletion
+    pendingCompletion-->|"main"| finished
+    pendingCancelation-->|"complete(pendingStart)"| pendingCompletion
 ```
 
 Notably:
@@ -53,12 +51,12 @@ flowchart TD
     running-->|"all done"| idle
 ```
 
-- While the loop is running, clients won't see database conflicts with the
-  state changing.
-- The "saturated" state is concretely "running" or "scheduled" with a boolean
-  set, to avoid clients from kicking the main loop on enqueueing, which is
-  unlikely to be productive, since the next action needs to be something
-  terminating.
+- While the loop is running, the runStatus doesn't change, making it safer to
+  read from clients without database conflicts.
+- The "saturated" state is concretely "running" or "scheduled" at max
+  parallelism. There is a boolean set on "scheduled" to avoid clients from
+  kicking the main loop on enqueueing, which is unlikely to be productive, since
+  the next action needs to be something terminating.
 
 ## Retention optimization strategy
 
