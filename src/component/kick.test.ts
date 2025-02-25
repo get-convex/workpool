@@ -176,7 +176,7 @@ describe("kickMainLoop", () => {
       await ctx.db.delete(runStatus._id);
 
       // Kick should recreate runStatus
-      await kickMainLoop(ctx, "recovery");
+      await kickMainLoop(ctx, "complete");
       const newRunStatus = await ctx.db.query("runStatus").unique();
       expect(newRunStatus).not.toBeNull();
       assert(newRunStatus);
@@ -196,7 +196,7 @@ describe("kickMainLoop", () => {
       await ctx.db.delete(globals._id);
 
       // Kick should recreate globals
-      await kickMainLoop(ctx, "recovery");
+      await kickMainLoop(ctx, "complete");
       const newGlobals = await ctx.db.query("globals").unique();
       expect(newGlobals).not.toBeNull();
       assert(newGlobals);
@@ -247,8 +247,7 @@ describe("kickMainLoop", () => {
 
       // Kick from different sources
       await kickMainLoop(ctx, "cancel");
-      await kickMainLoop(ctx, "saveResult");
-      await kickMainLoop(ctx, "recovery");
+      await kickMainLoop(ctx, "complete");
 
       // Config should be preserved
       const globals = await ctx.db.query("globals").unique();

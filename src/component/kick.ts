@@ -11,7 +11,7 @@ export const DEFAULT_MAX_PARALLELISM = 10;
 
 export async function kickMainLoop(
   ctx: MutationCtx,
-  source: "enqueue" | "cancel" | "saveResult" | "recovery",
+  source: "enqueue" | "cancel" | "complete",
   config?: Partial<Config>
 ): Promise<void> {
   const globals = await getOrUpdateGlobals(ctx, config);
@@ -67,7 +67,7 @@ export const forceKick = internalMutation({
   handler: async (ctx) => {
     const runStatus = await getOrCreateRunStatus(ctx);
     await ctx.db.delete(runStatus._id);
-    await kickMainLoop(ctx, "recovery");
+    await kickMainLoop(ctx, "complete");
   },
 });
 
