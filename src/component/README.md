@@ -28,17 +28,17 @@ flowchart LR
     Recovery-->|recover| pendingCancelation
     Recovery-->|recover| pendingCompletion
     Worker-->|"saveResult"| pendingCompletion
-    pendingStart -->|mainLoop| workerRunning["internalState.running"]
-    workerRunning-->|"mainLoop(pendingCompletion)"| Retry{"Needs retry?"}
+    pendingStart -->|main| workerRunning["internalState.running"]
+    workerRunning-->|"main(pendingCompletion)"| Retry{"Needs retry?"}
     Retry-->|"no / canceled"| complete
     Retry-->|yes| pendingStart
-    pendingStart-->|"mainLoop(pendingCancelation)"| complete
+    pendingStart-->|"main(pendingCancelation)"| complete
 ```
 
 Notably:
 
 - The pending\* states are only written by other sources.
-- The mainLoop federates changes to/from "running"
+- The main loop federates changes to/from "running"
 - Canceling only impacts pending and retrying jobs.
 
 ## Loop state machine
@@ -63,7 +63,7 @@ flowchart TD
 ## Retention optimization strategy
 
 - Producers (Client, Worker, Recovery) write to a future "segment".
-- Consumers (mainLoop) read the current segment.
+- Consumers (main) read the current segment.
   - On conflicts, producers will write to progressively higher segments, while
     the main loop will continue to read the segment originally called with.
     This means conflicts are less likely on each retry.

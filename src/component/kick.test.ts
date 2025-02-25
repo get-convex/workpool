@@ -97,7 +97,7 @@ describe("kickMainLoop", () => {
       // Manually set to scheduled state with future segment
       const scheduledId = await ctx.scheduler.runAfter(
         fromSegment(futureSegment) - now,
-        internal.loop.mainLoop,
+        internal.loop.main,
         {
           generation: 0n,
           segment: futureSegment,
@@ -138,7 +138,7 @@ describe("kickMainLoop", () => {
       // Manually set to scheduled saturated state
       const scheduledId = await ctx.scheduler.runAfter(
         fromSegment(nearFutureSegment) - now,
-        internal.loop.mainLoop,
+        internal.loop.main,
         {
           generation: 0n,
           segment: nearFutureSegment,

@@ -8,9 +8,9 @@ const segment = v.int64();
 export default defineSchema({
   // Written from kickLoop, read everywhere.
   globals: defineTable(config),
-  // Singleton, only read & written by `mainLoop`.
+  // Singleton, only read & written by `main`.
   internalState: defineTable({
-    // Ensure that only one mainLoop is running at a time.
+    // Ensure that only one main is running at a time.
     generation: v.int64(),
     segmentCursors: v.object({
       incoming: segment,
@@ -62,7 +62,7 @@ export default defineSchema({
     retryBehavior: v.optional(retryBehavior),
   }),
 
-  // Written on enqueue, read & deleted by `mainLoop`.
+  // Written on enqueue, read & deleted by `main`.
   pendingStart: defineTable({
     workId: v.id("work"),
     segment,
@@ -70,7 +70,7 @@ export default defineSchema({
     .index("workId", ["workId"])
     .index("segment", ["segment"]),
 
-  // Written by job, read & deleted by `mainLoop`.
+  // Written by job, read & deleted by `main`.
   pendingCompletion: defineTable({
     segment,
     runResult,
@@ -79,7 +79,7 @@ export default defineSchema({
     .index("workId", ["workId"])
     .index("segment", ["segment"]),
 
-  // Written on cancelation, read & deleted by `mainLoop`.
+  // Written on cancelation, read & deleted by `main`.
   pendingCancelation: defineTable({
     segment,
     workId: v.id("work"),

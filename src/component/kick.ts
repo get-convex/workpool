@@ -21,42 +21,42 @@ export async function kickMainLoop(
   // Only kick to run now if we're scheduled or idle.
   if (runStatus.state.kind === "running") {
     console.debug(
-      `[${source}] mainLoop is actively running, so we don't need to kick it`
+      `[${source}] main is actively running, so we don't need to kick it`
     );
     return;
   }
   const segment = nextSegment();
-  // mainLoop is scheduled to run later, so we should cancel it and reschedule.
+  // main is scheduled to run later, so we should cancel it and reschedule.
   if (runStatus.state.kind === "scheduled") {
     if (source === "enqueue" && runStatus.state.saturated) {
       console.debug(
-        `[${source}] mainLoop is saturated, so we don't need to kick it`
+        `[${source}] main is saturated, so we don't need to kick it`
       );
       return;
     }
     if (runStatus.state.segment <= segment) {
       console.debug(
-        `[${source}] mainLoop is scheduled to run soon enough, so we don't need to kick it`
+        `[${source}] main is scheduled to run soon enough, so we don't need to kick it`
       );
       return;
     }
     console.debug(
-      `[${source}] mainLoop is scheduled to run later, so reschedule it to run now`
+      `[${source}] main is scheduled to run later, so reschedule it to run now`
     );
     const scheduled = await ctx.db.system.get(runStatus.state.scheduledId);
     if (scheduled && scheduled.state.kind === "pending") {
       await ctx.scheduler.cancel(runStatus.state.scheduledId);
     } else {
       console.warn(
-        `[${source}] mainLoop is marked as scheduled, but it's status is ${scheduled?.state.kind}`
+        `[${source}] main is marked as scheduled, but it's status is ${scheduled?.state.kind}`
       );
     }
   }
   console.debug(
-    `[${source}] mainLoop was scheduled later, so reschedule it to run now`
+    `[${source}] main was scheduled later, so reschedule it to run now`
   );
   await ctx.db.patch(runStatus._id, { state: { kind: "running" } });
-  await ctx.scheduler.runAfter(0, internal.loop.mainLoop, {
+  await ctx.scheduler.runAfter(0, internal.loop.main, {
     generation: runStatus.state.generation,
     segment,
   });
