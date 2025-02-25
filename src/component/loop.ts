@@ -1,26 +1,29 @@
+import { FunctionHandle, WithoutSystemFields } from "convex/server";
 import { v } from "convex/values";
-import { internal } from "./_generated/api";
-import { Doc, Id } from "./_generated/dataModel";
-import { internalMutation, MutationCtx } from "./_generated/server";
-import { createLogger, DEFAULT_LOG_LEVEL, Logger } from "./logging.js";
-import { DEFAULT_MAX_PARALLELISM } from "./kick";
+import { internal } from "./_generated/api.js";
+import { Doc, Id } from "./_generated/dataModel.js";
+import { internalMutation, MutationCtx } from "./_generated/server.js";
+import { DEFAULT_MAX_PARALLELISM } from "./kick.js";
 import {
+  createLogger,
+  DEFAULT_LOG_LEVEL,
+  Logger,
+  LogLevel,
+} from "./logging.js";
+import {
+  boundScheduledTime,
   Config,
   currentSegment,
   fromSegment,
   nextSegment,
-  toSegment,
-  runResult,
   OnCompleteArgs,
-  boundScheduledTime,
-} from "./shared";
-import { LogLevel } from "./logging";
-import { FunctionHandle, WithoutSystemFields } from "convex/server";
-import { recordCompleted, recordReport } from "./stats";
+  runResult,
+  toSegment,
+} from "./shared.js";
+import { recordCompleted, recordReport, recordStarted } from "./stats.js";
 
 const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
 const SECOND = 1000;
-import { recordStarted } from "./stats";
 const MINUTE = 60 * SECOND;
 const RECOVERY_THRESHOLD_MS = 5 * MINUTE; // attempt to recover jobs this old.
 const RECOVERY_PERIOD_SEGMENTS = toSegment(1 * MINUTE); // how often to check.

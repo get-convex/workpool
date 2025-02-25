@@ -3,14 +3,13 @@
  * Should not touch any of loop's tables other than writing to `pendingCompletion`.
  * It is not responsible for handling retries.
  */
-import { v } from "convex/values";
-import { internal } from "./_generated/api";
-import { internalAction, internalMutation } from "./_generated/server";
-import { createLogger } from "./logging.js";
-import { nextSegment, runResult } from "./shared";
-import { logLevel } from "./logging";
 import { FunctionHandle } from "convex/server";
-import { kickMainLoop } from "./kick";
+import { v } from "convex/values";
+import { internal } from "./_generated/api.js";
+import { internalAction, internalMutation } from "./_generated/server.js";
+import { kickMainLoop } from "./kick.js";
+import { createLogger, logLevel } from "./logging.js";
+import { nextSegment, runResult } from "./shared.js";
 
 export const runMutationWrapper = internalMutation({
   args: {

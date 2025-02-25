@@ -1,7 +1,7 @@
 import { Infer } from "convex/values";
 
 import { v } from "convex/values";
-import { Logger, logLevel } from "./logging";
+import { Logger, logLevel } from "./logging.js";
 
 const SEGMENT_MS = 250;
 export const SECOND = 1000;

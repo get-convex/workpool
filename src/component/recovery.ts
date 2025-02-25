@@ -1,9 +1,9 @@
-import { Id } from "./_generated/dataModel";
-import { internalMutation } from "./_generated/server";
-import { createLogger } from "./logging";
-import { kickMainLoop } from "./kick";
-import schema from "./schema";
-import { RunResult, nextSegment } from "./shared";
+import { Id } from "./_generated/dataModel.js";
+import { internalMutation } from "./_generated/server.js";
+import { kickMainLoop } from "./kick.js";
+import { createLogger } from "./logging.js";
+import schema from "./schema.js";
+import { RunResult, nextSegment } from "./shared.js";
 
 export const recover = internalMutation({
   args: {

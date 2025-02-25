@@ -1,8 +1,8 @@
-import { internal } from "./_generated/api";
-import { internalMutation, MutationCtx } from "./_generated/server";
-import { createLogger, DEFAULT_LOG_LEVEL } from "./logging";
-import { INITIAL_STATE } from "./loop";
-import { Config, currentSegment, nextSegment } from "./shared";
+import { internal } from "./_generated/api.js";
+import { internalMutation, MutationCtx } from "./_generated/server.js";
+import { createLogger, DEFAULT_LOG_LEVEL } from "./logging.js";
+import { INITIAL_STATE } from "./loop.js";
+import { Config, nextSegment } from "./shared.js";
 
 export const DEFAULT_MAX_PARALLELISM = 10;
 /**
