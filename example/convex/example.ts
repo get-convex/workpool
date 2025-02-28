@@ -1,26 +1,42 @@
-import { mutation, action, query, internalAction } from "./_generated/server";
+import {
+  mutation,
+  action,
+  query,
+  internalAction,
+  internalMutation,
+} from "./_generated/server";
 import { api, components, internal } from "./_generated/api";
-import { Workpool } from "@convex-dev/workpool";
+import {
+  WorkId,
+  workIdValidator,
+  Workpool,
+  runResultValidator,
+} from "@convex-dev/workpool";
 import { v } from "convex/values";
+import { createLogger } from "../../src/component/logging";
+import { FunctionArgs } from "convex/server";
 
-const highPriPool = new Workpool(components.highPriWorkpool, {
-  maxParallelism: 20,
-  // For tests, disable completed work cleanup.
-  statusTtl: Number.POSITIVE_INFINITY,
-  logLevel: "INFO",
+const bigPool = new Workpool(components.bigPool, {
+  maxParallelism: 10,
+  defaultRetryBehavior: {
+    maxAttempts: 3,
+    initialBackoffMs: 100,
+    base: 2,
+  },
+  retryActionsByDefault: true,
+  logLevel: "DEBUG",
 });
-const pool = new Workpool(components.workpool, {
+const smallPool = new Workpool(components.smallPool, {
   maxParallelism: 3,
-  // For tests, disable completed work cleanup.
-  statusTtl: Number.POSITIVE_INFINITY,
+  retryActionsByDefault: true,
   logLevel: "INFO",
 });
-const lowpriPool = new Workpool(components.lowpriWorkpool, {
+const serializedPool = new Workpool(components.serializedPool, {
   maxParallelism: 1,
-  // For tests, disable completed work cleanup.
-  statusTtl: Number.POSITIVE_INFINITY,
+  retryActionsByDefault: true,
   logLevel: "INFO",
 });
+const console = createLogger("WARN");
 
 export const addMutation = mutation({
   args: { data: v.optional(v.number()) },
@@ -48,22 +64,24 @@ export const queryData = query({
 
 export const enqueueOneMutation = mutation({
   args: { data: v.number() },
-  handler: async (ctx, { data }): Promise<string> => {
-    return await pool.enqueueMutation(ctx, api.example.addMutation, { data });
+  handler: async (ctx, { data }): Promise<WorkId> => {
+    return await smallPool.enqueueMutation(ctx, api.example.addMutation, {
+      data,
+    });
   },
 });
 
 export const cancelMutation = mutation({
-  args: { id: v.string() },
+  args: { id: workIdValidator },
   handler: async (ctx, { id }) => {
-    await pool.cancel(ctx, id);
+    await smallPool.cancel(ctx, id);
   },
 });
 
 export const status = query({
-  args: { id: v.string() },
+  args: { id: workIdValidator },
   handler: async (ctx, { id }) => {
-    return await pool.status(ctx, id);
+    return await smallPool.status(ctx, id);
   },
 });
 
@@ -72,7 +90,7 @@ export const enqueueABunchOfMutations = action({
   handler: async (ctx, _args) => {
     await Promise.all(
       Array.from({ length: 30 }, () =>
-        pool.enqueueMutation(ctx, api.example.addMutation, {})
+        smallPool.enqueueMutation(ctx, api.example.addMutation, {})
       )
     );
   },
@@ -92,7 +110,7 @@ export const enqueueLowPriMutations = action({
   handler: async (ctx, _args) => {
     await Promise.all(
       Array.from({ length: 30 }, () =>
-        lowpriPool.enqueueMutation(ctx, api.example.addLowPri, {})
+        serializedPool.enqueueMutation(ctx, api.example.addLowPri, {})
       )
     );
   },
@@ -101,7 +119,7 @@ export const enqueueLowPriMutations = action({
 export const highPriMutation = mutation({
   args: { data: v.number() },
   handler: async (ctx, { data }) => {
-    await highPriPool.enqueueMutation(ctx, api.example.addMutation, { data });
+    await bigPool.enqueueMutation(ctx, api.example.addMutation, { data });
   },
 });
 
@@ -110,7 +128,7 @@ export const enqueueABunchOfActions = action({
   handler: async (ctx, _args) => {
     await Promise.all(
       Array.from({ length: 30 }, () =>
-        pool.enqueueAction(ctx, api.example.addAction, {})
+        bigPool.enqueueAction(ctx, api.example.addAction, {})
       )
     );
   },
@@ -119,7 +137,7 @@ export const enqueueABunchOfActions = action({
 export const enqueueAnAction = mutation({
   args: {},
   handler: async (ctx, _args): Promise<void> => {
-    await pool.enqueueAction(ctx, api.example.addAction, {});
+    await bigPool.enqueueAction(ctx, api.example.addAction, {});
   },
 });
 
@@ -133,20 +151,6 @@ export const echo = query({
 async function sampleWork() {
   const index = Math.floor(Math.random() * 1000) + 1;
   await new Promise((resolve) => setTimeout(resolve, Math.random() * index));
-  const url = `${process.env.CONVEX_CLOUD_URL}/api/query`;
-  const start = Date.now();
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      path: "example:echo",
-      args: { num: index },
-    }),
-  });
-  const data = await response.json();
-  console.log(data.value === index, Date.now() - start);
 }
 
 // Example background work: scraping from a website.
@@ -162,7 +166,7 @@ export const startBackgroundWork = internalAction({
   handler: async (ctx, _args) => {
     await Promise.all(
       Array.from({ length: 20 }, () =>
-        lowpriPool.enqueueAction(ctx, internal.example.backgroundWork, {})
+        serializedPool.enqueueAction(ctx, internal.example.backgroundWork, {})
       )
     );
   },
@@ -170,8 +174,11 @@ export const startBackgroundWork = internalAction({
 
 // Example foreground work: calling an API on behalf of a user.
 export const foregroundWork = internalAction({
-  args: {},
-  handler: async () => {
+  args: { ms: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    if (args.ms) {
+      await new Promise((resolve) => setTimeout(resolve, args.ms));
+    }
     await sampleWork();
   },
 });
@@ -180,9 +187,102 @@ export const startForegroundWork = internalAction({
   args: {},
   handler: async (ctx, _args) => {
     await Promise.all(
-      Array.from({ length: 100 }, () =>
-        highPriPool.enqueueAction(ctx, internal.example.foregroundWork, {})
+      Array.from(
+        { length: 100 },
+        async () =>
+          await bigPool.enqueueAction(ctx, internal.example.foregroundWork, {})
       )
     );
+  },
+});
+
+const fate = v.union(
+  v.literal("succeed"),
+  v.literal("fail randomly"),
+  v.literal("fail always")
+);
+
+export const myAction = internalAction({
+  args: { fate, ms: v.optional(v.number()) },
+  handler: async (_ctx, { fate, ms }) => {
+    if (ms) {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+    }
+    switch (fate) {
+      case "succeed":
+        console.debug("success");
+        break;
+      case "fail randomly":
+        if (Math.random() < 0.8) {
+          throw new Error("action failed.");
+        }
+        if (Math.random() < 0.01) {
+          // Incur a timeout.
+          console.debug("I'm a baaaad timeout job.");
+          await new Promise((resolve) => setTimeout(resolve, 15 * 60 * 1000));
+        }
+        console.debug("action succeded.");
+        break;
+      case "fail always":
+        throw new Error("action failed.");
+      default:
+        throw new Error("invalid action");
+    }
+  },
+});
+
+export const onComplete = internalMutation({
+  args: {
+    workId: workIdValidator,
+    context: v.number(),
+    result: runResultValidator,
+  },
+  handler: async (ctx, args) => {
+    console.warn("total", (Date.now() - args.context) / 1000);
+  },
+});
+
+const N = 100;
+const BASE_MS = 100;
+const MAX_MS = 1000;
+const CONCURRENCY = 15;
+export const runPaced = internalAction({
+  args: { n: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const ids: WorkId[] = [];
+    const start = Date.now();
+    for (let i = 0; i < (args.n ?? N); i++) {
+      const args = {
+        fate: "succeed",
+        ms: BASE_MS + (MAX_MS - BASE_MS) * Math.random(),
+      } as FunctionArgs<typeof internal.example.myAction>;
+      const id: WorkId = await bigPool.enqueueAction(
+        ctx,
+        internal.example.myAction,
+        args,
+        { onComplete: internal.example.onComplete, context: start }
+      );
+      console.debug("enqueued", Date.now());
+      ids.push(id);
+      // exponential distribution of time to wait.
+      const avgRate = CONCURRENCY / ((BASE_MS + MAX_MS) / 2);
+      const t = -Math.log(Math.random()) / avgRate;
+      await new Promise((resolve) => setTimeout(resolve, t));
+    }
+  },
+});
+
+export const cancel = internalAction({
+  args: {
+    id: workIdValidator,
+  },
+  handler: async (ctx, args) => {
+    console.debug("Canceling", args.id);
+    if (args.id) {
+      console.debug("Canceling", args.id);
+      await bigPool.cancel(ctx, args.id as WorkId);
+    } else {
+      await bigPool.cancelAll(ctx);
+    }
   },
 });

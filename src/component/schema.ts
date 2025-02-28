@@ -1,107 +1,89 @@
 import { defineSchema, defineTable } from "convex/server";
-import { Infer, v } from "convex/values";
-import { logLevel } from "./logging";
+import { v } from "convex/values";
+import { config, onComplete, retryBehavior, runResult } from "./shared.js";
 
-export const completionStatus = v.union(
-  v.literal("success"),
-  v.literal("error"),
-  v.literal("canceled"),
-  v.literal("timeout")
-);
-export type CompletionStatus = Infer<typeof completionStatus>;
-
-/**
-Data flow:
-
-- The mutation `mainLoop` runs periodically and serially.
-- Several tables act as queues, with client-driven mutations enqueueing at high
-  timestamps and `mainLoop` popping at low timestamps:
-  pendingStart, pendingCompletion, and pendingCancelation.
-  - The `enqueue` mutation writes to pendingStart.
-  - The `cancel` mutation writes to pendingCancelation.
-  - The `saveResult` mutation, run as part of scheduled work, writes to pendingCompletion.
-- mainLoop processes the queues:
-  - pendingStart => inProgressWork.
-  - pendingCompletion and pendingCancelation => completedWork.
-  - inProgressWork that finishes uncleanly (timeout or system failure) => completedWork.
-- `mainLoop` schedules itself to run.
-- `enqueue`, `cancel`, and `saveResult` mutations check when `mainLoop` is scheduled to run,
-  and if it's too far in the future, they schedule it to run sooner.
-- `status` query reads from pendingWork and completedWork.
-- `cleanup` mutation deletes old rows from completedWork.
-
-To avoid OCCs, we restrict which mutations can read and write from each table:
-- pools: read by all, written only when static Workpool options change.
-- mainLoop (table): read by all, written mostly by `mainLoop`.
-  If `mainLoop` will not run for a while, mainLoop table is written by `enqueue`, `cancel`, or `saveResult`.
-- pendingWork: `enqueue` inserts at high timestamps, `mainLoop` pops at low timestamps. `status` query does point-reads.
-- pendingCompletion: `saveResult` inserts at high timestamps, `mainLoop` pops at low timestamps.
-- pendingCancelation: `cancel` inserts at high timestamps, `mainLoop` pops at low timestamps.
-- inProgressWork: `mainLoop` inserts, reads all, and deletes.
-- completedWork: `mainLoop` inserts at hight timestamps, `status` query reads, `cleanup` deletes at low timestamps.
-
- */
+// Represents a slice of time to process work.
+const segment = v.int64();
 
 export default defineSchema({
-  // Statically configured, singleton.
-  pool: defineTable({
-    maxParallelism: v.number(),
-    statusTtl: v.number(),
-    logLevel,
+  // Written from kickLoop, read everywhere.
+  globals: defineTable(config),
+  // Singleton, only read & written by `main`.
+  internalState: defineTable({
+    // Ensure that only one main is running at a time.
+    generation: v.int64(),
+    segmentCursors: v.object({
+      incoming: segment,
+      completion: segment,
+      cancelation: segment,
+    }),
+    lastRecovery: segment,
+    report: v.object({
+      completed: v.number(), // finished running, counts retries & failures
+      succeeded: v.number(), // finished successfully, regardless of retries
+      failed: v.number(), // failed after all retries
+      retries: v.number(), // failure that turned into a retry
+      canceled: v.number(), // cancelations processed
+      lastReportTs: v.number(),
+    }),
+    running: v.array(
+      v.object({
+        workId: v.id("work"),
+        scheduledId: v.id("_scheduled_functions"),
+        started: v.number(),
+      })
+    ),
   }),
 
-  mainLoop: defineTable({
+  // Singleton, written by `updateRunStatus` when running, by client or worker otherwise.
+  // Safe to read from kickLoop, since it should update infrequently.
+  runStatus: defineTable({
     state: v.union(
       v.object({ kind: v.literal("running") }),
       v.object({
         kind: v.literal("scheduled"),
-        runAtTime: v.number(),
-        fn: v.id("_scheduled_functions"),
+        segment,
+        scheduledId: v.id("_scheduled_functions"),
+        saturated: v.boolean(),
+        generation: v.int64(),
       }),
-      v.object({ kind: v.literal("idle") })
+      v.object({ kind: v.literal("idle"), generation: v.int64() })
     ),
   }),
 
+  // Written on enqueue. Safe to read. Deleted by `complete`.
   work: defineTable({
     fnType: v.union(v.literal("action"), v.literal("mutation")),
     fnHandle: v.string(),
     fnName: v.string(),
     fnArgs: v.any(),
+    attempts: v.number(),
+    onComplete: v.optional(onComplete),
+    retryBehavior: v.optional(retryBehavior),
   }),
 
+  // Written on enqueue, read & deleted by `main`.
   pendingStart: defineTable({
     workId: v.id("work"),
-  }).index("workId", ["workId"]),
+    segment,
+  })
+    .index("workId", ["workId"])
+    .index("segment", ["segment"]),
+
+  // Written by job, read & deleted by `main`.
   pendingCompletion: defineTable({
-    generation: v.number(),
-    completionStatus,
+    segment,
+    runResult,
     workId: v.id("work"),
   })
     .index("workId", ["workId"])
-    .index("generation", ["generation"]),
+    .index("segment", ["segment"]),
+
+  // Written on cancelation, read & deleted by `main`.
   pendingCancelation: defineTable({
+    segment,
     workId: v.id("work"),
-  }),
-
-  inProgressWork: defineTable({
-    running: v.id("_scheduled_functions"),
-    timeoutMs: v.union(v.number(), v.null()),
-    workId: v.id("work"),
-  }).index("workId", ["workId"]),
-  inProgressCount: defineTable({
-    count: v.number(),
-  }),
-
-  completedWork: defineTable({
-    completionStatus,
-    workId: v.id("work"),
-  }).index("workId", ["workId"]),
-
-  completionGeneration: defineTable({
-    generation: v.number(),
-  }),
-
-  pendingStartCursor: defineTable({
-    cursor: v.number(),
-  }),
+  })
+    .index("workId", ["workId"])
+    .index("segment", ["segment"]),
 });

@@ -7,7 +7,7 @@
     "email": "support@convex.dev",
     "url": "https://github.com/get-convex/workpool/issues"
   },
-  "version": "0.1.2",
+  "version": "0.1.3-alpha.0",
   "license": "Apache-2.0",
   "keywords": [
     "convex",
@@ -27,7 +27,7 @@
     "prepare": "npm run build",
     "prepack": "node node10stubs.mjs",
     "postpack": "node node10stubs.mjs --cleanup",
-    "test": "vitest run",
+    "test": "vitest",
     "lint": "tsc --noEmit && eslint . && prettier --check .",
     "format": "prettier --write .",
     "test:debug": "vitest --inspect-brk --no-file-parallelism",
@@ -66,18 +66,19 @@
   "devDependencies": {
     "@eslint/js": "^9.9.1",
     "@types/node": "^18.17.0",
-    "convex-test": "^0.0.35",
+    "convex-test": "^0.0.36-alpha.0",
     "eslint": "^9.9.1",
     "globals": "^15.9.0",
     "prettier": "3.2.5",
     "typescript": "~5.0.3",
     "typescript-eslint": "^8.4.0",
-    "vitest": "^2.1.4"
+    "vitest": "^2.1.9"
   },
   "main": "./dist/commonjs/client/index.js",
   "types": "./dist/commonjs/client/index.d.ts",
   "module": "./dist/esm/client/index.js",
   "dependencies": {
-    "@convex-dev/crons": "^0.1.5"
+    "@edge-runtime/vm": "^4.0.4",
+    "@vitest/coverage-v8": "^2.1.9"
   }
 }
