@@ -196,7 +196,7 @@ export const updateRunStatus = internalMutation({
     let segment = docs.map((d) => d?.segment).sort()[0];
     const runStatus = await getOrCreateRunningStatus(ctx);
     const saturated = state.running.length >= maxParallelism;
-    if (segment || state.running.length > 0) {
+    if (segment !== undefined || state.running.length > 0) {
       // If there's something to do, schedule for next actionable segment.
       // Or the next recovery, whichever comes first.
       const nextRecoverySegment = state.lastRecovery + RECOVERY_PERIOD_SEGMENTS;
@@ -302,13 +302,13 @@ async function getNextUp(
   return ctx.db
     .query(table)
     .withIndex("segment", (q) =>
-      range.start
-        ? range.end
+      range.start !== undefined
+        ? range.end !== undefined
           ? q
               .gte("segment", range.start - CURSOR_BUFFER_SEGMENTS)
               .lte("segment", range.end)
           : q.gt("segment", range.start - CURSOR_BUFFER_SEGMENTS)
-        : range.end
+        : range.end !== undefined
           ? q.lt("segment", range.end)
           : q
     )
