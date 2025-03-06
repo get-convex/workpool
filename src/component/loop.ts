@@ -106,12 +106,13 @@ export const main = internalMutation({
     await ctx.db.replace(state._id, state);
     await ctx.scheduler.runAfter(0, internal.loop.updateRunStatus, {
       generation: state.generation,
+      segment: args.segment,
     });
   },
 });
 
 export const updateRunStatus = internalMutation({
-  args: { generation: v.int64() },
+  args: { generation: v.int64(), segment: v.int64() },
   handler: async (ctx, args) => {
     const globals = await getGlobals(ctx);
     const console = createLogger(globals.logLevel);
@@ -124,7 +125,7 @@ export const updateRunStatus = internalMutation({
     }
 
     console.time("[updateRunStatus] outstandingCancelations");
-    const thisSegment = currentSegment();
+    const thisSegment = args.segment;
     const outstandingCancelations = await getNextUp(ctx, "pendingCancelation", {
       start: state.segmentCursors.cancelation,
       end: thisSegment,
