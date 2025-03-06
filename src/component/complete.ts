@@ -48,10 +48,17 @@ export async function completeHandler(
         !!maxAttempts &&
         !pendingCancelation &&
         work.attempts < maxAttempts;
-      console.info(
-        recordCompleted(work, retrying ? "retrying" : job.runResult.kind)
-      );
       if (retrying) {
+        const existing = await ctx.db
+          .query("pendingStart")
+          .withIndex("workId", (q) => q.eq("workId", job.workId))
+          .first();
+        if (existing) {
+          console.warn(
+            `[complete] ${job.workId} is trying to retry, but already in pendingStart`
+          );
+          return;
+        }
         await rescheduleJob(ctx, work, console);
       } else {
         if (work.onComplete) {
@@ -78,8 +85,11 @@ export async function completeHandler(
         // runs once per work item.
         await ctx.db.delete(job.workId);
       }
+      console.info(
+        recordCompleted(work, retrying ? "retrying" : job.runResult.kind)
+      );
+      // Canceled jobs are accounted for in the main loop beforehand.
       if (job.runResult.kind !== "canceled") {
-        // If the work was canceled, it's already out of the "running" state.
         await ctx.db.insert("pendingCompletion", {
           runResult: job.runResult,
           workId: job.workId,
