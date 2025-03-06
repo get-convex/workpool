@@ -78,18 +78,20 @@ export const cancelAll = mutation({
       .withIndex("by_creation_time", (q) => q.lte("_creationTime", beforeTime))
       .order("desc")
       .take(PAGE_SIZE);
-    await Promise.all(
-      pageOfWork.map(async ({ _id }) => {
-        await cancelWorkItem(ctx, _id, segment, logLevel);
-      })
+    const canceled = await Promise.all(
+      pageOfWork.map(async ({ _id }) =>
+        cancelWorkItem(ctx, _id, segment, logLevel)
+      )
     );
+    if (canceled.some((c) => c)) {
+      await kickMainLoop(ctx, "cancel", { logLevel });
+    }
     if (pageOfWork.length === PAGE_SIZE) {
       await ctx.scheduler.runAfter(0, api.lib.cancelAll, {
         logLevel,
         before: pageOfWork[pageOfWork.length - 1]._creationTime,
       });
     }
-    await kickMainLoop(ctx, "cancel", { logLevel });
   },
 });
 
