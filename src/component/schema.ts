@@ -75,6 +75,7 @@ export default defineSchema({
     segment,
     runResult,
     workId: v.id("work"),
+    retrying: v.boolean(),
   })
     .index("workId", ["workId"])
     .index("segment", ["segment"]),

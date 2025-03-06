@@ -322,10 +322,10 @@ async function handleCompletions(
         if (c.runResult.kind === "success") {
           state.report.succeeded++;
         } else if (c.runResult.kind === "failed") {
-          state.report.failed++;
-          if (await ctx.db.get(c.workId)) {
-            // We don't delete the work when we retry.
+          if (c.retrying) {
             state.report.retries++;
+          } else {
+            state.report.failed++;
           }
         }
       } else {

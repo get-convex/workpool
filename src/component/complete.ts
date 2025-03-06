@@ -64,12 +64,12 @@ export async function completeHandler(
       if (pendingCancelation) {
         await ctx.db.delete(pendingCancelation._id);
       }
-      if (
+      const retrying =
         job.runResult.kind === "failed" &&
-        maxAttempts &&
+        !!maxAttempts &&
         !pendingCancelation &&
-        work.attempts < maxAttempts
-      ) {
+        work.attempts < maxAttempts;
+      if (retrying) {
         await rescheduleJob(ctx, work, console);
       } else {
         await ctx.db.delete(job.workId);
@@ -80,6 +80,7 @@ export async function completeHandler(
           runResult: job.runResult,
           workId: job.workId,
           segment: nextSegment(),
+          retrying,
         });
         await kickMainLoop(ctx, "complete");
       }
