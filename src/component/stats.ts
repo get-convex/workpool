@@ -34,7 +34,7 @@ export function recordStarted(work: Doc<"work">): string {
 
 export function recordCompleted(
   work: Doc<"work">,
-  status: "success" | "failed" | "canceled"
+  status: "success" | "failed" | "canceled" | "retrying"
 ): string {
   return JSON.stringify({
     workId: work._id,

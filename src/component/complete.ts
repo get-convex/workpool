@@ -35,27 +35,6 @@ export async function completeHandler(
         console.warn(`[complete] ${job.workId} is done, but its work is gone`);
         return;
       }
-      console.info(recordCompleted(work, job.runResult.kind));
-      if (work.onComplete) {
-        try {
-          const handle = work.onComplete.fnHandle as FunctionHandle<
-            "mutation",
-            OnCompleteArgs,
-            void
-          >;
-          await ctx.runMutation(handle, {
-            workId: work._id,
-            context: work.onComplete.context,
-            result: job.runResult,
-          });
-          console.debug(`[complete] onComplete for ${job.workId} completed`);
-        } catch (e) {
-          console.error(
-            `[complete] error running onComplete for ${job.workId}`,
-            e
-          );
-        }
-      }
       const pendingCancelation = await ctx.db
         .query("pendingCancelation")
         .withIndex("workId", (q) => q.eq("workId", job.workId))
@@ -69,9 +48,34 @@ export async function completeHandler(
         !!maxAttempts &&
         !pendingCancelation &&
         work.attempts < maxAttempts;
+      console.info(
+        recordCompleted(work, retrying ? "retrying" : job.runResult.kind)
+      );
       if (retrying) {
         await rescheduleJob(ctx, work, console);
       } else {
+        if (work.onComplete) {
+          try {
+            const handle = work.onComplete.fnHandle as FunctionHandle<
+              "mutation",
+              OnCompleteArgs,
+              void
+            >;
+            await ctx.runMutation(handle, {
+              workId: work._id,
+              context: work.onComplete.context,
+              result: job.runResult,
+            });
+            console.debug(`[complete] onComplete for ${job.workId} completed`);
+          } catch (e) {
+            console.error(
+              `[complete] error running onComplete for ${job.workId}`,
+              e
+            );
+          }
+        }
+        // The presence of work is the lock that ensures onComplete only
+        // runs once per work item.
         await ctx.db.delete(job.workId);
       }
       if (job.runResult.kind !== "canceled") {
