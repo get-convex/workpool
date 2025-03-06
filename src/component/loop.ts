@@ -360,9 +360,14 @@ async function handleCancelation(
   await Promise.all(
     canceled.map(async ({ _id, workId }) => {
       await ctx.db.delete(_id);
+      if (canceledWork.has(workId)) {
+        // We shouldn't have multiple pending cancelations for the same work.
+        console.error(`[main] ${workId} already canceled`);
+        return;
+      }
       const work = await ctx.db.get(workId);
       if (!work) {
-        console.warn(`[handleCancelation] ${workId} is gone`);
+        console.warn(`[main] ${workId} is gone, but trying to cancel`);
         return;
       }
       // Ensure it doesn't retry.
