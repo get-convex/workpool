@@ -74,11 +74,7 @@ export const main = internalMutation({
       state.lastRecovery = args.segment;
     } else if (args.segment - state.lastRecovery >= RECOVERY_PERIOD_SEGMENTS) {
       // Otherwise schedule recovery for any old jobs.
-      const oldEnoughToConsider = Date.now() - RECOVERY_THRESHOLD_MS;
-      const jobs = state.running.filter((r) => r.started < oldEnoughToConsider);
-      if (jobs.length) {
-        await ctx.scheduler.runAfter(0, internal.recovery.recover, { jobs });
-      }
+      await handleRecovery(ctx, state, console);
       state.lastRecovery = args.segment;
     }
 
@@ -389,6 +385,35 @@ async function handleCancelation(
       runResult: { kind: "canceled" as const },
     })),
   });
+}
+
+async function handleRecovery(
+  ctx: MutationCtx,
+  state: Doc<"internalState">,
+  console: Logger
+) {
+  const missing = new Set<Id<"work">>();
+  const oldEnoughToConsider = Date.now() - RECOVERY_THRESHOLD_MS;
+  const jobs = (
+    await Promise.all(
+      state.running.map(async (r) => {
+        if (r.started >= oldEnoughToConsider) {
+          return null;
+        }
+        const work = await ctx.db.get(r.workId);
+        if (!work) {
+          missing.add(r.workId);
+          console.warn(`[main] ${r.workId} already gone (skipping recovery)`);
+          return null;
+        }
+        return { ...r, attempts: work.attempts };
+      })
+    )
+  ).filter((r) => r !== null);
+  state.running = state.running.filter((r) => !missing.has(r.workId));
+  if (jobs.length) {
+    await ctx.scheduler.runAfter(0, internal.recovery.recover, { jobs });
+  }
 }
 
 async function handleStart(
