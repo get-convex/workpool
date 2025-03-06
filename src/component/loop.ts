@@ -13,9 +13,7 @@ import {
 import {
   boundScheduledTime,
   Config,
-  currentSegment,
   fromSegment,
-  nextSegment,
   RunResult,
   toSegment,
 } from "./shared.js";
@@ -142,24 +140,41 @@ export const updateRunStatus = internalMutation({
 
     // TODO: check for current segment (or from args) first, to avoid OCCs.
     console.time("[updateRunStatus] nextSegmentIsActionable");
-    const [nextIsActionable, cursors] = await nextSegmentIsActionable(
+    const nextSegment = thisSegment + 1n;
+    const nextIsActionable = await nextSegmentIsActionable(
       ctx,
       state,
-      maxParallelism
+      maxParallelism,
+      nextSegment
     );
     console.timeEnd("[updateRunStatus] nextSegmentIsActionable");
 
     if (nextIsActionable) {
+      await ctx.scheduler.runAt(fromSegment(nextSegment), internal.loop.main, {
+        generation: args.generation,
+        segment: nextSegment,
+      });
+      return;
+    }
+
+    console.time("[updateRunStatus] oldSegmentIsActionable");
+    const [oldIsActionable, cursors] = await oldSegmentIsActionable(
+      ctx,
+      state,
+      maxParallelism
+    );
+    console.timeEnd("[updateRunStatus] oldSegmentIsActionable");
+
+    if (oldIsActionable) {
       await ctx.db.patch(state._id, {
         segmentCursors: {
           ...state.segmentCursors,
           ...cursors,
         },
       });
-      const segment = nextSegment();
-      await ctx.scheduler.runAt(fromSegment(segment), internal.loop.main, {
+      await ctx.scheduler.runAt(fromSegment(thisSegment), internal.loop.main, {
         generation: args.generation,
-        segment,
+        segment: thisSegment,
       });
       return;
     }
@@ -174,10 +189,9 @@ export const updateRunStatus = internalMutation({
     if (state.running.length < maxParallelism) {
       actionableTables.push("pendingStart");
     }
-    const start = nextSegment();
     const docs = await Promise.all(
       actionableTables.map(async (tableName) =>
-        getNextUp(ctx, tableName, { start })
+        getNextUp(ctx, tableName, { start: nextSegment })
       )
     );
     console.timeEnd("[updateRunStatus] findNextSegment");
@@ -217,19 +231,17 @@ export const updateRunStatus = internalMutation({
 async function nextSegmentIsActionable(
   ctx: MutationCtx,
   state: Doc<"internalState">,
-  maxParallelism: number
-): Promise<
-  [boolean, { completion?: bigint; cancelation?: bigint; incoming?: bigint }]
-> {
-  // First, try with our cursor range, up to next segment.
-  const end = nextSegment();
+  maxParallelism: number,
+  end: bigint
+): Promise<boolean> {
+  // First, try with our cursor range, up to end.
   if (
     await getNextUp(ctx, "pendingCancelation", {
       start: state.segmentCursors.cancelation,
       end,
     })
   ) {
-    return [true, {}];
+    return true;
   }
   if (
     await getNextUp(ctx, "pendingCompletion", {
@@ -237,7 +249,7 @@ async function nextSegmentIsActionable(
       end,
     })
   ) {
-    return [true, {}];
+    return true;
   }
   if (state.running.length < maxParallelism) {
     if (
@@ -246,9 +258,19 @@ async function nextSegmentIsActionable(
         end,
       })
     ) {
-      return [true, {}];
+      return true;
     }
   }
+  return false;
+}
+
+async function oldSegmentIsActionable(
+  ctx: MutationCtx,
+  state: Doc<"internalState">,
+  maxParallelism: number
+): Promise<
+  [boolean, { completion?: bigint; cancelation?: bigint; incoming?: bigint }]
+> {
   // Next, we look for out-of-order additions we may have missed.
   const oldCompletion = await getNextUp(ctx, "pendingCompletion", {
     end: state.segmentCursors.completion,
