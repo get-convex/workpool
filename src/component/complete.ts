@@ -29,12 +29,6 @@ export async function completeHandler(
   const console = createLogger(globals?.logLevel);
   await Promise.all(
     args.jobs.map(async (job) => {
-      const work = await ctx.db.get(job.workId);
-      const maxAttempts = work?.retryBehavior?.maxAttempts;
-      if (!work) {
-        console.warn(`[complete] ${job.workId} is done, but its work is gone`);
-        return;
-      }
       const pendingCancelation = await ctx.db
         .query("pendingCancelation")
         .withIndex("workId", (q) => q.eq("workId", job.workId))
@@ -43,6 +37,12 @@ export async function completeHandler(
       if (pendingCancelation) {
         await ctx.db.delete(pendingCancelation._id);
       }
+      const work = await ctx.db.get(job.workId);
+      if (!work) {
+        console.warn(`[complete] ${job.workId} is done, but its work is gone`);
+        return;
+      }
+      const maxAttempts = work.retryBehavior?.maxAttempts;
       const retrying =
         job.runResult.kind === "failed" &&
         !!maxAttempts &&
