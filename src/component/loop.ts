@@ -408,7 +408,14 @@ async function handleStart(
         .gte("segment", state.segmentCursors.incoming - CURSOR_BUFFER_SEGMENTS)
         .lte("segment", segment)
     )
+    // We filter out any work that's already running.
+    // This can happen if we are retrying and for some reason we haven't
+    // processed the completion before the next attempt.
+    .filter((q) =>
+      q.and(...state.running.map((r) => q.neq(q.field("workId"), r.workId)))
+    )
     .take(toSchedule);
+
   state.segmentCursors.incoming = pending.at(-1)?.segment ?? segment;
   console.debug(`[main] scheduling ${pending.length} pending work`);
   // Start new work.
