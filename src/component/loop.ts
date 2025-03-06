@@ -43,10 +43,7 @@ export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
 
 // There should only ever be at most one of these scheduled or running.
 export const main = internalMutation({
-  args: {
-    generation: v.int64(),
-    segment: v.int64(),
-  },
+  args: { generation: v.int64(), segment: v.int64() },
   handler: async (ctx, args) => {
     // State will be modified and patched at the end of the function.
     const state = await getOrCreateState(ctx);
