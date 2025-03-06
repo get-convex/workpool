@@ -138,7 +138,7 @@ async function cancelWorkItem(
   const pendingCancelation = await ctx.db
     .query("pendingCancelation")
     .withIndex("workId", (q) => q.eq("workId", workId))
-    .first();
+    .unique();
   if (pendingCancelation) {
     console.warn(`[cancel] work ${workId} has already been canceled`);
     return false;

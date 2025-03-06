@@ -56,18 +56,18 @@ export async function completeHandler(
           );
         }
       }
-      const pendingCancelations = await ctx.db
+      const pendingCancelation = await ctx.db
         .query("pendingCancelation")
         .withIndex("workId", (q) => q.eq("workId", job.workId))
-        .collect();
+        .unique();
       // Ensure there aren't any pending cancelations for this work.
-      for (const pendingCancelation of pendingCancelations) {
+      if (pendingCancelation) {
         await ctx.db.delete(pendingCancelation._id);
       }
       if (
         job.runResult.kind === "failed" &&
         maxAttempts &&
-        pendingCancelations.length === 0 &&
+        !pendingCancelation &&
         work.attempts < maxAttempts
       ) {
         await rescheduleJob(ctx, work, console);
