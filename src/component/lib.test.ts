@@ -42,7 +42,7 @@ describe("lib", () => {
 
       expect(id).toBeDefined();
       const status = await t.query(api.lib.status, { id });
-      expect(status).toEqual({ state: "pending", attempt: 0 });
+      expect(status).toEqual({ state: "pending", previousAttempts: 0 });
     });
 
     it("should throw error if maxParallelism is too high", async () => {
@@ -171,7 +171,7 @@ describe("lib", () => {
       });
 
       const status = await t.query(api.lib.status, { id });
-      expect(status).toEqual({ state: "pending", attempt: 0 });
+      expect(status).toEqual({ state: "pending", previousAttempts: 0 });
     });
 
     it("should return running state when work is in progress", async () => {
@@ -197,7 +197,7 @@ describe("lib", () => {
       });
 
       const status = await t.query(api.lib.status, { id });
-      expect(status).toEqual({ state: "running", attempt: 0 });
+      expect(status).toEqual({ state: "running", previousAttempts: 0 });
     });
   });
 });
