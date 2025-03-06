@@ -137,6 +137,7 @@ export const updateRunStatus = internalMutation({
       return;
     }
 
+    // TODO: check for current segment (or from args) first, to avoid OCCs.
     console.time("[updateRunStatus] nextSegmentIsActionable");
     const [nextIsActionable, cursors] = await nextSegmentIsActionable(
       ctx,
@@ -145,7 +146,6 @@ export const updateRunStatus = internalMutation({
     );
     console.timeEnd("[updateRunStatus] nextSegmentIsActionable");
 
-    const start = nextSegment();
     if (nextIsActionable) {
       await ctx.db.patch(state._id, {
         segmentCursors: {
@@ -153,9 +153,10 @@ export const updateRunStatus = internalMutation({
           ...cursors,
         },
       });
-      await ctx.scheduler.runAt(fromSegment(start), internal.loop.main, {
+      const segment = nextSegment();
+      await ctx.scheduler.runAt(fromSegment(segment), internal.loop.main, {
         generation: args.generation,
-        segment: start,
+        segment,
       });
       return;
     }
@@ -170,6 +171,7 @@ export const updateRunStatus = internalMutation({
     if (state.running.length < maxParallelism) {
       actionableTables.push("pendingStart");
     }
+    const start = nextSegment();
     const docs = await Promise.all(
       actionableTables.map(async (tableName) =>
         getNextUp(ctx, tableName, { start })
