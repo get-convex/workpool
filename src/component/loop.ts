@@ -17,7 +17,7 @@ import {
   nextSegment,
   toSegment,
 } from "./shared.js";
-import { recordCompleted, recordReport, recordStarted } from "./stats.js";
+import { recordReport, recordStarted } from "./stats.js";
 
 const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
 const SECOND = 1000;
@@ -376,7 +376,6 @@ async function handleCancelation(
         .withIndex("workId", (q) => q.eq("workId", workId))
         .unique();
       if (pendingStart && !canceledWork.has(workId)) {
-        console.info(recordCompleted(work, "canceled"));
         state.report.canceled++;
         await ctx.db.delete(pendingStart._id);
         canceledWork.add(workId);
