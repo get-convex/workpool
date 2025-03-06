@@ -51,13 +51,13 @@ export default defineSchema({
     ),
   }),
 
-  // Written on enqueue. Deleted by `main` for success, `complete` for canceled.
+  // Written on enqueue. Deleted by `complete` for success, failure, canceled.
   work: defineTable({
     fnType: v.union(v.literal("action"), v.literal("mutation")),
     fnHandle: v.string(),
     fnName: v.string(),
     fnArgs: v.any(),
-    attempts: v.number(),
+    attempts: v.number(), // number of completed attempts
     onComplete: v.optional(onComplete),
     retryBehavior: v.optional(retryBehavior),
   }),
@@ -76,7 +76,6 @@ export default defineSchema({
     runResult,
     workId: v.id("work"),
     retry: v.boolean(),
-    attempt: v.number(),
   })
     .index("workId", ["workId"])
     .index("segment", ["segment"]),

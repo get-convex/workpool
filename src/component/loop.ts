@@ -320,18 +320,6 @@ async function handleCompletions(
   await Promise.all(
     completed.map(async (c) => {
       await ctx.db.delete(c._id);
-      const work = await ctx.db.get(c.workId);
-      if (!work) {
-        console.warn(`[main] ${c.workId} is gone, but trying to complete`);
-        return;
-      }
-      if (work.attempts !== c.attempt) {
-        console.warn(
-          `[main] ${c.workId} has an older attempt number` +
-            ` (provided: ${c.attempt}, current: ${work.attempts})`
-        );
-        return;
-      }
 
       const running = state.running.find((r) => r.workId === c.workId);
       if (!running) {
@@ -340,20 +328,24 @@ async function handleCompletions(
         );
         return;
       }
-      const duration = c._creationTime - running.started;
       if (c.retry) {
+        // Only check for work if it's going to be retried.
+        const work = await ctx.db.get(c.workId);
+        if (!work) {
+          console.warn(`[main] ${c.workId} is gone, but trying to complete`);
+          return;
+        }
         const retried = await rescheduleJob(ctx, work, console);
         if (retried) {
           state.report.retries++;
-          console.info(recordCompleted(work, "retrying", duration));
+          console.info(recordCompleted(work, "retrying"));
         } else {
           // We don't retry if it's been canceled in the mean time.
           state.report.canceled++;
-          console.info(recordCompleted(work, "canceled", duration));
           toCancel.push({
             workId: c.workId,
             runResult: { kind: "canceled" },
-            attempt: c.attempt,
+            attempt: work.attempts,
           });
         }
       } else {
@@ -362,9 +354,6 @@ async function handleCompletions(
         } else if (c.runResult.kind === "failed") {
           state.report.failed++;
         }
-        console.info(recordCompleted(work, c.runResult.kind, duration));
-        // This or cancelation in complete are the terminating states.
-        await ctx.db.delete(c.workId);
       }
     })
   );
@@ -421,7 +410,6 @@ async function handleCancelation(
             .unique();
           if (pendingStart && !canceledWork.has(workId)) {
             state.report.canceled++;
-            console.info(recordCompleted(work, "canceled"));
             await ctx.db.delete(pendingStart._id);
             canceledWork.add(workId);
             return { workId, runResult, attempt: work.attempts };
@@ -515,25 +503,13 @@ async function beginWork(
   if (!work) {
     throw new Error("work not found");
   }
-  const attempt = work.attempts + 1;
-  await ctx.db.patch(work._id, { attempts: attempt });
   console.info(recordStarted(work));
+  const { attempts: attempt, fnHandle, fnArgs } = work;
+  const args = { workId, fnHandle, fnArgs, logLevel, attempt };
   if (work.fnType === "action") {
-    return await ctx.scheduler.runAfter(0, internal.worker.runActionWrapper, {
-      workId: work._id,
-      fnHandle: work.fnHandle,
-      fnArgs: work.fnArgs,
-      logLevel,
-      attempt,
-    });
+    return ctx.scheduler.runAfter(0, internal.worker.runActionWrapper, args);
   } else if (work.fnType === "mutation") {
-    return await ctx.scheduler.runAfter(0, internal.worker.runMutationWrapper, {
-      workId: work._id,
-      fnHandle: work.fnHandle,
-      fnArgs: work.fnArgs,
-      logLevel,
-      attempt,
-    });
+    return ctx.scheduler.runAfter(0, internal.worker.runMutationWrapper, args);
   } else {
     throw new Error(`Unexpected fnType ${work.fnType}`);
   }

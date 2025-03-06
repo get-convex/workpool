@@ -34,8 +34,7 @@ export function recordStarted(work: Doc<"work">): string {
 
 export function recordCompleted(
   work: Doc<"work">,
-  status: "success" | "failed" | "canceled" | "retrying",
-  duration?: number
+  status: "success" | "failed" | "canceled" | "retrying"
 ): string {
   return JSON.stringify({
     workId: work._id,
@@ -44,7 +43,6 @@ export function recordCompleted(
     completedAt: Date.now(),
     attempts: work.attempts,
     status,
-    duration,
     lagSinceEnqueued: Date.now() - work._creationTime,
   });
 }

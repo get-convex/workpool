@@ -303,8 +303,8 @@ You can read the status of a function by calling `pool.status(id)`.
 
 The status will be one of:
 
-- `{ kind: "pending"; attempt: number }`: The function has not started yet.
-- `{ kind: "running"; attempt: number }`: The function is currently running.
+- `{ kind: "pending"; attempts: number }`: The function has not started yet.
+- `{ kind: "running"; attempts: number }`: The function is currently running.
 - `{ kind: "finished" }`: The function has succeeded, failed, or been canceled.
 
 ## Canceling work

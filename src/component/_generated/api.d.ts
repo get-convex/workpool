@@ -82,8 +82,8 @@ export type Mounts = {
       "query",
       "public",
       { id: string },
-      | { attempt: number; state: "pending" }
-      | { attempt: number; state: "running" }
+      | { attempts: number; state: "pending" }
+      | { attempts: number; state: "running" }
       | { state: "finished" }
     >;
   };

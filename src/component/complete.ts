@@ -4,6 +4,7 @@ import { internalMutation, MutationCtx } from "./_generated/server.js";
 import { kickMainLoop } from "./kick.js";
 import { createLogger } from "./logging.js";
 import { nextSegment, OnCompleteArgs, runResult } from "./shared.js";
+import { recordCompleted } from "./stats.js";
 
 export type CompleteJob = Infer<typeof completeArgs.fields.jobs.element>;
 
@@ -34,6 +35,8 @@ export async function completeHandler(
         console.warn(`[complete] ${job.workId} mismatched attempt number`);
         return;
       }
+      work.attempts++;
+      await ctx.db.patch(work._id, { attempts: work.attempts });
       const pendingCompletion = await ctx.db
         .query("pendingCompletion")
         .withIndex("workId", (q) => q.eq("workId", job.workId))
@@ -66,19 +69,19 @@ export async function completeHandler(
               `[complete] error running onComplete for ${job.workId}`,
               e
             );
+            // TODO: store failures in a table for later debugging
           }
         }
-      }
-      if (job.runResult.kind === "canceled") {
-        // Canceled jobs are accounted for in the main loop beforehand.
+        console.info(recordCompleted(work, job.runResult.kind));
+        // This is the terminating state for work.
         await ctx.db.delete(job.workId);
-      } else {
+      }
+      if (job.runResult.kind !== "canceled") {
         await ctx.db.insert("pendingCompletion", {
           runResult: job.runResult,
           workId: job.workId,
           segment: nextSegment(),
           retry,
-          attempt: job.attempt,
         });
         anyPendingCompletions = true;
       }

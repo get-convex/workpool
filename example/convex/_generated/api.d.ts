@@ -80,8 +80,8 @@ export declare const components: {
         "query",
         "internal",
         { id: string },
-        | { attempt: number; state: "pending" }
-        | { attempt: number; state: "running" }
+        | { attempts: number; state: "pending" }
+        | { attempts: number; state: "running" }
         | { state: "finished" }
       >;
     };
@@ -126,8 +126,8 @@ export declare const components: {
         "query",
         "internal",
         { id: string },
-        | { attempt: number; state: "pending" }
-        | { attempt: number; state: "running" }
+        | { attempts: number; state: "pending" }
+        | { attempts: number; state: "running" }
         | { state: "finished" }
       >;
     };
@@ -172,8 +172,8 @@ export declare const components: {
         "query",
         "internal",
         { id: string },
-        | { attempt: number; state: "pending" }
-        | { attempt: number; state: "running" }
+        | { attempts: number; state: "pending" }
+        | { attempts: number; state: "running" }
         | { state: "finished" }
       >;
     };
