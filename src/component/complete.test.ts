@@ -1,5 +1,13 @@
 import { convexTest } from "convex-test";
-import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import {
+  describe,
+  expect,
+  it,
+  beforeEach,
+  afterEach,
+  vi,
+  assert,
+} from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { completeHandler } from "./complete";
@@ -397,6 +405,103 @@ describe("complete", () => {
           .withIndex("workId", (q) => q.eq("workId", workId))
           .collect();
         expect(pendingCompletions).toHaveLength(0);
+      });
+    });
+
+    it("should only process the first call with the same attempt number for retries", async () => {
+      // Enqueue a work item with retry behavior
+      const workId = await t.mutation(api.lib.enqueue, {
+        fnHandle: "testHandle",
+        fnName: "testFunction",
+        fnArgs: { test: "data" },
+        fnType: "mutation",
+        runAt: Date.now(),
+        config: {
+          maxParallelism: 10,
+          logLevel: "INFO",
+        },
+        retryBehavior: {
+          maxAttempts: 3,
+          initialBackoffMs: 100,
+          base: 2,
+        },
+      });
+
+      // First call to completeHandler with a failed result
+      await t.run(async (ctx) => {
+        await completeHandler(ctx, {
+          jobs: [
+            {
+              workId,
+              runResult: { kind: "failed", error: "first error" },
+              attempt: 0,
+            },
+          ],
+        });
+      });
+
+      // Verify the first call was processed correctly
+      await t.run(async (ctx) => {
+        // Work should still exist (for retry)
+        const work = await ctx.db.get(workId);
+        expect(work).not.toBeNull();
+        expect(work?.attempts).toBe(1); // Incremented from 0
+
+        // pendingCompletion should be created with retry=true
+        const pendingCompletions = await ctx.db
+          .query("pendingCompletion")
+          .withIndex("workId", (q) => q.eq("workId", workId))
+          .collect();
+        expect(pendingCompletions).toHaveLength(1);
+        expect(pendingCompletions[0].runResult.kind).toBe("failed");
+        expect(pendingCompletions[0].retry).toBe(true);
+        assert(pendingCompletions[0].runResult.kind === "failed");
+        // Check the error message from the first call
+        expect(pendingCompletions[0].runResult.error).toBe("first error");
+      });
+
+      // Create a spy to track if the second call processes anything
+      const runMutationSpy = vi.fn();
+
+      // Second call to completeHandler with the same attempt number
+      await t.run(async (ctx) => {
+        // Create a modified context with a spy on runMutation
+        const spyCtx = {
+          ...ctx,
+          runMutation: runMutationSpy,
+        };
+
+        await completeHandler(spyCtx, {
+          jobs: [
+            {
+              workId,
+              runResult: { kind: "failed", error: "second error" },
+              attempt: 0, // Same attempt number as the first call
+            },
+          ],
+        });
+      });
+
+      // Verify the second call was not processed
+      await t.run(async (ctx) => {
+        // Work should still have the same attempt count
+        const work = await ctx.db.get(workId);
+        expect(work).not.toBeNull();
+        expect(work?.attempts).toBe(1); // Still 1, not incremented again
+
+        // No additional pendingCompletion should be created
+        const pendingCompletions = await ctx.db
+          .query("pendingCompletion")
+          .withIndex("workId", (q) => q.eq("workId", workId))
+          .collect();
+        expect(pendingCompletions).toHaveLength(1);
+        expect(pendingCompletions[0].runResult.kind).toBe("failed");
+        assert(pendingCompletions[0].runResult.kind === "failed");
+        expect(pendingCompletions[0].retry).toBe(true);
+        expect(pendingCompletions[0].runResult.error).toBe("first error");
+
+        // The runMutation spy should not have been called
+        expect(runMutationSpy).not.toHaveBeenCalled();
       });
     });
   });
