@@ -24,7 +24,7 @@ export const recover = internalMutation({
       v.object({
         scheduledId: v.id("_scheduled_functions"),
         workId: v.id("work"),
-        attempts: v.number(),
+        attempt: v.number(),
         started: v.number(),
       })
     ),
@@ -51,17 +51,18 @@ export const recover = internalMutation({
         console.warn(`${preamble} work not found, skipping`);
         continue;
       }
-      if (work.attempts !== job.attempts) {
+      if (work.attempts !== job.attempt) {
         // Retry already started, no need to do anything.
         console.warn(`${preamble} attempts mismatch, skipping`);
         continue;
       }
       const scheduled = await ctx.db.system.get(job.scheduledId);
       if (scheduled === null) {
-        console.warn(`${preamble} not found`);
+        console.warn(`${preamble} not found in _scheduled_functions`);
         toComplete.push({
           workId: job.workId,
           runResult: { kind: "failed", error: `Scheduled job not found` },
+          attempt: job.attempt,
         });
         continue;
       }
@@ -73,6 +74,7 @@ export const recover = internalMutation({
           toComplete.push({
             workId: job.workId,
             runResult: scheduled.state,
+            attempt: job.attempt,
           });
           break;
         }
@@ -81,6 +83,7 @@ export const recover = internalMutation({
           toComplete.push({
             workId: job.workId,
             runResult: { kind: "failed", error: "Canceled via scheduler" },
+            attempt: job.attempt,
           });
           break;
         }

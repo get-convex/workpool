@@ -113,12 +113,12 @@ export type Status = Infer<typeof status>;
 
 export function boundScheduledTime(ms: number, console: Logger): number {
   if (ms < Date.now() - YEAR) {
-    console.warn("runAt is too far in the past, defaulting to now", ms);
+    console.error("scheduled time is too old, defaulting to now", ms);
     return Date.now();
   }
   if (ms > Date.now() + 4 * YEAR) {
-    console.warn(
-      "runAt is too far in the future, defaulting to 1 year from now",
+    console.error(
+      "scheduled time is too far in the future, defaulting to 1 year from now",
       ms
     );
     return Date.now() + YEAR;

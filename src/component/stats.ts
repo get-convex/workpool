@@ -34,14 +34,17 @@ export function recordStarted(work: Doc<"work">): string {
 
 export function recordCompleted(
   work: Doc<"work">,
-  status: "success" | "failed" | "canceled" | "retrying"
+  status: "success" | "failed" | "canceled" | "retrying",
+  duration?: number
 ): string {
   return JSON.stringify({
     workId: work._id,
     event: "completed",
     fnName: work.fnName,
     completedAt: Date.now(),
+    attempts: work.attempts,
     status,
+    duration,
     lagSinceEnqueued: Date.now() - work._creationTime,
   });
 }

@@ -51,7 +51,7 @@ export default defineSchema({
     ),
   }),
 
-  // Written on enqueue. Safe to read. Deleted by `complete`.
+  // Written on enqueue. Deleted by `main` for success, `complete` for canceled.
   work: defineTable({
     fnType: v.union(v.literal("action"), v.literal("mutation")),
     fnHandle: v.string(),
@@ -62,7 +62,7 @@ export default defineSchema({
     retryBehavior: v.optional(retryBehavior),
   }),
 
-  // Written on enqueue, read & deleted by `main`.
+  // Written on enqueue & rescheduled for retry, read & deleted by `main`.
   pendingStart: defineTable({
     workId: v.id("work"),
     segment,
@@ -70,12 +70,13 @@ export default defineSchema({
     .index("workId", ["workId"])
     .index("segment", ["segment"]),
 
-  // Written by job, read & deleted by `main`.
+  // Written by complete, read & deleted by `main`.
   pendingCompletion: defineTable({
     segment,
     runResult,
     workId: v.id("work"),
-    retrying: v.boolean(),
+    retry: v.boolean(),
+    attempt: v.number(),
   })
     .index("workId", ["workId"])
     .index("segment", ["segment"]),

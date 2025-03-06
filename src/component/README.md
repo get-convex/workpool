@@ -25,19 +25,19 @@ Concepts:
 flowchart LR
     Client -->|enqueue| pendingStart
     Client -->|cancel| pendingCancelation
-    complete -->|retry| pendingStart
     complete --> |success or failure| pendingCompletion
-    pendingStart -->|start| workerRunning["worker running"]
+    pendingCompletion -->|retry| pendingStart
+    pendingStart --> workerRunning["worker running"]
     workerRunning -->|worker finished| complete
     workerRunning --> |recovery| complete
-    successfulCancel["AND"]@{shape: delay} --> |cancel| complete
+    successfulCancel["AND"]@{shape: delay} --> |canceled| complete
     pendingStart --> successfulCancel
     pendingCancelation --> successfulCancel
 ```
 
 Notably:
 
-- The pending\* states are only written by other sources.
+- The pending\* states are written by outside sources.
 - The main loop federates changes to/from "running"
 - Canceling only impacts pending and retrying jobs.
 
