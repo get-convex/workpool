@@ -1,5 +1,13 @@
 import { convexTest } from "convex-test";
-import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import {
+  describe,
+  expect,
+  it,
+  beforeEach,
+  afterEach,
+  vi,
+  assert,
+} from "vitest";
 import { Id } from "./_generated/dataModel";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -191,9 +199,8 @@ describe("lib", () => {
       await t.run(async (ctx) => {
         const pendingStart = await ctx.db.query("pendingStart").first();
         expect(pendingStart).toBeDefined();
-        if (pendingStart) {
-          await ctx.db.delete(pendingStart._id);
-        }
+        assert(pendingStart);
+        await ctx.db.delete(pendingStart._id);
       });
 
       const status = await t.query(api.lib.status, { id });
