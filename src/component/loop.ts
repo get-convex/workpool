@@ -296,9 +296,7 @@ async function getNextUp(
 
 /**
  * Handles the completion of pending completions.
-
- * Important: It should handle retries before cancelations are processed,
- * to allow retries to be canceled.
+ * This only processes work that succeeded or failed, not canceled.
  */
 async function handleCompletions(
   ctx: MutationCtx,

@@ -74,12 +74,15 @@ export async function completeHandler(
       } else {
         await ctx.db.delete(job.workId);
       }
-      await ctx.db.insert("pendingCompletion", {
-        runResult: job.runResult,
-        workId: job.workId,
-        segment: nextSegment(),
-      });
-      await kickMainLoop(ctx, "complete");
+      if (job.runResult.kind !== "canceled") {
+        // If the work was canceled, it's already out of the "running" state.
+        await ctx.db.insert("pendingCompletion", {
+          runResult: job.runResult,
+          workId: job.workId,
+          segment: nextSegment(),
+        });
+        await kickMainLoop(ctx, "complete");
+      }
     })
   );
 }
