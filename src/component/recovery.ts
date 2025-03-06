@@ -4,6 +4,24 @@ import { completeArgs, completeHandler } from "./complete.js";
 import { createLogger } from "./logging.js";
 import schema from "./schema.js";
 
+/**
+ * This can run when things fail because of server failures / restarts, or when
+ * the user cancels scheduled jobs (from the dashboard).
+ * Possible states it could be in at the moment this executes:
+ * - in internalState.running and complete was never called
+ *   -> we should call completeHandler with failure.
+ * - complete called (we don't need to do anything):
+ *  - In pendingCompletion still and internalState.running.
+ *    -> check for pendingCompletion.
+ *  - pendingCompletion already processed.
+ *   - No retry: work was deleted, not in internalState.running.
+ *     -> check for work.
+ *   - Retry: (note: it won't start until it's out of internalState.running):
+ *    - In pendingStart from a retry and not in internalState.running.
+ *      -> check for pendingStart.
+ *    - Already restarted, in internalState.running
+ *      -> we don't need to do anything, but can't detect this state.
+ */
 export const recover = internalMutation({
   args: {
     jobs: schema.tables.internalState.validator.fields.running,
