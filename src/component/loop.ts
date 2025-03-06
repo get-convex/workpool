@@ -314,13 +314,6 @@ async function handleCompletions(
     )
     .collect();
   state.segmentCursors.completion = segment;
-  const before = state.running.length;
-  state.running = state.running.filter(
-    (r) => !completed.some((c) => c.workId === r.workId)
-  );
-  const numCompleted = before - state.running.length;
-  console.debug(`[main] completed ${numCompleted} work`);
-  state.report.completed += numCompleted;
   await Promise.all(
     completed.map(async (c) => {
       await ctx.db.delete(c._id);
@@ -336,10 +329,20 @@ async function handleCompletions(
           }
         }
       } else {
-        console.warn(`[main] completing ${c.workId} but it's not in "running"`);
+        console.error(
+          `[main] completing ${c.workId} but it's not in "running"`
+        );
       }
     })
   );
+  // We do this after so the stats above know if it was in progress.
+  const before = state.running.length;
+  state.running = state.running.filter(
+    (r) => !completed.some((c) => c.workId === r.workId)
+  );
+  const numCompleted = before - state.running.length;
+  state.report.completed += numCompleted;
+  console.debug(`[main] completed ${numCompleted} work`);
 }
 
 async function handleCancelation(
