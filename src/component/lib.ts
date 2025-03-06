@@ -108,7 +108,7 @@ export const status = query({
       .withIndex("workId", (q) => q.eq("workId", id))
       .unique();
     if (pendingStart) {
-      return { state: "pending", attempt: work.attempts } as const;
+      return { state: "pending", attempt: work.attempts + 1 } as const;
     }
     // Assume it's in progress. It could be pending cancelation
     return { state: "running", attempt: work.attempts } as const;
