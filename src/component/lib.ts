@@ -128,15 +128,6 @@ async function cancelWorkItem(
     console.warn(`[cancel] work ${workId} doesn't exist`);
     return false;
   }
-  // We do first here because with recovery there could be multiple pending completions.
-  const completed = await ctx.db
-    .query("pendingCompletion")
-    .withIndex("workId", (q) => q.eq("workId", workId))
-    .first();
-  if (completed) {
-    console.warn(`[cancel] work ${workId} has already completed`);
-    return false;
-  }
   const pendingCancelation = await ctx.db
     .query("pendingCancelation")
     .withIndex("workId", (q) => q.eq("workId", workId))
