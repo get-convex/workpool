@@ -98,11 +98,11 @@ export const status = v.union(
   v.union(
     v.object({
       state: v.literal("pending"),
-      attempts: v.number(),
+      previousAttempts: v.number(),
     }),
     v.object({
       state: v.literal("running"),
-      attempts: v.number(),
+      previousAttempts: v.number(),
     }),
     v.object({
       state: v.literal("finished"),
