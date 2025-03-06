@@ -25,12 +25,14 @@ Concepts:
 flowchart LR
     Client -->|enqueue| pendingStart
     Client -->|cancel| pendingCancelation
-    Recovery-->|complete| pendingCompletion
-    pendingStart -->|main| workerRunning["internalState.running"]
-    workerRunning-->|"complete(retry)"| pendingStart
-    workerRunning-->|complete| pendingCompletion
-    pendingCompletion-->|"main"| finished
-    pendingCancelation-->|"complete(pendingStart)"| pendingCompletion
+    complete -->|retry| pendingStart
+    complete --> |success or failure| pendingCompletion
+    pendingStart -->|start| workerRunning["worker running"]
+    workerRunning -->|worker finished| complete
+    workerRunning --> |recovery| complete
+    successfulCancel["AND"]@{shape: delay} --> |cancel| complete
+    pendingStart --> successfulCancel
+    pendingCancelation --> successfulCancel
 ```
 
 Notably:
