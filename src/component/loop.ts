@@ -150,10 +150,14 @@ export const updateRunStatus = internalMutation({
     console.timeEnd("[updateRunStatus] nextSegmentIsActionable");
 
     if (nextIsActionable) {
-      await ctx.scheduler.runAt(fromSegment(nextSegment), internal.loop.main, {
-        generation: args.generation,
-        segment: next,
-      });
+      await ctx.scheduler.runAt(
+        boundScheduledTime(fromSegment(next), console),
+        internal.loop.main,
+        {
+          generation: args.generation,
+          segment: next,
+        }
+      );
       return;
     }
 
@@ -206,7 +210,7 @@ export const updateRunStatus = internalMutation({
         segment = nextRecoverySegment;
       }
       const scheduledId = await ctx.scheduler.runAt(
-        fromSegment(segment),
+        boundScheduledTime(fromSegment(segment), console),
         internal.loop.main,
         { generation: args.generation, segment }
       );
