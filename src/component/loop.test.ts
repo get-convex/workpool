@@ -485,45 +485,43 @@ describe("loop", () => {
 
     it("should transition from scheduled to running when new work is enqueued", async () => {
       // Setup initial scheduled state
-      const scheduledId = await t.run<Id<"_scheduled_functions">>(
-        async (ctx) => {
-          // Create internal state
-          await ctx.db.insert("internalState", {
+      await t.run<Id<"_scheduled_functions">>(async (ctx) => {
+        // Create internal state
+        await ctx.db.insert("internalState", {
+          generation: 1n,
+          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
+          lastRecovery: 0n,
+          report: {
+            completed: 0,
+            succeeded: 0,
+            failed: 0,
+            retries: 0,
+            canceled: 0,
+            lastReportTs: Date.now(),
+          },
+          running: [],
+        });
+
+        // Schedule main loop
+        const scheduledId = await ctx.scheduler.runAfter(
+          1000,
+          internal.loop.main,
+          { generation: 1n, segment: nextSegment() + 10n }
+        );
+
+        // Create scheduled runStatus
+        await ctx.db.insert("runStatus", {
+          state: {
+            kind: "scheduled",
+            segment: nextSegment() + 10n,
+            scheduledId,
+            saturated: false,
             generation: 1n,
-            segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-            lastRecovery: 0n,
-            report: {
-              completed: 0,
-              succeeded: 0,
-              failed: 0,
-              retries: 0,
-              canceled: 0,
-              lastReportTs: Date.now(),
-            },
-            running: [],
-          });
+          },
+        });
 
-          // Schedule main loop
-          const scheduledId = await ctx.scheduler.runAfter(
-            1000,
-            internal.loop.main,
-            { generation: 1n, segment: nextSegment() + 10n }
-          );
-
-          // Create scheduled runStatus
-          await ctx.db.insert("runStatus", {
-            state: {
-              kind: "scheduled",
-              segment: nextSegment() + 10n,
-              scheduledId,
-              saturated: false,
-              generation: 1n,
-            },
-          });
-
-          return scheduledId;
-        }
-      );
+        return scheduledId;
+      });
 
       // Enqueue work to trigger transition to running
       await t.mutation(api.lib.enqueue, {
