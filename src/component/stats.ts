@@ -83,8 +83,8 @@ export const debugCounts = internalQuery({
   args: {},
   returns: v.any(),
   handler: async (ctx) => {
-    const inProgressWork =
-      (await ctx.db.query("internalState").unique())?.running.length ?? 0;
+    const internalState = await ctx.db.query("internalState").unique();
+    const inProgressWork = internalState?.running.length ?? 0;
     /* eslint-disable @typescript-eslint/no-explicit-any */
     const pendingStart = await (ctx.db.query("pendingStart") as any).count();
     const pendingCompletion = await (
@@ -93,6 +93,7 @@ export const debugCounts = internalQuery({
     const pendingCancelation = await (
       ctx.db.query("pendingCancelation") as any
     ).count();
+    const runStatus = await ctx.db.query("runStatus").unique();
     /* eslint-enable @typescript-eslint/no-explicit-any */
     return {
       pendingStart,
@@ -100,6 +101,8 @@ export const debugCounts = internalQuery({
       pendingCompletion,
       pendingCancelation,
       active: inProgressWork - pendingCompletion,
+      runStatus: runStatus?.state.kind,
+      generation: internalState?.generation,
     };
   },
 });
