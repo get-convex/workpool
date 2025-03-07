@@ -13,7 +13,10 @@ import {
 import {
   boundScheduledTime,
   Config,
+  currentSegment,
   fromSegment,
+  max,
+  nextSegment,
   RunResult,
   toSegment,
 } from "./shared.js";
@@ -122,35 +125,34 @@ export const updateRunStatus = internalMutation({
     }
 
     console.time("[updateRunStatus] outstandingCancelations");
-    const thisSegment = args.segment;
     const outstandingCancelations = await getNextUp(ctx, "pendingCancelation", {
       start: state.segmentCursors.cancelation,
-      end: thisSegment,
+      end: args.segment,
     });
     console.timeEnd("[updateRunStatus] outstandingCancelations");
     if (outstandingCancelations) {
       await ctx.scheduler.runAfter(0, internal.loop.main, {
         generation: args.generation,
-        segment: thisSegment,
+        segment: args.segment,
       });
       return;
     }
 
     // TODO: check for current segment (or from args) first, to avoid OCCs.
     console.time("[updateRunStatus] nextSegmentIsActionable");
-    const nextSegment = thisSegment + 1n;
+    const next = max(args.segment + 1n, currentSegment());
     const nextIsActionable = await nextSegmentIsActionable(
       ctx,
       state,
       maxParallelism,
-      nextSegment
+      next
     );
     console.timeEnd("[updateRunStatus] nextSegmentIsActionable");
 
     if (nextIsActionable) {
       await ctx.scheduler.runAt(fromSegment(nextSegment), internal.loop.main, {
         generation: args.generation,
-        segment: nextSegment,
+        segment: next,
       });
       return;
     }
@@ -170,9 +172,9 @@ export const updateRunStatus = internalMutation({
           ...cursors,
         },
       });
-      await ctx.scheduler.runAt(fromSegment(thisSegment), internal.loop.main, {
+      await ctx.scheduler.runAfter(0, internal.loop.main, {
         generation: args.generation,
-        segment: thisSegment,
+        segment: currentSegment(),
       });
       return;
     }
@@ -189,7 +191,7 @@ export const updateRunStatus = internalMutation({
     }
     const docs = await Promise.all(
       actionableTables.map(async (tableName) =>
-        getNextUp(ctx, tableName, { start: nextSegment })
+        getNextUp(ctx, tableName, { start: next })
       )
     );
     console.timeEnd("[updateRunStatus] findNextSegment");
@@ -208,15 +210,21 @@ export const updateRunStatus = internalMutation({
         internal.loop.main,
         { generation: args.generation, segment }
       );
-      await ctx.db.patch(runStatus._id, {
-        state: {
-          kind: "scheduled",
-          scheduledId,
-          saturated,
-          generation: args.generation,
-          segment,
-        },
-      });
+      if (segment > nextSegment()) {
+        await ctx.db.patch(runStatus._id, {
+          state: {
+            kind: "scheduled",
+            scheduledId,
+            saturated,
+            generation: args.generation,
+            segment,
+          },
+        });
+      } else {
+        console.debug(
+          `[updateRunStatus] staying running because it's the next segment`
+        );
+      }
       return;
     }
     // There seems to be nothing in the future to do, so go idle.
@@ -403,7 +411,9 @@ async function handleCancelation(
     )
     .take(CANCELLATION_BATCH_SIZE);
   state.segmentCursors.cancelation = canceled.at(-1)?.segment ?? segment;
-  console.debug(`[main] attempting to cancel ${canceled.length}`);
+  if (canceled.length) {
+    console.debug(`[main] attempting to cancel ${canceled.length}`);
+  }
   const canceledWork: Set<Id<"work">> = new Set();
   const runResult: RunResult = { kind: "canceled" };
   const jobs = toCancel.concat(

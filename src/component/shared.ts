@@ -125,3 +125,17 @@ export function boundScheduledTime(ms: number, console: Logger): number {
   }
   return ms;
 }
+
+/**
+ * Returns the smaller of two bigint values.
+ */
+export function min<T extends bigint>(a: T, b: T): T {
+  return a > b ? b : a;
+}
+
+/**
+ * Returns the larger of two bigint values.
+ */
+export function max<T extends bigint>(a: T, b: T): T {
+  return a < b ? b : a;
+}
