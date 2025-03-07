@@ -428,6 +428,7 @@ describe("loop", () => {
     it("should transition from running to saturated when maxed out", async () => {
       // Setup initial running state with max capacity
       await setMaxParallelism(1);
+      const segment = currentSegment();
       await t.run(async (ctx) => {
         // Create work item
         const workId = await makeDummyWork(ctx);
@@ -439,7 +440,7 @@ describe("loop", () => {
         await ctx.db.insert("internalState", {
           generation: 1n,
           segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: 0n,
+          lastRecovery: segment,
           report: {
             completed: 0,
             succeeded: 0,
@@ -461,14 +462,14 @@ describe("loop", () => {
 
         await ctx.db.insert("pendingStart", {
           workId: anotherWorkId,
-          segment: 1n,
+          segment,
         });
       });
 
       // Run updateRunStatus to transition to scheduled with saturated=true
       await t.mutation(internal.loop.updateRunStatus, {
         generation: 1n,
-        segment: 1n,
+        segment,
       });
 
       // Verify state transition to scheduled with saturated=true
@@ -1106,7 +1107,7 @@ describe("loop", () => {
         await ctx.db.insert("internalState", {
           generation: 1n,
           segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: 0n,
+          lastRecovery: now,
           report: {
             completed: 0,
             succeeded: 0,
