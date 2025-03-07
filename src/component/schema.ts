@@ -60,6 +60,7 @@ export default defineSchema({
     attempts: v.number(), // number of completed attempts
     onComplete: v.optional(onComplete),
     retryBehavior: v.optional(retryBehavior),
+    canceled: v.optional(v.boolean()),
   }),
 
   // Written on enqueue & rescheduled for retry, read & deleted by `main`.

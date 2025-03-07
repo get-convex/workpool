@@ -422,7 +422,7 @@ async function handleCancelation(
             return null;
           }
           // Ensure it doesn't retry.
-          await ctx.db.patch(workId, { retryBehavior: undefined });
+          await ctx.db.patch(workId, { canceled: true });
           // Ensure it doesn't start.
           const pendingStart = await ctx.db
             .query("pendingStart")
@@ -554,8 +554,10 @@ async function rescheduleJob(
     console.warn(`[main] ${work._id} in pendingCancelation so not retrying`);
     return false;
   }
+  if (work.canceled) {
+    return false;
+  }
   if (!work.retryBehavior) {
-    // When we process a cancelation request, we clear the retryBehavior.
     console.warn(`[main] ${work._id} has no retryBehavior so not retrying`);
     return false;
   }
