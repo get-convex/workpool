@@ -274,7 +274,7 @@ export const runPaced = internalAction({
 
 export const cancel = internalAction({
   args: {
-    id: workIdValidator,
+    id: v.optional(workIdValidator),
   },
   handler: async (ctx, args) => {
     console.debug("Canceling", args.id);
