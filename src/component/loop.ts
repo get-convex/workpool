@@ -451,7 +451,7 @@ async function handleCancelation(
           return null;
         })
       )
-    ).filter((r) => r !== null)
+    ).flatMap((r) => (r ? [r] : []))
   );
   if (jobs.length) {
     await ctx.scheduler.runAfter(0, internal.complete.complete, { jobs });
@@ -480,7 +480,7 @@ async function handleRecovery(
         return { ...r, attempt: work.attempts };
       })
     )
-  ).filter((r) => r !== null);
+  ).flatMap((r) => (r ? [r] : []));
   state.running = state.running.filter((r) => !missing.has(r.workId));
   if (jobs.length) {
     await ctx.scheduler.runAfter(0, internal.recovery.recover, { jobs });
@@ -523,7 +523,7 @@ async function handleStart(
           return { scheduledId, workId, started: Date.now() };
         })
       )
-    ).filter((r) => r !== null)
+    ).flatMap((r) => (r ? [r] : []))
   );
 }
 
