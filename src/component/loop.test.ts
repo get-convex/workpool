@@ -65,6 +65,27 @@ describe("loop", () => {
     });
   }
 
+  async function insertInternalState(
+    ctx: MutationCtx,
+    overrides: Partial<WithoutSystemFields<Doc<"internalState">>> = {}
+  ) {
+    await ctx.db.insert("internalState", {
+      generation: 1n,
+      segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
+      lastRecovery: currentSegment(),
+      report: {
+        completed: 0,
+        succeeded: 0,
+        failed: 0,
+        retries: 0,
+        canceled: 0,
+        lastReportTs: Date.now(),
+      },
+      running: [],
+      ...overrides,
+    });
+  }
+
   beforeEach(async () => {
     vi.useFakeTimers();
     t = await setupTest();
@@ -85,20 +106,7 @@ describe("loop", () => {
       // Setup initial state
       const workId = await t.run<Id<"work">>(async (ctx) => {
         // Create internal state
-        await ctx.db.insert("internalState", {
-          generation: 1n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: 0n,
-          report: {
-            completed: 0,
-            succeeded: 0,
-            failed: 0,
-            retries: 0,
-            canceled: 0,
-            lastReportTs: Date.now(),
-          },
-          running: [],
-        });
+        await insertInternalState(ctx);
 
         // Create running runStatus
         await ctx.db.insert("runStatus", {
@@ -161,20 +169,7 @@ describe("loop", () => {
       // Setup initial state
       const workId = await t.run<Id<"work">>(async (ctx) => {
         // Create internal state
-        await ctx.db.insert("internalState", {
-          generation: 1n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: 0n,
-          report: {
-            completed: 0,
-            succeeded: 0,
-            failed: 0,
-            retries: 0,
-            canceled: 0,
-            lastReportTs: Date.now(),
-          },
-          running: [],
-        });
+        await insertInternalState(ctx);
 
         // Create running runStatus
         await ctx.db.insert("runStatus", {
@@ -231,20 +226,7 @@ describe("loop", () => {
       // Setup initial state with a running job that will need retry
       const workId = await t.run<Id<"work">>(async (ctx) => {
         // Create internal state
-        await ctx.db.insert("internalState", {
-          generation: 1n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: 0n,
-          report: {
-            completed: 0,
-            succeeded: 0,
-            failed: 0,
-            retries: 0,
-            canceled: 0,
-            lastReportTs: Date.now(),
-          },
-          running: [],
-        });
+        await insertInternalState(ctx);
 
         // Create running runStatus
         await ctx.db.insert("runStatus", {
@@ -328,20 +310,7 @@ describe("loop", () => {
       // Setup initial idle state
       await t.run(async (ctx) => {
         // Create internal state
-        await ctx.db.insert("internalState", {
-          generation: 1n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: 0n,
-          report: {
-            completed: 0,
-            succeeded: 0,
-            failed: 0,
-            retries: 0,
-            canceled: 0,
-            lastReportTs: Date.now(),
-          },
-          running: [],
-        });
+        await insertInternalState(ctx);
 
         // Create idle runStatus
         await ctx.db.insert("runStatus", {
@@ -375,20 +344,7 @@ describe("loop", () => {
       // Setup initial running state with work
       await t.run(async (ctx) => {
         // Create internal state
-        await ctx.db.insert("internalState", {
-          generation: 1n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: 0n,
-          report: {
-            completed: 0,
-            succeeded: 0,
-            failed: 0,
-            retries: 0,
-            canceled: 0,
-            lastReportTs: Date.now(),
-          },
-          running: [],
-        });
+        await insertInternalState(ctx);
 
         // Create running runStatus
         await ctx.db.insert("runStatus", {
@@ -440,18 +396,7 @@ describe("loop", () => {
         const scheduledId = await makeDummyScheduledFunction(ctx, workId);
 
         // Create internal state with running job
-        await ctx.db.insert("internalState", {
-          generation: 1n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: segment,
-          report: {
-            completed: 0,
-            succeeded: 0,
-            failed: 0,
-            retries: 0,
-            canceled: 0,
-            lastReportTs: Date.now(),
-          },
+        await insertInternalState(ctx, {
           running: [{ workId, scheduledId, started: Date.now() }],
         });
 
@@ -490,20 +435,7 @@ describe("loop", () => {
       // Setup initial scheduled state
       await t.run<Id<"_scheduled_functions">>(async (ctx) => {
         // Create internal state
-        await ctx.db.insert("internalState", {
-          generation: 1n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: 0n,
-          report: {
-            completed: 0,
-            succeeded: 0,
-            failed: 0,
-            retries: 0,
-            canceled: 0,
-            lastReportTs: Date.now(),
-          },
-          running: [],
-        });
+        await insertInternalState(ctx);
 
         // Schedule main loop
         const scheduledId = await ctx.scheduler.runAfter(
@@ -553,20 +485,7 @@ describe("loop", () => {
       // Setup initial running state with work
       const workId = await t.run<Id<"work">>(async (ctx) => {
         // Create internal state
-        await ctx.db.insert("internalState", {
-          generation: 1n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: 0n,
-          report: {
-            completed: 0,
-            succeeded: 0,
-            failed: 0,
-            retries: 0,
-            canceled: 0,
-            lastReportTs: Date.now(),
-          },
-          running: [],
-        });
+        await insertInternalState(ctx);
 
         // Create running runStatus
         await ctx.db.insert("runStatus", {
