@@ -60,7 +60,8 @@ export async function kickMainLoop(
     console.debug(`[${source}] main was idle, so run it now`);
   }
   await ctx.db.patch(runStatus._id, { state: { kind: "running" } });
-  await ctx.scheduler.runAfter(0, internal.loop.main, {
+  const scheduledTime = boundScheduledTime(fromSegment(segment), console);
+  await ctx.scheduler.runAt(scheduledTime, internal.loop.main, {
     generation: runStatus.state.generation,
     segment,
   });
