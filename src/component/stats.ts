@@ -79,12 +79,14 @@ export const queueLength = internalQuery({
  * Warning: this should not be used from a mutation, as it will cause conflicts.
  * Use this while developing to see the state of the queue.
  */
-export const debugCounts = internalQuery({
+export const diagnostic = internalQuery({
   args: {},
   returns: v.any(),
   handler: async (ctx) => {
+    const global = await ctx.db.query("globals").unique();
     const internalState = await ctx.db.query("internalState").unique();
     const inProgressWork = internalState?.running.length ?? 0;
+    const maxParallelism = global?.maxParallelism ?? DEFAULT_MAX_PARALLELISM;
     /* eslint-disable @typescript-eslint/no-explicit-any */
     const pendingStart = await (ctx.db.query("pendingStart") as any).count();
     const pendingCompletion = await (
@@ -96,11 +98,11 @@ export const debugCounts = internalQuery({
     const runStatus = await ctx.db.query("runStatus").unique();
     /* eslint-enable @typescript-eslint/no-explicit-any */
     return {
-      pendingStart,
-      inProgressWork,
-      pendingCompletion,
-      pendingCancelation,
-      active: inProgressWork - pendingCompletion,
+      canceling: pendingCancelation,
+      waiting: pendingStart,
+      running: inProgressWork - pendingCompletion,
+      completing: pendingCompletion,
+      spareCapacity: maxParallelism - inProgressWork,
       runStatus: runStatus?.state.kind,
       generation: internalState?.generation,
     };
