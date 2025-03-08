@@ -59,6 +59,8 @@ export const main = internalMutation({
 
     const globals = await getGlobals(ctx);
     const console = createLogger(globals.logLevel);
+    const delayMs = Date.now() - fromSegment(segment);
+    console.debug(`[main] generation ${generation} behind: ${delayMs}ms`);
 
     // Read pendingCompletions, including retry handling.
     console.time("[main] pendingCompletion");
