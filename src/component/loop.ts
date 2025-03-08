@@ -47,12 +47,12 @@ export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
 // There should only ever be at most one of these scheduled or running.
 export const main = internalMutation({
   args: { generation: v.int64(), segment: v.int64() },
-  handler: async (ctx, args) => {
+  handler: async (ctx, { generation, segment }) => {
     // State will be modified and patched at the end of the function.
     const state = await getOrCreateState(ctx);
-    if (args.generation !== state.generation) {
+    if (generation !== state.generation) {
       throw new Error(
-        `generation mismatch: ${args.generation} !== ${state.generation}`
+        `generation mismatch: ${generation} !== ${state.generation}`
       );
     }
     state.generation++;
@@ -62,26 +62,26 @@ export const main = internalMutation({
 
     // Read pendingCompletions, including retry handling.
     console.time("[main] pendingCompletion");
-    const toCancel = await handleCompletions(ctx, state, args.segment, console);
+    const toCancel = await handleCompletions(ctx, state, segment, console);
     console.timeEnd("[main] pendingCompletion");
 
     // Read pendingCancelation, deleting from pendingStart. If it's still running, queue to cancel.
     console.time("[main] pendingCancelation");
-    await handleCancelation(ctx, state, args.segment, console, toCancel);
+    await handleCancelation(ctx, state, segment, console, toCancel);
     console.timeEnd("[main] pendingCancelation");
 
     if (state.running.length === 0) {
       // If there's nothing active, reset lastRecovery.
-      state.lastRecovery = args.segment;
-    } else if (args.segment - state.lastRecovery >= RECOVERY_PERIOD_SEGMENTS) {
+      state.lastRecovery = segment;
+    } else if (segment - state.lastRecovery >= RECOVERY_PERIOD_SEGMENTS) {
       // Otherwise schedule recovery for any old jobs.
       await handleRecovery(ctx, state, console);
-      state.lastRecovery = args.segment;
+      state.lastRecovery = segment;
     }
 
     // Read pendingStart up to max capacity. Update the config, and incomingSegmentCursor.
     console.time("[main] pendingStart");
-    await handleStart(ctx, state, args.segment, console, globals);
+    await handleStart(ctx, state, segment, console, globals);
     console.timeEnd("[main] pendingStart");
 
     if (Date.now() - state.report.lastReportTs >= MINUTE) {
@@ -106,41 +106,41 @@ export const main = internalMutation({
     await ctx.db.replace(state._id, state);
     await ctx.scheduler.runAfter(0, internal.loop.updateRunStatus, {
       generation: state.generation,
-      segment: args.segment,
+      segment,
     });
   },
 });
 
 export const updateRunStatus = internalMutation({
   args: { generation: v.int64(), segment: v.int64() },
-  handler: async (ctx, args) => {
+  handler: async (ctx, { generation, segment }) => {
     const globals = await getGlobals(ctx);
     const console = createLogger(globals.logLevel);
     const maxParallelism = globals.maxParallelism;
     const state = await getOrCreateState(ctx);
-    if (args.generation !== state.generation) {
+    if (generation !== state.generation) {
       throw new Error(
-        `generation mismatch: ${args.generation} !== ${state.generation}`
+        `generation mismatch: ${generation} !== ${state.generation}`
       );
     }
 
     console.time("[updateRunStatus] outstandingCancelations");
     const outstandingCancelations = await getNextUp(ctx, "pendingCancelation", {
       start: state.segmentCursors.cancelation,
-      end: args.segment,
+      end: segment,
     });
     console.timeEnd("[updateRunStatus] outstandingCancelations");
     if (outstandingCancelations) {
       await ctx.scheduler.runAfter(0, internal.loop.main, {
-        generation: args.generation,
-        segment: args.segment,
+        generation,
+        segment,
       });
       return;
     }
 
     // TODO: check for current segment (or from args) first, to avoid OCCs.
     console.time("[updateRunStatus] nextSegmentIsActionable");
-    const next = max(args.segment + 1n, currentSegment());
+    const next = max(segment + 1n, currentSegment());
     const nextIsActionable = await nextSegmentIsActionable(
       ctx,
       state,
@@ -154,7 +154,7 @@ export const updateRunStatus = internalMutation({
         boundScheduledTime(fromSegment(next), console),
         internal.loop.main,
         {
-          generation: args.generation,
+          generation,
           segment: next,
         }
       );
@@ -177,7 +177,7 @@ export const updateRunStatus = internalMutation({
         },
       });
       await ctx.scheduler.runAfter(0, internal.loop.main, {
-        generation: args.generation,
+        generation,
         segment: currentSegment(),
       });
       return;
@@ -199,29 +199,29 @@ export const updateRunStatus = internalMutation({
       )
     );
     console.timeEnd("[updateRunStatus] findNextSegment");
-    let segment = docs.map((d) => d?.segment).sort()[0];
+    let targetSegment = docs.map((d) => d?.segment).sort()[0];
     const runStatus = await getOrCreateRunningStatus(ctx);
     const saturated = state.running.length >= maxParallelism;
-    if (segment !== undefined || state.running.length > 0) {
+    if (targetSegment !== undefined || state.running.length > 0) {
       // If there's something to do, schedule for next actionable segment.
       // Or the next recovery, whichever comes first.
       const nextRecoverySegment = state.lastRecovery + RECOVERY_PERIOD_SEGMENTS;
-      if (!segment || segment > nextRecoverySegment) {
-        segment = nextRecoverySegment;
+      if (!targetSegment || targetSegment > nextRecoverySegment) {
+        targetSegment = nextRecoverySegment;
       }
       const scheduledId = await ctx.scheduler.runAt(
-        boundScheduledTime(fromSegment(segment), console),
+        boundScheduledTime(fromSegment(targetSegment), console),
         internal.loop.main,
-        { generation: args.generation, segment }
+        { generation, segment: targetSegment }
       );
-      if (segment > nextSegment()) {
+      if (targetSegment > nextSegment()) {
         await ctx.db.patch(runStatus._id, {
           state: {
             kind: "scheduled",
             scheduledId,
             saturated,
-            generation: args.generation,
-            segment,
+            generation,
+            segment: targetSegment,
           },
         });
       } else {
@@ -233,7 +233,7 @@ export const updateRunStatus = internalMutation({
     }
     // There seems to be nothing in the future to do, so go idle.
     await ctx.db.patch(runStatus._id, {
-      state: { kind: "idle", generation: args.generation },
+      state: { kind: "idle", generation },
     });
   },
 });
