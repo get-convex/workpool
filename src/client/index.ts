@@ -133,11 +133,18 @@ export class Workpool {
     fnArgs: Args,
     options?: CallbackOptions & SchedulerOptions
   ): Promise<WorkId> {
+    const onComplete: OnComplete | undefined = options?.onComplete
+      ? {
+          fnHandle: await createFunctionHandle(options.onComplete),
+          context: options.context,
+        }
+      : undefined;
     const id = await ctx.runMutation(this.component.lib.enqueue, {
       ...(await defaultEnqueueArgs(fn, this.options)),
       fnArgs,
       fnType: "mutation",
       runAt: getRunAt(options),
+      onComplete,
     });
     return id as WorkId;
   }
