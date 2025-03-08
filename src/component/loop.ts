@@ -1,9 +1,9 @@
-import { FunctionHandle, WithoutSystemFields } from "convex/server";
+import { WithoutSystemFields } from "convex/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api.js";
 import { Doc, Id } from "./_generated/dataModel.js";
 import { internalMutation, MutationCtx } from "./_generated/server.js";
-import { DEFAULT_MAX_PARALLELISM } from "./kick.js";
+import type { CompleteJob } from "./complete.js";
 import {
   createLogger,
   DEFAULT_LOG_LEVEL,
@@ -14,10 +14,11 @@ import {
   boundScheduledTime,
   Config,
   currentSegment,
+  DEFAULT_MAX_PARALLELISM,
   fromSegment,
+  max,
   nextSegment,
-  OnCompleteArgs,
-  runResult,
+  RunResult,
   toSegment,
 } from "./shared.js";
 import { recordCompleted, recordReport, recordStarted } from "./stats.js";
@@ -45,49 +46,50 @@ export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
 
 // There should only ever be at most one of these scheduled or running.
 export const main = internalMutation({
-  args: {
-    generation: v.int64(),
-    segment: v.int64(),
-  },
-  handler: async (ctx, args) => {
+  args: { generation: v.int64(), segment: v.int64() },
+  handler: async (ctx, { generation, segment }) => {
     // State will be modified and patched at the end of the function.
     const state = await getOrCreateState(ctx);
-    if (args.generation !== state.generation) {
+    if (generation !== state.generation) {
       throw new Error(
-        `generation mismatch: ${args.generation} !== ${state.generation}`
+        `generation mismatch: ${generation} !== ${state.generation}`
       );
     }
     state.generation++;
+    const runStatus = await getOrCreateRunningStatus(ctx);
+    if (runStatus.state.kind !== "running") {
+      await ctx.db.patch(runStatus._id, {
+        state: { kind: "running" },
+      });
+    }
 
     const globals = await getGlobals(ctx);
     const console = createLogger(globals.logLevel);
+    const delayMs = Date.now() - fromSegment(segment);
+    console.debug(`[main] generation ${generation} behind: ${delayMs}ms`);
 
     // Read pendingCompletions, including retry handling.
     console.time("[main] pendingCompletion");
-    const done = await handleCompletions(ctx, state, args.segment, console);
+    const toCancel = await handleCompletions(ctx, state, segment, console);
     console.timeEnd("[main] pendingCompletion");
 
     // Read pendingCancelation, deleting from pendingStart. If it's still running, queue to cancel.
     console.time("[main] pendingCancelation");
-    done.push(...(await handleCancelation(ctx, state, args.segment, console)));
+    await handleCancelation(ctx, state, segment, console, toCancel);
     console.timeEnd("[main] pendingCancelation");
 
     if (state.running.length === 0) {
       // If there's nothing active, reset lastRecovery.
-      state.lastRecovery = args.segment;
-    } else if (args.segment - state.lastRecovery >= RECOVERY_PERIOD_SEGMENTS) {
+      state.lastRecovery = segment;
+    } else if (segment - state.lastRecovery >= RECOVERY_PERIOD_SEGMENTS) {
       // Otherwise schedule recovery for any old jobs.
-      const oldEnoughToConsider = Date.now() - RECOVERY_THRESHOLD_MS;
-      const jobs = state.running.filter((r) => r.started < oldEnoughToConsider);
-      if (jobs.length) {
-        await ctx.scheduler.runAfter(0, internal.recovery.recover, { jobs });
-      }
-      state.lastRecovery = args.segment;
+      await handleRecovery(ctx, state, console);
+      state.lastRecovery = segment;
     }
 
     // Read pendingStart up to max capacity. Update the config, and incomingSegmentCursor.
     console.time("[main] pendingStart");
-    await handleStart(ctx, state, args.segment, console, globals);
+    await handleStart(ctx, state, segment, console, globals);
     console.timeEnd("[main] pendingStart");
 
     if (Date.now() - state.report.lastReportTs >= MINUTE) {
@@ -98,7 +100,7 @@ export const main = internalMutation({
         // It's been a while, let's start fresh.
         lastReportTs = Date.now();
       }
-      console.info(recordReport(state));
+      recordReport(console, state);
       state.report = {
         completed: 0,
         succeeded: 0,
@@ -110,100 +112,82 @@ export const main = internalMutation({
     }
 
     await ctx.db.replace(state._id, state);
-    await ctx.scheduler.runAfter(0, internal.loop.complete, { done });
     await ctx.scheduler.runAfter(0, internal.loop.updateRunStatus, {
       generation: state.generation,
+      segment,
     });
-  },
-});
-
-export const complete = internalMutation({
-  args: {
-    done: v.array(v.object({ runResult, workId: v.id("work") })),
-  },
-  handler: async (ctx, args) => {
-    const globals = await getGlobals(ctx);
-    const console = createLogger(globals.logLevel);
-    await Promise.all(
-      args.done.map(async ({ runResult, workId }) => {
-        const work = await ctx.db.get(workId);
-        if (!work) {
-          console.warn(`[complete] ${workId} is done, but its work is gone`);
-          return;
-        }
-        if (work.onComplete) {
-          try {
-            const handle = work.onComplete.fnHandle as FunctionHandle<
-              "mutation",
-              OnCompleteArgs,
-              void
-            >;
-            await ctx.runMutation(handle, {
-              workId: work._id,
-              context: work.onComplete.context,
-              result: runResult,
-            });
-            console.debug(`[complete] onComplete for ${workId} completed`);
-          } catch (e) {
-            console.error(
-              `[complete] error running onComplete for ${workId}`,
-              e
-            );
-          }
-        }
-        await ctx.db.delete(workId);
-      })
-    );
+    // TODO: if there were more cancellations, schedule main directly.
   },
 });
 
 export const updateRunStatus = internalMutation({
-  args: { generation: v.int64() },
-  handler: async (ctx, args) => {
+  args: { generation: v.int64(), segment: v.int64() },
+  handler: async (ctx, { generation, segment }) => {
     const globals = await getGlobals(ctx);
     const console = createLogger(globals.logLevel);
     const maxParallelism = globals.maxParallelism;
     const state = await getOrCreateState(ctx);
-    if (args.generation !== state.generation) {
+    if (generation !== state.generation) {
       throw new Error(
-        `generation mismatch: ${args.generation} !== ${state.generation}`
+        `generation mismatch: ${generation} !== ${state.generation}`
       );
     }
 
     console.time("[updateRunStatus] outstandingCancelations");
-    const thisSegment = currentSegment();
     const outstandingCancelations = await getNextUp(ctx, "pendingCancelation", {
       start: state.segmentCursors.cancelation,
-      end: thisSegment,
+      end: segment,
     });
     console.timeEnd("[updateRunStatus] outstandingCancelations");
     if (outstandingCancelations) {
       await ctx.scheduler.runAfter(0, internal.loop.main, {
-        generation: args.generation,
-        segment: thisSegment,
+        generation,
+        segment,
       });
       return;
     }
 
+    // TODO: check for current segment (or from args) first, to avoid OCCs.
     console.time("[updateRunStatus] nextSegmentIsActionable");
-    const [nextIsActionable, cursors] = await nextSegmentIsActionable(
+    const next = max(segment + 1n, currentSegment());
+    const nextIsActionable = await nextSegmentIsActionable(
+      ctx,
+      state,
+      maxParallelism,
+      next
+    );
+    console.timeEnd("[updateRunStatus] nextSegmentIsActionable");
+
+    if (nextIsActionable) {
+      await ctx.scheduler.runAt(
+        boundScheduledTime(fromSegment(next), console),
+        internal.loop.main,
+        {
+          generation,
+          segment: next,
+        }
+      );
+      return;
+    }
+
+    console.time("[updateRunStatus] oldSegmentIsActionable");
+    const [oldIsActionable, cursors] = await oldSegmentIsActionable(
       ctx,
       state,
       maxParallelism
     );
-    console.timeEnd("[updateRunStatus] nextSegmentIsActionable");
+    console.timeEnd("[updateRunStatus] oldSegmentIsActionable");
 
-    const start = nextSegment();
-    if (nextIsActionable) {
+    if (oldIsActionable) {
       await ctx.db.patch(state._id, {
         segmentCursors: {
           ...state.segmentCursors,
           ...cursors,
         },
       });
-      await ctx.scheduler.runAt(fromSegment(start), internal.loop.main, {
-        generation: args.generation,
-        segment: start,
+      await ctx.scheduler.runAfter(0, internal.loop.main, {
+        generation,
+        segment: currentSegment(),
       });
       return;
     }
@@ -220,39 +204,45 @@ export const updateRunStatus = internalMutation({
     }
     const docs = await Promise.all(
       actionableTables.map(async (tableName) =>
-        getNextUp(ctx, tableName, { start })
+        getNextUp(ctx, tableName, { start: next })
       )
     );
     console.timeEnd("[updateRunStatus] findNextSegment");
-    let segment = docs.map((d) => d?.segment).sort()[0];
+    let targetSegment = docs.map((d) => d?.segment).sort()[0];
     const runStatus = await getOrCreateRunningStatus(ctx);
     const saturated = state.running.length >= maxParallelism;
-    if (segment || state.running.length > 0) {
+    if (targetSegment !== undefined || state.running.length > 0) {
       // If there's something to do, schedule for next actionable segment.
       // Or the next recovery, whichever comes first.
       const nextRecoverySegment = state.lastRecovery + RECOVERY_PERIOD_SEGMENTS;
-      if (!segment || segment > nextRecoverySegment) {
-        segment = nextRecoverySegment;
+      if (!targetSegment || targetSegment > nextRecoverySegment) {
+        targetSegment = nextRecoverySegment;
       }
       const scheduledId = await ctx.scheduler.runAt(
-        fromSegment(segment),
+        boundScheduledTime(fromSegment(targetSegment), console),
         internal.loop.main,
-        { generation: args.generation, segment }
+        { generation, segment: targetSegment }
       );
-      await ctx.db.patch(runStatus._id, {
-        state: {
-          kind: "scheduled",
-          scheduledId,
-          saturated,
-          generation: args.generation,
-          segment,
-        },
-      });
+      if (targetSegment > nextSegment()) {
+        await ctx.db.patch(runStatus._id, {
+          state: {
+            kind: "scheduled",
+            scheduledId,
+            saturated,
+            generation,
+            segment: targetSegment,
+          },
+        });
+      } else {
+        console.debug(
+          `[updateRunStatus] staying running because it's the next segment`
+        );
+      }
       return;
     }
     // There seems to be nothing in the future to do, so go idle.
     await ctx.db.patch(runStatus._id, {
-      state: { kind: "idle", generation: args.generation },
+      state: { kind: "idle", generation },
     });
   },
 });
@@ -260,19 +250,17 @@ export const updateRunStatus = internalMutation({
 async function nextSegmentIsActionable(
   ctx: MutationCtx,
   state: Doc<"internalState">,
-  maxParallelism: number
-): Promise<
-  [boolean, { completion?: bigint; cancelation?: bigint; incoming?: bigint }]
-> {
-  // First, try with our cursor range, up to next segment.
-  const end = nextSegment();
+  maxParallelism: number,
+  end: bigint
+): Promise<boolean> {
+  // First, try with our cursor range, up to end.
   if (
     await getNextUp(ctx, "pendingCancelation", {
       start: state.segmentCursors.cancelation,
       end,
     })
   ) {
-    return [true, {}];
+    return true;
   }
   if (
     await getNextUp(ctx, "pendingCompletion", {
@@ -280,7 +268,7 @@ async function nextSegmentIsActionable(
       end,
     })
   ) {
-    return [true, {}];
+    return true;
   }
   if (state.running.length < maxParallelism) {
     if (
@@ -289,9 +277,19 @@ async function nextSegmentIsActionable(
         end,
       })
     ) {
-      return [true, {}];
+      return true;
     }
   }
+  return false;
+}
+
+async function oldSegmentIsActionable(
+  ctx: MutationCtx,
+  state: Doc<"internalState">,
+  maxParallelism: number
+): Promise<
+  [boolean, { completion?: bigint; cancelation?: bigint; incoming?: bigint }]
+> {
   // Next, we look for out-of-order additions we may have missed.
   const oldCompletion = await getNextUp(ctx, "pendingCompletion", {
     end: state.segmentCursors.completion,
@@ -325,13 +323,13 @@ async function getNextUp(
   return ctx.db
     .query(table)
     .withIndex("segment", (q) =>
-      range.start
-        ? range.end
+      range.start !== undefined
+        ? range.end !== undefined
           ? q
               .gte("segment", range.start - CURSOR_BUFFER_SEGMENTS)
               .lte("segment", range.end)
           : q.gt("segment", range.start - CURSOR_BUFFER_SEGMENTS)
-        : range.end
+        : range.end !== undefined
           ? q.lt("segment", range.end)
           : q
     )
@@ -340,9 +338,7 @@ async function getNextUp(
 
 /**
  * Handles the completion of pending completions.
-
- * Important: It should handle retries before cancelations are processed,
- * to allow retries to be canceled.
+ * This only processes work that succeeded or failed, not canceled.
  */
 async function handleCompletions(
   ctx: MutationCtx,
@@ -359,87 +355,66 @@ async function handleCompletions(
       q.gte("segment", startSegment).lte("segment", segment)
     )
     .collect();
-  state.report.completed += completed.length;
   state.segmentCursors.completion = segment;
-  const done: Doc<"pendingCompletion">[] = [];
+  // Completions that were going to be retried but have since been canceled.
+  const toCancel: CompleteJob[] = [];
   await Promise.all(
     completed.map(async (c) => {
       await ctx.db.delete(c._id);
-      const work = await ctx.db.get(c.workId);
-      const maxAttempts = work?.retryBehavior?.maxAttempts;
-      const pendingCancelations = await ctx.db
-        .query("pendingCancelation")
-        .withIndex("workId", (q) => q.eq("workId", c.workId))
-        .collect();
-      if (work && state.running.some((r) => r.workId === c.workId)) {
-        if (
-          c.runResult.kind === "failed" &&
-          maxAttempts &&
-          pendingCancelations.length === 0 &&
-          work.attempts < maxAttempts
-        ) {
-          await rescheduleJob(ctx, work, console);
-          state.report.retries++;
-        } else {
-          if (c.runResult.kind === "success") {
-            state.report.succeeded++;
-          } else if (c.runResult.kind === "failed") {
-            state.report.failed++;
-          }
-          // Ensure there aren't any pending cancelations for this work.
-          for (const pendingCancelation of pendingCancelations) {
-            await ctx.db.delete(pendingCancelation._id);
-          }
-          done.push(c);
+
+      const running = state.running.find((r) => r.workId === c.workId);
+      if (!running) {
+        console.error(
+          `[main] completing ${c.workId} but it's not in "running"`
+        );
+        return;
+      }
+      if (c.retry) {
+        // Only check for work if it's going to be retried.
+        const work = await ctx.db.get(c.workId);
+        if (!work) {
+          console.warn(`[main] ${c.workId} is gone, but trying to complete`);
+          return;
         }
-        console.info(recordCompleted(work, c.runResult.kind));
-      } else if (work) {
-        console.warn(`[main] completing ${c.workId} but it's not in "running"`);
+        const retried = await rescheduleJob(ctx, work, console);
+        if (retried) {
+          state.report.retries++;
+          recordCompleted(console, work, "retrying");
+        } else {
+          // We don't retry if it's been canceled in the mean time.
+          state.report.canceled++;
+          toCancel.push({
+            workId: c.workId,
+            runResult: { kind: "canceled" },
+            attempt: work.attempts,
+          });
+        }
       } else {
-        console.warn(`[main] completing ${c.workId} but it's not found`);
+        if (c.runResult.kind === "success") {
+          state.report.succeeded++;
+        } else if (c.runResult.kind === "failed") {
+          state.report.failed++;
+        }
       }
     })
   );
-  console.debug(`[main] completing ${done.length}`);
+  // We do this after so the stats above know if it was in progress.
+  const before = state.running.length;
   state.running = state.running.filter(
     (r) => !completed.some((c) => c.workId === r.workId)
   );
-  return done.map((c) => ({ runResult: c.runResult, workId: c.workId }));
-}
-
-async function rescheduleJob(
-  ctx: MutationCtx,
-  work: Doc<"work">,
-  console: Logger
-): Promise<number> {
-  if (!work.retryBehavior) {
-    throw new Error("work has no retryBehavior");
-  }
-  const backoffMs =
-    work.retryBehavior.initialBackoffMs *
-    Math.pow(work.retryBehavior.base, work.attempts - 1);
-  const nextAttempt = withJitter(backoffMs);
-  const startTime = boundScheduledTime(Date.now() + nextAttempt, console);
-  const segment = toSegment(startTime);
-  await ctx.db.patch(work._id, {
-    attempts: work.attempts + 1,
-  });
-  await ctx.db.insert("pendingStart", {
-    workId: work._id,
-    segment,
-  });
-  return nextAttempt;
-}
-
-export function withJitter(delay: number) {
-  return delay * (0.5 + Math.random());
+  const numCompleted = before - state.running.length;
+  state.report.completed += numCompleted;
+  console.debug(`[main] completed ${numCompleted} work`);
+  return toCancel;
 }
 
 async function handleCancelation(
   ctx: MutationCtx,
   state: Doc<"internalState">,
   segment: bigint,
-  console: Logger
+  console: Logger,
+  toCancel: CompleteJob[]
 ) {
   const start = state.segmentCursors.cancelation - CURSOR_BUFFER_SEGMENTS;
   const canceled = await ctx.db
@@ -449,35 +424,76 @@ async function handleCancelation(
     )
     .take(CANCELLATION_BATCH_SIZE);
   state.segmentCursors.cancelation = canceled.at(-1)?.segment ?? segment;
-  console.debug(`[main] attempting to cancel ${canceled.length}`);
+  if (canceled.length) {
+    console.debug(`[main] attempting to cancel ${canceled.length}`);
+  }
   const canceledWork: Set<Id<"work">> = new Set();
-  await Promise.all(
-    canceled.map(async ({ _id, workId }) => {
-      await ctx.db.delete(_id);
-      const work = await ctx.db.get(workId);
-      if (!work) {
-        console.warn(`[handleCancelation] ${workId} is gone`);
-        return;
-      }
-      // Ensure it doesn't retry.
-      await ctx.db.patch(workId, { retryBehavior: undefined });
-      // Ensure it doesn't start.
-      const pendingStart = await ctx.db
-        .query("pendingStart")
-        .withIndex("workId", (q) => q.eq("workId", workId))
-        .unique();
-      if (pendingStart && !canceledWork.has(workId)) {
-        console.info(recordCompleted(work, "canceled"));
-        state.report.canceled++;
-        await ctx.db.delete(pendingStart._id);
-        canceledWork.add(workId);
-      }
-    })
+  const runResult: RunResult = { kind: "canceled" };
+  const jobs = toCancel.concat(
+    ...(
+      await Promise.all(
+        canceled.map(async ({ _id, _creationTime, workId }) => {
+          await ctx.db.delete(_id);
+          if (canceledWork.has(workId)) {
+            // We shouldn't have multiple pending cancelations for the same work.
+            console.error(`[main] ${workId} already canceled`);
+            return null;
+          }
+          const work = await ctx.db.get(workId);
+          if (!work) {
+            console.warn(`[main] ${workId} is gone, but trying to cancel`);
+            return null;
+          }
+          // Ensure it doesn't retry.
+          await ctx.db.patch(workId, { canceled: true });
+          // Ensure it doesn't start.
+          const pendingStart = await ctx.db
+            .query("pendingStart")
+            .withIndex("workId", (q) => q.eq("workId", workId))
+            .unique();
+          if (pendingStart && !canceledWork.has(workId)) {
+            state.report.canceled++;
+            await ctx.db.delete(pendingStart._id);
+            canceledWork.add(workId);
+            return { workId, runResult, attempt: work.attempts };
+          }
+          return null;
+        })
+      )
+    ).flatMap((r) => (r ? [r] : []))
   );
-  return Array.from(canceledWork).map((id) => ({
-    runResult: { kind: "canceled" as const },
-    workId: id,
-  }));
+  if (jobs.length) {
+    await ctx.scheduler.runAfter(0, internal.complete.complete, { jobs });
+  }
+}
+
+async function handleRecovery(
+  ctx: MutationCtx,
+  state: Doc<"internalState">,
+  console: Logger
+) {
+  const missing = new Set<Id<"work">>();
+  const oldEnoughToConsider = Date.now() - RECOVERY_THRESHOLD_MS;
+  const jobs = (
+    await Promise.all(
+      state.running.map(async (r) => {
+        if (r.started >= oldEnoughToConsider) {
+          return null;
+        }
+        const work = await ctx.db.get(r.workId);
+        if (!work) {
+          missing.add(r.workId);
+          console.error(`[main] ${r.workId} already gone (skipping recovery)`);
+          return null;
+        }
+        return { ...r, attempt: work.attempts };
+      })
+    )
+  ).flatMap((r) => (r ? [r] : []));
+  state.running = state.running.filter((r) => !missing.has(r.workId));
+  if (jobs.length) {
+    await ctx.scheduler.runAfter(0, internal.recovery.recover, { jobs });
+  }
 }
 
 async function handleStart(
@@ -485,9 +501,8 @@ async function handleStart(
   state: Doc<"internalState">,
   segment: bigint,
   console: Logger,
-  globals: Config
+  { maxParallelism, logLevel }: Config
 ) {
-  const maxParallelism = globals.maxParallelism;
   // Schedule as many as needed to reach maxParallelism.
   const toSchedule = maxParallelism - state.running.length;
 
@@ -499,48 +514,101 @@ async function handleStart(
         .lte("segment", segment)
     )
     .take(toSchedule);
+
   state.segmentCursors.incoming = pending.at(-1)?.segment ?? segment;
   console.debug(`[main] scheduling ${pending.length} pending work`);
   // Start new work.
   state.running.push(
-    ...(await Promise.all(
-      pending.map(async ({ _id, workId }) => {
-        const scheduledId = await beginWork(ctx, workId, globals.logLevel);
-        await ctx.db.delete(_id);
-        return { scheduledId, workId, started: Date.now() };
-      })
-    ))
+    ...(
+      await Promise.all(
+        pending.map(async ({ _id, workId, segment }) => {
+          if (state.running.some((r) => r.workId === workId)) {
+            console.error(`[main] ${workId} already running (skipping start)`);
+            return null;
+          }
+          const lagMs = Date.now() - fromSegment(segment);
+          const scheduledId = await beginWork(ctx, workId, logLevel, lagMs);
+          await ctx.db.delete(_id);
+          return { scheduledId, workId, started: Date.now() };
+        })
+      )
+    ).flatMap((r) => (r ? [r] : []))
   );
 }
 
 async function beginWork(
   ctx: MutationCtx,
   workId: Id<"work">,
-  logLevel: LogLevel
+  logLevel: LogLevel,
+  lagMs: number
 ): Promise<Id<"_scheduled_functions">> {
   const console = createLogger(logLevel);
   const work = await ctx.db.get(workId);
   if (!work) {
     throw new Error("work not found");
   }
-  console.info(recordStarted(work));
+  recordStarted(console, work, lagMs);
+  const { attempts: attempt, fnHandle, fnArgs } = work;
+  const args = { workId, fnHandle, fnArgs, logLevel, attempt };
   if (work.fnType === "action") {
-    return await ctx.scheduler.runAfter(0, internal.worker.runActionWrapper, {
-      workId: work._id,
-      fnHandle: work.fnHandle,
-      fnArgs: work.fnArgs,
-      logLevel,
-    });
+    return ctx.scheduler.runAfter(0, internal.worker.runActionWrapper, args);
   } else if (work.fnType === "mutation") {
-    return await ctx.scheduler.runAfter(0, internal.worker.runMutationWrapper, {
-      workId: work._id,
-      fnHandle: work.fnHandle,
-      fnArgs: work.fnArgs,
-      logLevel,
-    });
+    return ctx.scheduler.runAfter(0, internal.worker.runMutationWrapper, args);
   } else {
     throw new Error(`Unexpected fnType ${work.fnType}`);
   }
+}
+
+/**
+ * Reschedules a job for retry.
+ * If it's been canceled in the mean time, don't retry.
+ * @returns true if the job was rescheduled, false if it was not.
+ */
+async function rescheduleJob(
+  ctx: MutationCtx,
+  work: Doc<"work">,
+  console: Logger
+): Promise<boolean> {
+  const pendingCancelation = await ctx.db
+    .query("pendingCancelation")
+    .withIndex("workId", (q) => q.eq("workId", work._id))
+    .unique();
+  if (pendingCancelation) {
+    // If there's an un-processed cancelation request, don't retry.
+    console.warn(`[main] ${work._id} in pendingCancelation so not retrying`);
+    return false;
+  }
+  if (work.canceled) {
+    return false;
+  }
+  if (!work.retryBehavior) {
+    console.warn(`[main] ${work._id} has no retryBehavior so not retrying`);
+    return false;
+  }
+  const existing = await ctx.db
+    .query("pendingStart")
+    .withIndex("workId", (q) => q.eq("workId", work._id))
+    .first();
+  if (existing) {
+    // Not sure why this would ever happen, but ensure uniqueness explicitly.
+    console.error(`[main] ${work._id} already in pendingStart so not retrying`);
+    return false;
+  }
+  const backoffMs =
+    work.retryBehavior.initialBackoffMs *
+    Math.pow(work.retryBehavior.base, work.attempts - 1);
+  const nextAttempt = withJitter(backoffMs);
+  const startTime = boundScheduledTime(Date.now() + nextAttempt, console);
+  const segment = toSegment(startTime);
+  await ctx.db.insert("pendingStart", {
+    workId: work._id,
+    segment,
+  });
+  return true;
+}
+
+export function withJitter(delay: number) {
+  return delay * (0.5 + Math.random());
 }
 
 async function getGlobals(ctx: MutationCtx) {

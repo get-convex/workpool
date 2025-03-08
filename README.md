@@ -95,8 +95,8 @@ await pool.enqueueAction(ctx, internal.email.send, args, {
 export const emailSent = internalMutation({
   args: {
     workId: workIdValidator,
+    result: resultValidator,
     context: v.object({ emailType: v.string(), userId: v.id("users") }),
-    result: runResultValidator,
   },
   handler: async (ctx, args) => {
     if (args.result.kind === "canceled") return;
@@ -303,25 +303,16 @@ You can read the status of a function by calling `pool.status(id)`.
 
 The status will be one of:
 
-- `{ kind: "pending" }`: The function has not started yet.
-- `{ kind: "inProgress" }`: The function is currently running.
-- `{ kind: "completed"; completionStatus: CompletionStatus }`: The function has
-  finished.
-
-The `CompletionStatus` type is one of:
-
-- `"success"`: The function completed successfully.
-- `"error"`: The function threw an error.
-- `"canceled"`: The function was canceled.
-- `"timeout"`: The function timed out.
+- `{ kind: "pending"; previousAttempts: number }`: The function has not started yet.
+- `{ kind: "running"; previousAttempts: number }`: The function is currently running.
+- `{ kind: "finished" }`: The function has succeeded, failed, or been canceled.
 
 ## Canceling work
 
-You can cancel work by calling `pool.cancel(id)`.
+You can cancel work by calling `pool.cancel(id)` or all of them with
+`pool.cancelAll()`.
 
-This will remove the work from the queue and mark it as canceled.
-If the work has already started, it will wait for it to finish, but not allow
-retries.
+This will avoid starting or retrying, but will not stop in-progress work.
 
 <!-- END: Include on https://convex.dev/components -->
 

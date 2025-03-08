@@ -25,19 +25,19 @@ Concepts:
 flowchart LR
     Client -->|enqueue| pendingStart
     Client -->|cancel| pendingCancelation
-    Recovery-->|recover| pendingCancelation
-    Recovery-->|recover| pendingCompletion
-    Worker-->|"saveResult"| pendingCompletion
-    pendingStart -->|main| workerRunning["internalState.running"]
-    workerRunning-->|"main(pendingCompletion)"| Retry{"Needs retry?"}
-    Retry-->|"no / canceled"| complete
-    Retry-->|yes| pendingStart
-    pendingStart-->|"main(pendingCancelation)"| complete
+    complete --> |success or failure| pendingCompletion
+    pendingCompletion -->|retry| pendingStart
+    pendingStart --> workerRunning["worker running"]
+    workerRunning -->|worker finished| complete
+    workerRunning --> |recovery| complete
+    successfulCancel["AND"]@{shape: delay} --> |canceled| complete
+    pendingStart --> successfulCancel
+    pendingCancelation --> successfulCancel
 ```
 
 Notably:
 
-- The pending\* states are only written by other sources.
+- The pending\* states are written by outside sources.
 - The main loop federates changes to/from "running"
 - Canceling only impacts pending and retrying jobs.
 
@@ -53,12 +53,12 @@ flowchart TD
     running-->|"all done"| idle
 ```
 
-- While the loop is running, clients won't see database conflicts with the
-  state changing.
-- The "saturated" state is concretely "running" or "scheduled" with a boolean
-  set, to avoid clients from kicking the main loop on enqueueing, which is
-  unlikely to be productive, since the next action needs to be something
-  terminating.
+- While the loop is running, the runStatus doesn't change, making it safer to
+  read from clients without database conflicts.
+- The "saturated" state is concretely "running" or "scheduled" at max
+  parallelism. There is a boolean set on "scheduled" to avoid clients from
+  kicking the main loop on enqueueing, which is unlikely to be productive, since
+  the next action needs to be something terminating.
 
 ## Retention optimization strategy
 

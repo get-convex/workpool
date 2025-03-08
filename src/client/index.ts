@@ -8,19 +8,22 @@ import {
 import { v, VString } from "convex/values";
 import { Mounts } from "../component/_generated/api.js";
 import {
+  DEFAULT_LOG_LEVEL,
+  type LogLevel,
+  logLevel,
+} from "../component/logging.js";
+import {
+  Config,
+  DEFAULT_MAX_PARALLELISM,
   OnComplete,
-  runResult as runResultValidator,
-  RunResult,
+  runResult as resultValidator,
   type RetryBehavior,
+  RunResult,
   OnCompleteArgs as SharedOnCompleteArgs,
   Status,
-  Config,
 } from "../component/shared.js";
-import { type LogLevel, logLevel } from "../component/logging.js";
 import { RunMutationCtx, RunQueryCtx, UseApi } from "./utils.js";
-import { DEFAULT_LOG_LEVEL } from "../component/logging.js";
-import { DEFAULT_MAX_PARALLELISM } from "../component/kick.js";
-export { runResultValidator, type RunResult };
+export { resultValidator, type RunResult };
 
 // Attempts will run with delay [0, 250, 500, 1000, 2000] (ms)
 export const DEFAULT_RETRY_BEHAVIOR: RetryBehavior = {
@@ -133,11 +136,18 @@ export class Workpool {
     fnArgs: Args,
     options?: CallbackOptions & SchedulerOptions
   ): Promise<WorkId> {
+    const onComplete: OnComplete | undefined = options?.onComplete
+      ? {
+          fnHandle: await createFunctionHandle(options.onComplete),
+          context: options.context,
+        }
+      : undefined;
     const id = await ctx.runMutation(this.component.lib.enqueue, {
       ...(await defaultEnqueueArgs(fn, this.options)),
       fnArgs,
       fnType: "mutation",
       runAt: getRunAt(options),
+      onComplete,
     });
     return id as WorkId;
   }
@@ -215,7 +225,7 @@ export type CallbackOptions = {
    *  args: {
    *    workId: workIdValidator,
    *    context: v.any(),
-   *    result: runResult,
+   *    result: resultValidator,
    *  },
    *  handler: async (ctx, args) => {
    *    console.log(args.result, "Got Context back -> ", args.context, Date.now() - args.context);

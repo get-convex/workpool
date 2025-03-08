@@ -2,16 +2,21 @@ import { internal } from "./_generated/api.js";
 import { internalMutation, MutationCtx } from "./_generated/server.js";
 import { createLogger, DEFAULT_LOG_LEVEL } from "./logging.js";
 import { INITIAL_STATE } from "./loop.js";
-import { Config, nextSegment } from "./shared.js";
+import {
+  boundScheduledTime,
+  Config,
+  DEFAULT_MAX_PARALLELISM,
+  fromSegment,
+  nextSegment,
+} from "./shared.js";
 
-export const DEFAULT_MAX_PARALLELISM = 10;
 /**
  * Called from outside the loop:
  */
 
 export async function kickMainLoop(
   ctx: MutationCtx,
-  source: "enqueue" | "cancel" | "saveResult" | "recovery",
+  source: "enqueue" | "cancel" | "complete",
   config?: Partial<Config>
 ): Promise<void> {
   const globals = await getOrUpdateGlobals(ctx, config);
@@ -51,12 +56,12 @@ export async function kickMainLoop(
         `[${source}] main is marked as scheduled, but it's status is ${scheduled?.state.kind}`
       );
     }
+  } else if (runStatus.state.kind === "idle") {
+    console.debug(`[${source}] main was idle, so run it now`);
   }
-  console.debug(
-    `[${source}] main was scheduled later, so reschedule it to run now`
-  );
   await ctx.db.patch(runStatus._id, { state: { kind: "running" } });
-  await ctx.scheduler.runAfter(0, internal.loop.main, {
+  const scheduledTime = boundScheduledTime(fromSegment(segment), console);
+  await ctx.scheduler.runAt(scheduledTime, internal.loop.main, {
     generation: runStatus.state.generation,
     segment,
   });
@@ -67,7 +72,7 @@ export const forceKick = internalMutation({
   handler: async (ctx) => {
     const runStatus = await getOrCreateRunStatus(ctx);
     await ctx.db.delete(runStatus._id);
-    await kickMainLoop(ctx, "recovery");
+    await kickMainLoop(ctx, "complete");
   },
 });
 

@@ -80,10 +80,13 @@ export declare const components: {
         "query",
         "internal",
         { id: string },
-        | { attempt: number; state: "pending" }
-        | { attempt: number; state: "running" }
+        | { previousAttempts: number; state: "pending" }
+        | { previousAttempts: number; state: "running" }
         | { state: "finished" }
       >;
+    };
+    stats: {
+      queueLength: FunctionReference<"query", "internal", {}, number>;
     };
   };
   bigPool: {
@@ -126,10 +129,13 @@ export declare const components: {
         "query",
         "internal",
         { id: string },
-        | { attempt: number; state: "pending" }
-        | { attempt: number; state: "running" }
+        | { previousAttempts: number; state: "pending" }
+        | { previousAttempts: number; state: "running" }
         | { state: "finished" }
       >;
+    };
+    stats: {
+      queueLength: FunctionReference<"query", "internal", {}, number>;
     };
   };
   serializedPool: {
@@ -172,10 +178,13 @@ export declare const components: {
         "query",
         "internal",
         { id: string },
-        | { attempt: number; state: "pending" }
-        | { attempt: number; state: "running" }
+        | { previousAttempts: number; state: "pending" }
+        | { previousAttempts: number; state: "running" }
         | { state: "finished" }
       >;
+    };
+    stats: {
+      queueLength: FunctionReference<"query", "internal", {}, number>;
     };
   };
 };

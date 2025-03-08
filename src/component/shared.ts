@@ -3,7 +3,8 @@ import { Infer } from "convex/values";
 import { v } from "convex/values";
 import { Logger, logLevel } from "./logging.js";
 
-const SEGMENT_MS = 250;
+export const DEFAULT_MAX_PARALLELISM = 10;
+const SEGMENT_MS = 100;
 export const SECOND = 1000;
 export const MINUTE = 60 * SECOND;
 export const HOUR = 60 * MINUTE;
@@ -98,11 +99,11 @@ export const status = v.union(
   v.union(
     v.object({
       state: v.literal("pending"),
-      attempt: v.number(),
+      previousAttempts: v.number(),
     }),
     v.object({
       state: v.literal("running"),
-      attempt: v.number(),
+      previousAttempts: v.number(),
     }),
     v.object({
       state: v.literal("finished"),
@@ -113,15 +114,29 @@ export type Status = Infer<typeof status>;
 
 export function boundScheduledTime(ms: number, console: Logger): number {
   if (ms < Date.now() - YEAR) {
-    console.warn("runAt is too far in the past, defaulting to now", ms);
+    console.error("scheduled time is too old, defaulting to now", ms);
     return Date.now();
   }
   if (ms > Date.now() + 4 * YEAR) {
-    console.warn(
-      "runAt is too far in the future, defaulting to 1 year from now",
+    console.error(
+      "scheduled time is too far in the future, defaulting to 1 year from now",
       ms
     );
     return Date.now() + YEAR;
   }
   return ms;
+}
+
+/**
+ * Returns the smaller of two bigint values.
+ */
+export function min<T extends bigint>(a: T, b: T): T {
+  return a > b ? b : a;
+}
+
+/**
+ * Returns the larger of two bigint values.
+ */
+export function max<T extends bigint>(a: T, b: T): T {
+  return a < b ? b : a;
 }

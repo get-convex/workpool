@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as complete from "../complete.js";
 import type * as kick from "../kick.js";
 import type * as lib from "../lib.js";
 import type * as logging from "../logging.js";
@@ -31,6 +32,7 @@ import type {
  * ```
  */
 declare const fullApi: ApiFromModules<{
+  complete: typeof complete;
   kick: typeof kick;
   lib: typeof lib;
   logging: typeof logging;
@@ -80,10 +82,13 @@ export type Mounts = {
       "query",
       "public",
       { id: string },
-      | { attempt: number; state: "pending" }
-      | { attempt: number; state: "running" }
+      | { previousAttempts: number; state: "pending" }
+      | { previousAttempts: number; state: "running" }
       | { state: "finished" }
     >;
+  };
+  stats: {
+    queueLength: FunctionReference<"query", "public", {}, number>;
   };
 };
 // For now fullApiWithMounts is only fullApi which provides

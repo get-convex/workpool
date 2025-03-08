@@ -10,7 +10,7 @@ import {
   WorkId,
   workIdValidator,
   Workpool,
-  runResultValidator,
+  resultValidator,
 } from "@convex-dev/workpool";
 import { v } from "convex/values";
 import { createLogger } from "../../src/component/logging";
@@ -24,19 +24,19 @@ const bigPool = new Workpool(components.bigPool, {
     base: 2,
   },
   retryActionsByDefault: true,
-  logLevel: "DEBUG",
+  logLevel: "WARN",
 });
 const smallPool = new Workpool(components.smallPool, {
   maxParallelism: 3,
   retryActionsByDefault: true,
-  logLevel: "INFO",
+  logLevel: "WARN",
 });
 const serializedPool = new Workpool(components.serializedPool, {
   maxParallelism: 1,
   retryActionsByDefault: true,
-  logLevel: "INFO",
+  logLevel: "WARN",
 });
-const console = createLogger("WARN");
+const console = createLogger("DEBUG");
 
 export const addMutation = mutation({
   args: { data: v.optional(v.number()) },
@@ -235,10 +235,10 @@ export const onComplete = internalMutation({
   args: {
     workId: workIdValidator,
     context: v.number(),
-    result: runResultValidator,
+    result: resultValidator,
   },
   handler: async (ctx, args) => {
-    console.warn("total", (Date.now() - args.context) / 1000);
+    console.info("total", (Date.now() - args.context) / 1000);
   },
 });
 
@@ -274,7 +274,7 @@ export const runPaced = internalAction({
 
 export const cancel = internalAction({
   args: {
-    id: workIdValidator,
+    id: v.optional(workIdValidator),
   },
   handler: async (ctx, args) => {
     console.debug("Canceling", args.id);

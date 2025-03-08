@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server.js";
+import { mutation, MutationCtx, query } from "./_generated/server.js";
 import {
   nextSegment,
   onComplete,
@@ -8,11 +8,14 @@ import {
   status as statusValidator,
   toSegment,
   boundScheduledTime,
+  max,
 } from "./shared.js";
-import { logLevel } from "./logging.js";
+import { LogLevel, logLevel } from "./logging.js";
 import { kickMainLoop } from "./kick.js";
 import { api } from "./_generated/api.js";
 import { createLogger } from "./logging.js";
+import { Id } from "./_generated/dataModel.js";
+import { recordEnqueued } from "./stats.js";
 
 const MAX_POSSIBLE_PARALLELISM = 100;
 
@@ -44,10 +47,10 @@ export const enqueue = mutation({
     });
     await ctx.db.insert("pendingStart", {
       workId,
-      segment: toSegment(runAt),
+      segment: max(toSegment(runAt), nextSegment()),
     });
     await kickMainLoop(ctx, "enqueue", config);
-    // TODO: stats event
+    recordEnqueued(console, { workId, fnName: workArgs.fnName, runAt });
     return workId;
   },
 });
@@ -58,11 +61,10 @@ export const cancel = mutation({
     logLevel,
   },
   handler: async (ctx, { id, logLevel }) => {
-    await ctx.db.insert("pendingCancelation", {
-      workId: id,
-      segment: nextSegment(),
-    });
-    await kickMainLoop(ctx, "cancel", { logLevel });
+    const canceled = await cancelWorkItem(ctx, id, nextSegment(), logLevel);
+    if (canceled) {
+      await kickMainLoop(ctx, "cancel", { logLevel });
+    }
     // TODO: stats event
   },
 });
@@ -78,26 +80,20 @@ export const cancelAll = mutation({
       .withIndex("by_creation_time", (q) => q.lte("_creationTime", beforeTime))
       .order("desc")
       .take(PAGE_SIZE);
-    await Promise.all(
-      pageOfWork.map(async ({ _id }) => {
-        if (
-          await ctx.db
-            .query("pendingCancelation")
-            .withIndex("workId", (q) => q.eq("workId", _id))
-            .first()
-        ) {
-          return;
-        }
-        await ctx.db.insert("pendingCancelation", { workId: _id, segment });
-      })
+    const canceled = await Promise.all(
+      pageOfWork.map(async ({ _id }) =>
+        cancelWorkItem(ctx, _id, segment, logLevel)
+      )
     );
+    if (canceled.some((c) => c)) {
+      await kickMainLoop(ctx, "cancel", { logLevel });
+    }
     if (pageOfWork.length === PAGE_SIZE) {
       await ctx.scheduler.runAfter(0, api.lib.cancelAll, {
         logLevel,
         before: pageOfWork[pageOfWork.length - 1]._creationTime,
       });
     }
-    await kickMainLoop(ctx, "cancel", { logLevel });
   },
 });
 
@@ -114,12 +110,47 @@ export const status = query({
       .withIndex("workId", (q) => q.eq("workId", id))
       .unique();
     if (pendingStart) {
-      return { state: "pending", attempt: work.attempts } as const;
+      return { state: "pending", previousAttempts: work.attempts } as const;
+    }
+    const pendingCompletion = await ctx.db
+      .query("pendingCompletion")
+      .withIndex("workId", (q) => q.eq("workId", id))
+      .unique();
+    if (pendingCompletion?.retry) {
+      return { state: "pending", previousAttempts: work.attempts } as const;
     }
     // Assume it's in progress. It could be pending cancelation
-    return { state: "running", attempt: work.attempts } as const;
+    return { state: "running", previousAttempts: work.attempts } as const;
   },
 });
+
+async function cancelWorkItem(
+  ctx: MutationCtx,
+  workId: Id<"work">,
+  segment: bigint,
+  logLevel: LogLevel
+) {
+  const console = createLogger(logLevel);
+  // No-op if the work doesn't exist or has completed.
+  const work = await ctx.db.get(workId);
+  if (!work) {
+    console.warn(`[cancel] work ${workId} doesn't exist`);
+    return false;
+  }
+  const pendingCancelation = await ctx.db
+    .query("pendingCancelation")
+    .withIndex("workId", (q) => q.eq("workId", workId))
+    .unique();
+  if (pendingCancelation) {
+    console.warn(`[cancel] work ${workId} has already been canceled`);
+    return false;
+  }
+  await ctx.db.insert("pendingCancelation", {
+    workId,
+    segment,
+  });
+  return true;
+}
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const console = "THIS IS A REMINDER TO USE createLogger";

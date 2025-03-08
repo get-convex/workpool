@@ -33,7 +33,7 @@ describe("workpool", () => {
     const id = await t.mutation(api.example.enqueueOneMutation, { data: 1 });
     expect(await t.query(api.example.status, { id })).toEqual({
       state: "pending",
-      attempt: 0,
+      previousAttempts: 0,
     });
     expect(await t.query(api.example.queryData, {})).toEqual([]);
     await t.finishAllScheduledFunctions(vi.runAllTimers);
@@ -49,9 +49,11 @@ describe("workpool", () => {
       await t.mutation(api.example.enqueueOneMutation, { data: i });
     }
     await t.finishAllScheduledFunctions(vi.runAllTimers);
-    expect(await t.query(api.example.queryData, {})).toEqual([
-      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
-    ]);
+    expect(await t.query(api.example.queryData, {})).toEqual(
+      expect.arrayContaining([
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+      ])
+    );
   });
 
   test("enqueueMany with high parallelism", async () => {

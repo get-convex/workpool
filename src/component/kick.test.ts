@@ -8,13 +8,14 @@ import {
   test,
   vi,
 } from "vitest";
+import { internal } from "./_generated/api";
+import { Id } from "./_generated/dataModel.js";
+import { kickMainLoop } from "./kick.js";
+import { DEFAULT_LOG_LEVEL } from "./logging.js";
 import schema from "./schema.js";
 import { modules } from "./setup.test.js";
-import { DEFAULT_MAX_PARALLELISM, kickMainLoop } from "./kick.js";
-import { DEFAULT_LOG_LEVEL } from "./logging.js";
-import { internal } from "./_generated/api";
-import { toSegment, fromSegment, nextSegment } from "./shared";
-import { Id } from "./_generated/dataModel.js";
+import { fromSegment, nextSegment, toSegment } from "./shared";
+import { DEFAULT_MAX_PARALLELISM } from "./shared.js";
 
 describe("kickMainLoop", () => {
   beforeEach(() => {
@@ -53,13 +54,13 @@ describe("kickMainLoop", () => {
       expect(globals.logLevel).toBe(DEFAULT_LOG_LEVEL);
       await kickMainLoop(ctx, "enqueue", {
         maxParallelism: DEFAULT_MAX_PARALLELISM + 1,
-        logLevel: "DEBUG",
+        logLevel: "ERROR",
       });
       const after = await ctx.db.query("globals").unique();
       expect(after).not.toBeNull();
       assert(after);
       expect(after.maxParallelism).toBe(DEFAULT_MAX_PARALLELISM + 1);
-      expect(after.logLevel).toBe("DEBUG");
+      expect(after.logLevel).toBe("ERROR");
     });
   });
 
@@ -176,7 +177,7 @@ describe("kickMainLoop", () => {
       await ctx.db.delete(runStatus._id);
 
       // Kick should recreate runStatus
-      await kickMainLoop(ctx, "recovery");
+      await kickMainLoop(ctx, "complete");
       const newRunStatus = await ctx.db.query("runStatus").unique();
       expect(newRunStatus).not.toBeNull();
       assert(newRunStatus);
@@ -196,7 +197,7 @@ describe("kickMainLoop", () => {
       await ctx.db.delete(globals._id);
 
       // Kick should recreate globals
-      await kickMainLoop(ctx, "recovery");
+      await kickMainLoop(ctx, "complete");
       const newGlobals = await ctx.db.query("globals").unique();
       expect(newGlobals).not.toBeNull();
       assert(newGlobals);
@@ -242,20 +243,19 @@ describe("kickMainLoop", () => {
       // Initial kick with custom config
       await kickMainLoop(ctx, "enqueue", {
         maxParallelism: 5,
-        logLevel: "DEBUG",
+        logLevel: "ERROR",
       });
 
       // Kick from different sources
       await kickMainLoop(ctx, "cancel");
-      await kickMainLoop(ctx, "saveResult");
-      await kickMainLoop(ctx, "recovery");
+      await kickMainLoop(ctx, "complete");
 
       // Config should be preserved
       const globals = await ctx.db.query("globals").unique();
       expect(globals).not.toBeNull();
       assert(globals);
       expect(globals.maxParallelism).toBe(5);
-      expect(globals.logLevel).toBe("DEBUG");
+      expect(globals.logLevel).toBe("ERROR");
     });
   });
 

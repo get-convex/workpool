@@ -1,6 +1,8 @@
 import { v } from "convex/values";
-import { Doc } from "./_generated/dataModel.js";
-import { internalQuery } from "./_generated/server.js";
+import { Doc, Id } from "./_generated/dataModel.js";
+import { internalQuery, query } from "./_generated/server.js";
+import { DEFAULT_MAX_PARALLELISM } from "./shared.js";
+import { Logger } from "./logging.js";
 
 /**
  * Record stats about work execution. Intended to be queried by Axiom or Datadog.
@@ -15,42 +17,58 @@ workpool
 	parse_json(trim("'", tostring(["data.message"]))),
 	parse_json('{}')
 )
-| extend lagSinceEnqueued = parsed_message["lagSinceEnqueued"]
+| extend startLag = parsed_message["startLag"]
 | extend fnName = parsed_message["fnName"]
-| summarize avg(todouble(lagSinceEnqueued)) by bin_auto(_time), tostring(fnName)
+| summarize avg(todouble(startLag)) by bin_auto(_time), tostring(fnName)
 
  */
 
-export function recordStarted(work: Doc<"work">): string {
-  return JSON.stringify({
+export function recordEnqueued(
+  console: Logger,
+  data: {
+    workId: Id<"work">;
+    fnName: string;
+    runAt: number;
+  }
+) {
+  console.event("enqueued", {
+    ...data,
+    enqueuedAt: Date.now(),
+  });
+}
+
+export function recordStarted(
+  console: Logger,
+  work: Doc<"work">,
+  lagMs: number
+) {
+  console.event("started", {
     workId: work._id,
-    event: "started",
     fnName: work.fnName,
     enqueuedAt: work._creationTime,
     startedAt: Date.now(),
-    lagSinceEnqueued: Date.now() - work._creationTime,
+    startLag: lagMs,
   });
 }
 
 export function recordCompleted(
+  console: Logger,
   work: Doc<"work">,
-  status: "success" | "failed" | "canceled"
-): string {
-  return JSON.stringify({
+  status: "success" | "failed" | "canceled" | "retrying"
+) {
+  console.event("completed", {
     workId: work._id,
-    event: "completed",
     fnName: work.fnName,
     completedAt: Date.now(),
+    attempts: work.attempts,
     status,
-    lagSinceEnqueued: Date.now() - work._creationTime,
   });
 }
 
-export function recordReport(state: Doc<"internalState">): string {
+export function recordReport(console: Logger, state: Doc<"internalState">) {
   const { completed, succeeded, failed, retries, canceled } = state.report;
   const withoutRetries = completed - retries;
-  return JSON.stringify({
-    event: "report",
+  console.event("report", {
     completed,
     succeeded,
     failed,
@@ -65,7 +83,7 @@ export function recordReport(state: Doc<"internalState">): string {
  * Warning: this should not be used from a mutation, as it will cause conflicts.
  * Use this to debug or diagnose your queue length when it's backed up.
  */
-export const queueLength = internalQuery({
+export const queueLength = query({
   args: {},
   returns: v.number(),
   handler: async (ctx) => {
@@ -78,12 +96,14 @@ export const queueLength = internalQuery({
  * Warning: this should not be used from a mutation, as it will cause conflicts.
  * Use this while developing to see the state of the queue.
  */
-export const debugCounts = internalQuery({
+export const diagnostic = internalQuery({
   args: {},
   returns: v.any(),
   handler: async (ctx) => {
-    const inProgressWork =
-      (await ctx.db.query("internalState").unique())?.running.length ?? 0;
+    const global = await ctx.db.query("globals").unique();
+    const internalState = await ctx.db.query("internalState").unique();
+    const inProgressWork = internalState?.running.length ?? 0;
+    const maxParallelism = global?.maxParallelism ?? DEFAULT_MAX_PARALLELISM;
     /* eslint-disable @typescript-eslint/no-explicit-any */
     const pendingStart = await (ctx.db.query("pendingStart") as any).count();
     const pendingCompletion = await (
@@ -92,13 +112,16 @@ export const debugCounts = internalQuery({
     const pendingCancelation = await (
       ctx.db.query("pendingCancelation") as any
     ).count();
+    const runStatus = await ctx.db.query("runStatus").unique();
     /* eslint-enable @typescript-eslint/no-explicit-any */
     return {
-      pendingStart,
-      inProgressWork,
-      pendingCompletion,
-      pendingCancelation,
-      active: inProgressWork - pendingCompletion,
+      canceling: pendingCancelation,
+      waiting: pendingStart,
+      running: inProgressWork - pendingCompletion,
+      completing: pendingCompletion,
+      spareCapacity: maxParallelism - inProgressWork,
+      runStatus: runStatus?.state.kind,
+      generation: internalState?.generation,
     };
   },
 });
