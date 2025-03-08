@@ -10,7 +10,7 @@ import {
   WorkId,
   workIdValidator,
   Workpool,
-  runResultValidator,
+  resultValidator,
 } from "@convex-dev/workpool";
 import { v } from "convex/values";
 import { createLogger } from "../../src/component/logging";
@@ -235,7 +235,7 @@ export const onComplete = internalMutation({
   args: {
     workId: workIdValidator,
     context: v.number(),
-    result: runResultValidator,
+    result: resultValidator,
   },
   handler: async (ctx, args) => {
     console.warn("total", (Date.now() - args.context) / 1000);

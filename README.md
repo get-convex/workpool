@@ -95,8 +95,8 @@ await pool.enqueueAction(ctx, internal.email.send, args, {
 export const emailSent = internalMutation({
   args: {
     workId: workIdValidator,
+    result: resultValidator,
     context: v.object({ emailType: v.string(), userId: v.id("users") }),
-    result: runResultValidator,
   },
   handler: async (ctx, args) => {
     if (args.result.kind === "canceled") return;
