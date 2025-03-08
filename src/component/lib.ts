@@ -8,6 +8,7 @@ import {
   status as statusValidator,
   toSegment,
   boundScheduledTime,
+  max,
 } from "./shared.js";
 import { LogLevel, logLevel } from "./logging.js";
 import { kickMainLoop } from "./kick.js";
@@ -45,7 +46,7 @@ export const enqueue = mutation({
     });
     await ctx.db.insert("pendingStart", {
       workId,
-      segment: toSegment(runAt),
+      segment: max(toSegment(runAt), nextSegment()),
     });
     await kickMainLoop(ctx, "enqueue", config);
     // TODO: stats event
