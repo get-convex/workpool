@@ -21,14 +21,14 @@ workpool
 
  */
 
-export function recordStarted(work: Doc<"work">): string {
+export function recordStarted(work: Doc<"work">, lagMs: number): string {
   return JSON.stringify({
     workId: work._id,
     event: "started",
     fnName: work.fnName,
     enqueuedAt: work._creationTime,
     startedAt: Date.now(),
-    lagSinceEnqueued: Date.now() - work._creationTime,
+    startLag: lagMs,
   });
 }
 
@@ -43,7 +43,6 @@ export function recordCompleted(
     completedAt: Date.now(),
     attempts: work.attempts,
     status,
-    lagSinceEnqueued: Date.now() - work._creationTime,
   });
 }
 

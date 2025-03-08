@@ -492,9 +492,8 @@ async function handleStart(
   state: Doc<"internalState">,
   segment: bigint,
   console: Logger,
-  globals: Config
+  { maxParallelism, logLevel }: Config
 ) {
-  const maxParallelism = globals.maxParallelism;
   // Schedule as many as needed to reach maxParallelism.
   const toSchedule = maxParallelism - state.running.length;
 
@@ -513,12 +512,13 @@ async function handleStart(
   state.running.push(
     ...(
       await Promise.all(
-        pending.map(async ({ _id, workId }) => {
+        pending.map(async ({ _id, workId, segment }) => {
           if (state.running.some((r) => r.workId === workId)) {
             console.error(`[main] ${workId} already running (skipping start)`);
             return null;
           }
-          const scheduledId = await beginWork(ctx, workId, globals.logLevel);
+          const lagMs = Date.now() - fromSegment(segment);
+          const scheduledId = await beginWork(ctx, workId, logLevel, lagMs);
           await ctx.db.delete(_id);
           return { scheduledId, workId, started: Date.now() };
         })
@@ -530,14 +530,15 @@ async function handleStart(
 async function beginWork(
   ctx: MutationCtx,
   workId: Id<"work">,
-  logLevel: LogLevel
+  logLevel: LogLevel,
+  lagMs: number
 ): Promise<Id<"_scheduled_functions">> {
   const console = createLogger(logLevel);
   const work = await ctx.db.get(workId);
   if (!work) {
     throw new Error("work not found");
   }
-  console.info(recordStarted(work));
+  console.info(recordStarted(work, lagMs));
   const { attempts: attempt, fnHandle, fnArgs } = work;
   const args = { workId, fnHandle, fnArgs, logLevel, attempt };
   if (work.fnType === "action") {
