@@ -56,6 +56,12 @@ export const main = internalMutation({
       );
     }
     state.generation++;
+    const runStatus = await getOrCreateRunningStatus(ctx);
+    if (runStatus.state.kind !== "running") {
+      await ctx.db.patch(runStatus._id, {
+        state: { kind: "running" },
+      });
+    }
 
     const globals = await getGlobals(ctx);
     const console = createLogger(globals.logLevel);

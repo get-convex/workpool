@@ -536,6 +536,38 @@ describe("loop", () => {
         assert(runStatus.state.kind === "idle");
       });
     });
+    it("should transition from scheduled to running when main loop runs", async () => {
+      const segment = nextSegment();
+      await t.run(async (ctx) => {
+        await insertInternalState(ctx);
+
+        const scheduledId = await ctx.scheduler.runAfter(
+          1000,
+          internal.loop.main,
+          { generation: 1n, segment }
+        );
+
+        await ctx.db.insert("runStatus", {
+          state: {
+            kind: "scheduled",
+            scheduledId,
+            generation: 1n,
+            segment,
+            saturated: false,
+          },
+        });
+      });
+      // Run main loop
+      await t.mutation(internal.loop.main, { generation: 1n, segment });
+
+      // Verify state transition to running
+      await t.run(async (ctx) => {
+        const runStatus = await ctx.db.query("runStatus").unique();
+        expect(runStatus).toBeDefined();
+        assert(runStatus);
+        expect(runStatus.state.kind).toBe("running");
+      });
+    });
   });
 
   describe("main function", () => {
