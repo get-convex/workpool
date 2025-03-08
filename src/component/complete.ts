@@ -72,7 +72,7 @@ export async function completeHandler(
             // TODO: store failures in a table for later debugging
           }
         }
-        console.info(recordCompleted(work, job.runResult.kind));
+        recordCompleted(console, work, job.runResult.kind);
         // This is the terminating state for work.
         await ctx.db.delete(job.workId);
       }

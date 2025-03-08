@@ -100,7 +100,7 @@ export const main = internalMutation({
         // It's been a while, let's start fresh.
         lastReportTs = Date.now();
       }
-      console.info(recordReport(state));
+      recordReport(console, state);
       state.report = {
         completed: 0,
         succeeded: 0,
@@ -378,7 +378,7 @@ async function handleCompletions(
         const retried = await rescheduleJob(ctx, work, console);
         if (retried) {
           state.report.retries++;
-          console.info(recordCompleted(work, "retrying"));
+          recordCompleted(console, work, "retrying");
         } else {
           // We don't retry if it's been canceled in the mean time.
           state.report.canceled++;
@@ -546,7 +546,7 @@ async function beginWork(
   if (!work) {
     throw new Error("work not found");
   }
-  console.info(recordStarted(work, lagMs));
+  recordStarted(console, work, lagMs);
   const { attempts: attempt, fnHandle, fnArgs } = work;
   const args = { workId, fnHandle, fnArgs, logLevel, attempt };
   if (work.fnType === "action") {

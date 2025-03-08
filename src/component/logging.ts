@@ -53,9 +53,8 @@ export function createLogger(level?: LogLevel): Logger {
     event: (event: string, payload: Record<string, unknown>) => {
       if (levelIndex <= 1) {
         const fullPayload = {
-          system: "idempotent-workpool-component",
           event,
-          payload,
+          ...payload,
         };
         console.info(JSON.stringify(fullPayload));
       }

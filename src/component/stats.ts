@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { Doc } from "./_generated/dataModel.js";
 import { internalQuery } from "./_generated/server.js";
 import { DEFAULT_MAX_PARALLELISM } from "./shared.js";
+import { Logger } from "./logging.js";
 
 /**
  * Record stats about work execution. Intended to be queried by Axiom or Datadog.
@@ -22,10 +23,13 @@ workpool
 
  */
 
-export function recordStarted(work: Doc<"work">, lagMs: number): string {
-  return JSON.stringify({
+export function recordStarted(
+  console: Logger,
+  work: Doc<"work">,
+  lagMs: number
+) {
+  console.event("started", {
     workId: work._id,
-    event: "started",
     fnName: work.fnName,
     enqueuedAt: work._creationTime,
     startedAt: Date.now(),
@@ -34,12 +38,12 @@ export function recordStarted(work: Doc<"work">, lagMs: number): string {
 }
 
 export function recordCompleted(
+  console: Logger,
   work: Doc<"work">,
   status: "success" | "failed" | "canceled" | "retrying"
-): string {
-  return JSON.stringify({
+) {
+  console.event("completed", {
     workId: work._id,
-    event: "completed",
     fnName: work.fnName,
     completedAt: Date.now(),
     attempts: work.attempts,
@@ -47,11 +51,10 @@ export function recordCompleted(
   });
 }
 
-export function recordReport(state: Doc<"internalState">): string {
+export function recordReport(console: Logger, state: Doc<"internalState">) {
   const { completed, succeeded, failed, retries, canceled } = state.report;
   const withoutRetries = completed - retries;
-  return JSON.stringify({
-    event: "report",
+  console.event("report", {
     completed,
     succeeded,
     failed,
