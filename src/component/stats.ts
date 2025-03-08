@@ -17,9 +17,9 @@ workpool
 	parse_json(trim("'", tostring(["data.message"]))),
 	parse_json('{}')
 )
-| extend lagSinceEnqueued = parsed_message["lagSinceEnqueued"]
+| extend startLag = parsed_message["startLag"]
 | extend fnName = parsed_message["fnName"]
-| summarize avg(todouble(lagSinceEnqueued)) by bin_auto(_time), tostring(fnName)
+| summarize avg(todouble(startLag)) by bin_auto(_time), tostring(fnName)
 
  */
 
