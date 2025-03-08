@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel.js";
-import { internalQuery } from "./_generated/server.js";
+import { internalQuery, query } from "./_generated/server.js";
 import { DEFAULT_MAX_PARALLELISM } from "./shared.js";
 import { Logger } from "./logging.js";
 
@@ -83,7 +83,7 @@ export function recordReport(console: Logger, state: Doc<"internalState">) {
  * Warning: this should not be used from a mutation, as it will cause conflicts.
  * Use this to debug or diagnose your queue length when it's backed up.
  */
-export const queueLength = internalQuery({
+export const queueLength = query({
   args: {},
   returns: v.number(),
   handler: async (ctx) => {

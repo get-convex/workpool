@@ -85,6 +85,9 @@ export declare const components: {
         | { state: "finished" }
       >;
     };
+    stats: {
+      queueLength: FunctionReference<"query", "internal", {}, number>;
+    };
   };
   bigPool: {
     lib: {
@@ -131,6 +134,9 @@ export declare const components: {
         | { state: "finished" }
       >;
     };
+    stats: {
+      queueLength: FunctionReference<"query", "internal", {}, number>;
+    };
   };
   serializedPool: {
     lib: {
@@ -176,6 +182,9 @@ export declare const components: {
         | { previousAttempts: number; state: "running" }
         | { state: "finished" }
       >;
+    };
+    stats: {
+      queueLength: FunctionReference<"query", "internal", {}, number>;
     };
   };
 };
