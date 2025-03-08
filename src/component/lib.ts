@@ -15,6 +15,7 @@ import { kickMainLoop } from "./kick.js";
 import { api } from "./_generated/api.js";
 import { createLogger } from "./logging.js";
 import { Id } from "./_generated/dataModel.js";
+import { recordEnqueued } from "./stats.js";
 
 const MAX_POSSIBLE_PARALLELISM = 100;
 
@@ -49,7 +50,7 @@ export const enqueue = mutation({
       segment: max(toSegment(runAt), nextSegment()),
     });
     await kickMainLoop(ctx, "enqueue", config);
-    // TODO: stats event
+    recordEnqueued(console, { workId, fnName: workArgs.fnName, runAt });
     return workId;
   },
 });

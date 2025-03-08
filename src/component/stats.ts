@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { Doc } from "./_generated/dataModel.js";
+import { Doc, Id } from "./_generated/dataModel.js";
 import { internalQuery } from "./_generated/server.js";
 import { DEFAULT_MAX_PARALLELISM } from "./shared.js";
 import { Logger } from "./logging.js";
@@ -22,6 +22,20 @@ workpool
 | summarize avg(todouble(lagSinceEnqueued)) by bin_auto(_time), tostring(fnName)
 
  */
+
+export function recordEnqueued(
+  console: Logger,
+  data: {
+    workId: Id<"work">;
+    fnName: string;
+    runAt: number;
+  }
+) {
+  console.event("enqueued", {
+    ...data,
+    enqueuedAt: Date.now(),
+  });
+}
 
 export function recordStarted(
   console: Logger,
