@@ -3,6 +3,7 @@ import { Infer } from "convex/values";
 import { v } from "convex/values";
 import { Logger, logLevel } from "./logging.js";
 
+export const DEFAULT_MAX_PARALLELISM = 10;
 const SEGMENT_MS = 100;
 export const SECOND = 1000;
 export const MINUTE = 60 * SECOND;

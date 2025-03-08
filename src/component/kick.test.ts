@@ -8,13 +8,14 @@ import {
   test,
   vi,
 } from "vitest";
+import { internal } from "./_generated/api";
+import { Id } from "./_generated/dataModel.js";
+import { kickMainLoop } from "./kick.js";
+import { DEFAULT_LOG_LEVEL } from "./logging.js";
 import schema from "./schema.js";
 import { modules } from "./setup.test.js";
-import { DEFAULT_MAX_PARALLELISM, kickMainLoop } from "./kick.js";
-import { DEFAULT_LOG_LEVEL } from "./logging.js";
-import { internal } from "./_generated/api";
-import { toSegment, fromSegment, nextSegment } from "./shared";
-import { Id } from "./_generated/dataModel.js";
+import { fromSegment, nextSegment, toSegment } from "./shared";
+import { DEFAULT_MAX_PARALLELISM } from "./shared.js";
 
 describe("kickMainLoop", () => {
   beforeEach(() => {

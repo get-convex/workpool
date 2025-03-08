@@ -1,21 +1,24 @@
 import { convexTest } from "convex-test";
+import { WithoutSystemFields } from "convex/server";
 import {
+  afterEach,
+  assert,
+  beforeEach,
   describe,
   expect,
   it,
-  beforeEach,
-  afterEach,
   vi,
-  assert,
 } from "vitest";
+import { api, internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
-import schema from "./schema";
-import { internal } from "./_generated/api";
-import { currentSegment, nextSegment, toSegment } from "./shared";
-import { api } from "./_generated/api";
-import { DEFAULT_MAX_PARALLELISM } from "./kick";
-import { WithoutSystemFields } from "convex/server";
 import { MutationCtx } from "./_generated/server";
+import schema from "./schema";
+import {
+  currentSegment,
+  DEFAULT_MAX_PARALLELISM,
+  nextSegment,
+  toSegment,
+} from "./shared";
 
 const modules = import.meta.glob("./**/*.ts");
 

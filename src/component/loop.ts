@@ -3,7 +3,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api.js";
 import { Doc, Id } from "./_generated/dataModel.js";
 import { internalMutation, MutationCtx } from "./_generated/server.js";
-import { DEFAULT_MAX_PARALLELISM } from "./kick.js";
+import type { CompleteJob } from "./complete.js";
 import {
   createLogger,
   DEFAULT_LOG_LEVEL,
@@ -14,6 +14,7 @@ import {
   boundScheduledTime,
   Config,
   currentSegment,
+  DEFAULT_MAX_PARALLELISM,
   fromSegment,
   max,
   nextSegment,
@@ -21,7 +22,6 @@ import {
   toSegment,
 } from "./shared.js";
 import { recordCompleted, recordReport, recordStarted } from "./stats.js";
-import type { CompleteJob } from "./complete.js";
 
 const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
 const SECOND = 1000;

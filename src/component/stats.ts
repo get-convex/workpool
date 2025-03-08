@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { Doc } from "./_generated/dataModel.js";
 import { internalQuery } from "./_generated/server.js";
+import { DEFAULT_MAX_PARALLELISM } from "./shared.js";
 
 /**
  * Record stats about work execution. Intended to be queried by Axiom or Datadog.
