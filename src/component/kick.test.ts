@@ -54,13 +54,13 @@ describe("kickMainLoop", () => {
       expect(globals.logLevel).toBe(DEFAULT_LOG_LEVEL);
       await kickMainLoop(ctx, "enqueue", {
         maxParallelism: DEFAULT_MAX_PARALLELISM + 1,
-        logLevel: "DEBUG",
+        logLevel: "ERROR",
       });
       const after = await ctx.db.query("globals").unique();
       expect(after).not.toBeNull();
       assert(after);
       expect(after.maxParallelism).toBe(DEFAULT_MAX_PARALLELISM + 1);
-      expect(after.logLevel).toBe("DEBUG");
+      expect(after.logLevel).toBe("ERROR");
     });
   });
 
@@ -243,7 +243,7 @@ describe("kickMainLoop", () => {
       // Initial kick with custom config
       await kickMainLoop(ctx, "enqueue", {
         maxParallelism: 5,
-        logLevel: "DEBUG",
+        logLevel: "ERROR",
       });
 
       // Kick from different sources
@@ -255,7 +255,7 @@ describe("kickMainLoop", () => {
       expect(globals).not.toBeNull();
       assert(globals);
       expect(globals.maxParallelism).toBe(5);
-      expect(globals.logLevel).toBe("DEBUG");
+      expect(globals.logLevel).toBe("ERROR");
     });
   });
 

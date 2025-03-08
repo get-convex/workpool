@@ -30,7 +30,7 @@ describe("complete", () => {
     await t.run(async (ctx) => {
       await ctx.db.insert("globals", {
         maxParallelism: 10,
-        logLevel: "INFO",
+        logLevel: "WARN",
       });
     });
   });
@@ -50,7 +50,7 @@ describe("complete", () => {
         runAt: Date.now(),
         config: {
           maxParallelism: 10,
-          logLevel: "INFO",
+          logLevel: "WARN",
         },
       });
 
@@ -95,7 +95,7 @@ describe("complete", () => {
         runAt: Date.now(),
         config: {
           maxParallelism: 10,
-          logLevel: "INFO",
+          logLevel: "WARN",
         },
         retryBehavior: {
           maxAttempts: 3,
@@ -146,7 +146,7 @@ describe("complete", () => {
         runAt: Date.now(),
         config: {
           maxParallelism: 10,
-          logLevel: "INFO",
+          logLevel: "WARN",
         },
         retryBehavior: {
           maxAttempts: 2, // Only 1 retry allowed
@@ -204,7 +204,7 @@ describe("complete", () => {
         runAt: Date.now(),
         config: {
           maxParallelism: 10,
-          logLevel: "INFO",
+          logLevel: "WARN",
         },
       });
 
@@ -250,7 +250,7 @@ describe("complete", () => {
         runAt: Date.now(),
         config: {
           maxParallelism: 10,
-          logLevel: "INFO",
+          logLevel: "WARN",
         },
         onComplete: {
           fnHandle: "testOnComplete",
@@ -298,7 +298,7 @@ describe("complete", () => {
         runAt: Date.now(),
         config: {
           maxParallelism: 10,
-          logLevel: "INFO",
+          logLevel: "WARN",
         },
       });
 
@@ -310,7 +310,7 @@ describe("complete", () => {
         runAt: Date.now(),
         config: {
           maxParallelism: 10,
-          logLevel: "INFO",
+          logLevel: "WARN",
         },
         retryBehavior: {
           maxAttempts: 3,
@@ -366,7 +366,7 @@ describe("complete", () => {
         runAt: Date.now(),
         config: {
           maxParallelism: 10,
-          logLevel: "INFO",
+          logLevel: "WARN",
         },
       });
 
@@ -418,7 +418,7 @@ describe("complete", () => {
         runAt: Date.now(),
         config: {
           maxParallelism: 10,
-          logLevel: "INFO",
+          logLevel: "WARN",
         },
         retryBehavior: {
           maxAttempts: 3,

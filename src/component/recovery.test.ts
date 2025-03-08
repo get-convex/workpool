@@ -54,7 +54,7 @@ describe("recovery", () => {
       workId,
       fnHandle: "test_handle",
       fnArgs: {},
-      logLevel: "DEBUG",
+      logLevel: "WARN",
       attempt: 0,
     });
   }
@@ -67,7 +67,7 @@ describe("recovery", () => {
     await t.run(async (ctx) => {
       await ctx.db.insert("globals", {
         maxParallelism: 10,
-        logLevel: "INFO",
+        logLevel: "WARN",
       });
     });
   });
@@ -261,7 +261,7 @@ describe("recovery", () => {
                   workId,
                   fnHandle: "test_handle",
                   fnArgs: {},
-                  logLevel: "DEBUG",
+                  logLevel: "WARN",
                   attempt: 0,
                 },
               ],
@@ -327,7 +327,7 @@ describe("recovery", () => {
                   workId,
                   fnHandle: "test_handle",
                   fnArgs: {},
-                  logLevel: "DEBUG",
+                  logLevel: "WARN",
                   attempt: 0,
                 },
               ],
@@ -396,7 +396,7 @@ describe("recovery", () => {
                   workId: workId1,
                   fnHandle: "test_handle",
                   fnArgs: { test: 1 },
-                  logLevel: "DEBUG",
+                  logLevel: "WARN",
                   attempt: 0,
                 },
               ],
@@ -416,7 +416,7 @@ describe("recovery", () => {
                   workId: workId2,
                   fnHandle: "test_handle",
                   fnArgs: { test: 2 },
-                  logLevel: "DEBUG",
+                  logLevel: "WARN",
                   attempt: 0,
                 },
               ],
@@ -503,7 +503,7 @@ describe("recovery", () => {
                   workId,
                   fnHandle: "test_handle",
                   fnArgs: {},
-                  logLevel: "DEBUG",
+                  logLevel: "WARN",
                   attempt: 0,
                 },
               ],

@@ -60,7 +60,7 @@ describe("loop", () => {
       workId,
       fnHandle: "test_handle",
       fnArgs: {},
-      logLevel: "DEBUG",
+      logLevel: "WARN",
       attempt: 0,
     });
   }
@@ -91,7 +91,7 @@ describe("loop", () => {
     t = await setupTest();
     await t.run(async (ctx) => {
       await ctx.db.insert("globals", {
-        logLevel: "DEBUG",
+        logLevel: "WARN",
         maxParallelism: DEFAULT_MAX_PARALLELISM,
       });
     });
@@ -1109,6 +1109,7 @@ describe("loop", () => {
         const workId = await makeDummyWork(ctx, {
           attempts: 0,
           onComplete: {
+            // TODO: make this a real handle
             fnHandle: "onComplete_handle",
             context: { data: "test" },
           },

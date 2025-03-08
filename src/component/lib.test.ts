@@ -44,7 +44,7 @@ describe("lib", () => {
         runAt: Date.now(),
         config: {
           maxParallelism: 10,
-          logLevel: "INFO",
+          logLevel: "WARN",
         },
       });
 
@@ -63,7 +63,7 @@ describe("lib", () => {
           runAt: Date.now(),
           config: {
             maxParallelism: 101, // More than MAX_POSSIBLE_PARALLELISM
-            logLevel: "INFO",
+            logLevel: "WARN",
           },
         })
       ).rejects.toThrow("maxParallelism must be <= 100");
@@ -79,7 +79,7 @@ describe("lib", () => {
           runAt: Date.now(),
           config: {
             maxParallelism: 0, // Less than minimum
-            logLevel: "INFO",
+            logLevel: "WARN",
           },
         })
       ).rejects.toThrow("maxParallelism must be >= 1");
@@ -96,13 +96,13 @@ describe("lib", () => {
         runAt: Date.now(),
         config: {
           maxParallelism: 10,
-          logLevel: "INFO",
+          logLevel: "WARN",
         },
       });
 
       await t.mutation(api.lib.cancel, {
         id,
-        logLevel: "INFO",
+        logLevel: "WARN",
       });
 
       // Verify a pending cancelation was created
@@ -124,20 +124,20 @@ describe("lib", () => {
         runAt: Date.now(),
         config: {
           maxParallelism: 10,
-          logLevel: "INFO",
+          logLevel: "WARN",
         },
       });
 
       // Cancel the first time
       await t.mutation(api.lib.cancel, {
         id,
-        logLevel: "INFO",
+        logLevel: "WARN",
       });
 
       // Cancel the second time
       await t.mutation(api.lib.cancel, {
         id,
-        logLevel: "INFO",
+        logLevel: "WARN",
       });
 
       // Verify only one pending cancelation was created
@@ -159,7 +159,7 @@ describe("lib", () => {
         runAt: Date.now(),
         config: {
           maxParallelism: 10,
-          logLevel: "INFO",
+          logLevel: "WARN",
         },
       });
 
@@ -171,7 +171,7 @@ describe("lib", () => {
       // Try to cancel the deleted work
       await t.mutation(api.lib.cancel, {
         id,
-        logLevel: "INFO",
+        logLevel: "WARN",
       });
 
       // Verify no pending cancelation was created
@@ -196,14 +196,14 @@ describe("lib", () => {
           runAt: Date.now() + 5 * 60 * 1000,
           config: {
             maxParallelism: 10,
-            logLevel: "INFO",
+            logLevel: "WARN",
           },
         });
         ids.push(id);
       }
 
       await t.mutation(api.lib.cancelAll, {
-        logLevel: "INFO",
+        logLevel: "WARN",
         before: Date.now() + 1000,
       });
 
@@ -231,13 +231,13 @@ describe("lib", () => {
           runAt: Date.now(),
           config: {
             maxParallelism: 10,
-            logLevel: "INFO",
+            logLevel: "WARN",
           },
         });
       }
 
       await t.mutation(api.lib.cancelAll, {
-        logLevel: "INFO",
+        logLevel: "WARN",
         before: Date.now() + 1000,
       });
 
@@ -277,7 +277,7 @@ describe("lib", () => {
         runAt: Date.now(),
         config: {
           maxParallelism: 10,
-          logLevel: "INFO",
+          logLevel: "WARN",
         },
       });
       await t.run(async (ctx) => {
@@ -297,7 +297,7 @@ describe("lib", () => {
         runAt: Date.now(),
         config: {
           maxParallelism: 10,
-          logLevel: "INFO",
+          logLevel: "WARN",
         },
       });
 
@@ -323,7 +323,7 @@ describe("lib", () => {
         runAt: Date.now(),
         config: {
           maxParallelism: 10,
-          logLevel: "INFO",
+          logLevel: "WARN",
         },
       });
 
@@ -353,7 +353,7 @@ describe("lib", () => {
         },
         config: {
           maxParallelism: 10,
-          logLevel: "INFO",
+          logLevel: "WARN",
         },
       });
 
@@ -386,7 +386,7 @@ describe("lib", () => {
         runAt: Date.now(),
         config: {
           maxParallelism: 10,
-          logLevel: "INFO",
+          logLevel: "WARN",
         },
       });
 
@@ -419,7 +419,7 @@ describe("lib", () => {
         runAt: Date.now(),
         config: {
           maxParallelism: 10,
-          logLevel: "INFO",
+          logLevel: "WARN",
         },
       });
 
