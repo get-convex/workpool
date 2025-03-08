@@ -51,10 +51,9 @@ export async function kickMainLoop(
         `[${source}] main is marked as scheduled, but it's status is ${scheduled?.state.kind}`
       );
     }
+  } else if (runStatus.state.kind === "idle") {
+    console.debug(`[${source}] main was idle, so run it now`);
   }
-  console.debug(
-    `[${source}] main was scheduled later, so reschedule it to run now`
-  );
   await ctx.db.patch(runStatus._id, { state: { kind: "running" } });
   await ctx.scheduler.runAfter(0, internal.loop.main, {
     generation: runStatus.state.generation,
