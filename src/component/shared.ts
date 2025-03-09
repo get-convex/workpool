@@ -15,11 +15,11 @@ export function toSegment(ms: number): bigint {
   return BigInt(Math.floor(ms / SEGMENT_MS));
 }
 
-export function currentSegment(): bigint {
+export function getCurrentSegment(): bigint {
   return toSegment(Date.now());
 }
 
-export function nextSegment(): bigint {
+export function getNextSegment(): bigint {
   return toSegment(Date.now()) + 1n;
 }
 

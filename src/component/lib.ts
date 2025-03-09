@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { mutation, MutationCtx, query } from "./_generated/server.js";
 import {
-  nextSegment,
+  getNextSegment,
   onComplete,
   retryBehavior,
   config,
@@ -87,7 +87,7 @@ export const cancelAll = mutation({
         shouldCancelWorkItem(ctx, _id, logLevel)
       )
     );
-    let segment = nextSegment();
+    let segment = getNextSegment();
     if (shouldCancel.some((c) => c)) {
       segment = await kickMainLoop(ctx, "cancel", { logLevel });
     }

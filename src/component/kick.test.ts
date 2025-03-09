@@ -14,7 +14,12 @@ import { kickMainLoop } from "./kick.js";
 import { DEFAULT_LOG_LEVEL } from "./logging.js";
 import schema from "./schema.js";
 import { modules } from "./setup.test.js";
-import { currentSegment, fromSegment, nextSegment, toSegment } from "./shared";
+import {
+  fromSegment,
+  getCurrentSegment,
+  getNextSegment,
+  toSegment,
+} from "./shared";
 import { DEFAULT_MAX_PARALLELISM } from "./shared.js";
 
 describe("kickMainLoop", () => {
@@ -79,7 +84,7 @@ describe("kickMainLoop", () => {
       assert(afterStatus);
       expect(afterStatus.state.kind).toBe("running");
       expect(afterStatus._id).toBe(runStatus._id);
-      expect(segment).toBe(nextSegment());
+      expect(segment).toBe(getNextSegment());
     });
   });
 
@@ -117,7 +122,7 @@ describe("kickMainLoop", () => {
 
       // Kick should reschedule to run sooner
       const segment = await kickMainLoop(ctx, "enqueue");
-      expect(segment).toBe(currentSegment());
+      expect(segment).toBe(getCurrentSegment());
 
       const afterStatus = await ctx.db.query("runStatus").unique();
       assert(afterStatus);
@@ -159,7 +164,7 @@ describe("kickMainLoop", () => {
 
       // Kick should not change state when saturated
       const segment = await kickMainLoop(ctx, "enqueue");
-      expect(segment).toBe(nextSegment());
+      expect(segment).toBe(getNextSegment());
       const afterStatus = await ctx.db.query("runStatus").unique();
       assert(afterStatus);
       expect(afterStatus.state.kind).toBe("scheduled");
@@ -220,7 +225,7 @@ describe("kickMainLoop", () => {
         })
       )
     );
-    expect(segments.filter((s) => s === currentSegment())).toHaveLength(1);
+    expect(segments.filter((s) => s === getCurrentSegment())).toHaveLength(1);
 
     // Check final state in a new transaction
     await t.run(async (ctx) => {
@@ -270,7 +275,7 @@ describe("kickMainLoop", () => {
       await kickMainLoop(ctx, "enqueue");
       const runStatus = await ctx.db.query("runStatus").unique();
       assert(runStatus);
-      const segment = nextSegment() + 10n;
+      const segment = getNextSegment() + 10n;
       await ctx.db.patch(runStatus._id, {
         state: {
           generation: 0n,

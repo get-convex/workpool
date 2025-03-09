@@ -13,11 +13,11 @@ import {
 import {
   boundScheduledTime,
   Config,
-  currentSegment,
   DEFAULT_MAX_PARALLELISM,
   fromSegment,
+  getCurrentSegment,
+  getNextSegment,
   max,
-  nextSegment,
   RunResult,
   toSegment,
 } from "./shared.js";
@@ -149,22 +149,22 @@ export const updateRunStatus = internalMutation({
 
     // TODO: check for current segment (or from args) first, to avoid OCCs.
     console.time("[updateRunStatus] nextSegmentIsActionable");
-    const next = max(segment + 1n, currentSegment());
+    const nextSegment = max(segment + 1n, getCurrentSegment());
     const nextIsActionable = await nextSegmentIsActionable(
       ctx,
       state,
       maxParallelism,
-      next
+      nextSegment
     );
     console.timeEnd("[updateRunStatus] nextSegmentIsActionable");
 
     if (nextIsActionable) {
       await ctx.scheduler.runAt(
-        boundScheduledTime(fromSegment(next), console),
+        boundScheduledTime(fromSegment(nextSegment), console),
         internal.loop.main,
         {
           generation,
-          segment: next,
+          segment: nextSegment,
         }
       );
       return;
@@ -187,7 +187,7 @@ export const updateRunStatus = internalMutation({
       });
       await ctx.scheduler.runAfter(0, internal.loop.main, {
         generation,
-        segment: currentSegment(),
+        segment: getCurrentSegment(),
       });
       return;
     }
@@ -204,7 +204,7 @@ export const updateRunStatus = internalMutation({
     }
     const docs = await Promise.all(
       actionableTables.map(async (tableName) =>
-        getNextUp(ctx, tableName, { start: next })
+        getNextUp(ctx, tableName, { start: nextSegment })
       )
     );
     console.timeEnd("[updateRunStatus] findNextSegment");
@@ -223,7 +223,7 @@ export const updateRunStatus = internalMutation({
         internal.loop.main,
         { generation, segment: targetSegment }
       );
-      if (targetSegment > nextSegment()) {
+      if (targetSegment > getNextSegment()) {
         await ctx.db.patch(runStatus._id, {
           state: {
             kind: "scheduled",

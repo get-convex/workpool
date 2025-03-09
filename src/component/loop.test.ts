@@ -14,9 +14,9 @@ import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx } from "./_generated/server";
 import schema from "./schema";
 import {
-  currentSegment,
   DEFAULT_MAX_PARALLELISM,
-  nextSegment,
+  getCurrentSegment,
+  getNextSegment,
   toSegment,
 } from "./shared";
 
@@ -72,7 +72,7 @@ describe("loop", () => {
     await ctx.db.insert("internalState", {
       generation: 1n,
       segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-      lastRecovery: currentSegment(),
+      lastRecovery: getCurrentSegment(),
       report: {
         completed: 0,
         succeeded: 0,
@@ -281,7 +281,7 @@ describe("loop", () => {
       // Run main loop to process pendingCompletion -> pendingStart
       await t.mutation(internal.loop.main, {
         generation: 1n,
-        segment: nextSegment(),
+        segment: getNextSegment(),
       });
 
       // Verify work is now in pendingStart for retry
@@ -364,13 +364,13 @@ describe("loop", () => {
       // Run main loop to process the work
       await t.mutation(internal.loop.main, {
         generation: 1n,
-        segment: nextSegment(),
+        segment: getNextSegment(),
       });
 
       // Run updateRunStatus to transition to scheduled
       await t.mutation(internal.loop.updateRunStatus, {
         generation: 2n,
-        segment: nextSegment(),
+        segment: getNextSegment(),
       });
 
       // Verify state transition to scheduled
@@ -387,7 +387,7 @@ describe("loop", () => {
     it("should transition from running to saturated when maxed out", async () => {
       // Setup initial running state with max capacity
       await setMaxParallelism(1);
-      const segment = currentSegment();
+      const segment = getCurrentSegment();
       await t.run(async (ctx) => {
         // Create work item
         const workId = await makeDummyWork(ctx);
@@ -441,14 +441,14 @@ describe("loop", () => {
         const scheduledId = await ctx.scheduler.runAfter(
           1000,
           internal.loop.main,
-          { generation: 1n, segment: nextSegment() + 10n }
+          { generation: 1n, segment: getNextSegment() + 10n }
         );
 
         // Create scheduled runStatus
         await ctx.db.insert("runStatus", {
           state: {
             kind: "scheduled",
-            segment: nextSegment() + 10n,
+            segment: getNextSegment() + 10n,
             scheduledId,
             saturated: false,
             generation: 1n,
@@ -481,7 +481,7 @@ describe("loop", () => {
     });
 
     it("should transition from running to idle when all work is done", async () => {
-      const segment = nextSegment();
+      const segment = getNextSegment();
       // Setup initial running state with work
       const workId = await t.run<Id<"work">>(async (ctx) => {
         // Create internal state
@@ -537,7 +537,7 @@ describe("loop", () => {
       });
     });
     it("should transition from scheduled to running when main loop runs", async () => {
-      const segment = nextSegment();
+      const segment = getNextSegment();
       await t.run(async (ctx) => {
         await insertInternalState(ctx);
 
@@ -1037,7 +1037,7 @@ describe("loop", () => {
 
     it("should set saturated flag when at max capacity", async () => {
       // Setup state with running jobs at max capacity
-      const now = currentSegment();
+      const now = getCurrentSegment();
       const later = now + 10n;
       await setMaxParallelism(10);
       await t.run(async (ctx) => {

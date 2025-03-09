@@ -5,10 +5,10 @@ import { INITIAL_STATE } from "./loop.js";
 import {
   boundScheduledTime,
   Config,
-  currentSegment,
   DEFAULT_MAX_PARALLELISM,
   fromSegment,
-  nextSegment,
+  getCurrentSegment,
+  getNextSegment,
 } from "./shared.js";
 
 /**
@@ -23,7 +23,7 @@ export async function kickMainLoop(
   const globals = await getOrUpdateGlobals(ctx, config);
   const console = createLogger(globals.logLevel);
   const runStatus = await getOrCreateRunStatus(ctx);
-  const next = nextSegment();
+  const next = getNextSegment();
 
   // Only kick to run now if we're scheduled or idle.
   if (runStatus.state.kind === "running") {
@@ -61,7 +61,7 @@ export async function kickMainLoop(
     console.debug(`[${source}] main was idle, so run it now`);
   }
   await ctx.db.patch(runStatus._id, { state: { kind: "running" } });
-  const current = currentSegment();
+  const current = getCurrentSegment();
   const scheduledTime = boundScheduledTime(fromSegment(current), console);
   await ctx.scheduler.runAt(scheduledTime, internal.loop.main, {
     generation: runStatus.state.generation,
