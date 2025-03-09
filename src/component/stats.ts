@@ -96,7 +96,7 @@ export const queueLength = query({
  * Warning: this should not be used from a mutation, as it will cause conflicts.
  * Use this while developing to see the state of the queue.
  */
-export const diagnostic = internalQuery({
+export const diagnostics = internalQuery({
   args: {},
   returns: v.any(),
   handler: async (ctx) => {
