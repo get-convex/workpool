@@ -1,9 +1,10 @@
 import { FunctionHandle } from "convex/server";
 import { Infer, v } from "convex/values";
+import { Id } from "./_generated/dataModel.js";
 import { internalMutation, MutationCtx } from "./_generated/server.js";
 import { kickMainLoop } from "./kick.js";
 import { createLogger } from "./logging.js";
-import { nextSegment, OnCompleteArgs, runResult } from "./shared.js";
+import { OnCompleteArgs, RunResult, runResult } from "./shared.js";
 import { recordCompleted } from "./stats.js";
 
 export type CompleteJob = Infer<typeof completeArgs.fields.jobs.element>;
@@ -23,7 +24,11 @@ export async function completeHandler(
 ) {
   const globals = await ctx.db.query("globals").unique();
   const console = createLogger(globals?.logLevel);
-  let anyPendingCompletions = false;
+  const pendingCompletions: {
+    runResult: RunResult;
+    workId: Id<"work">;
+    retry: boolean;
+  }[] = [];
   await Promise.all(
     args.jobs.map(async (job) => {
       const work = await ctx.db.get(job.workId);
@@ -77,18 +82,24 @@ export async function completeHandler(
         await ctx.db.delete(job.workId);
       }
       if (job.runResult.kind !== "canceled") {
-        await ctx.db.insert("pendingCompletion", {
+        pendingCompletions.push({
           runResult: job.runResult,
           workId: job.workId,
-          segment: nextSegment(),
           retry,
         });
-        anyPendingCompletions = true;
       }
     })
   );
-  if (anyPendingCompletions) {
-    await kickMainLoop(ctx, "complete");
+  if (pendingCompletions.length > 0) {
+    const segment = await kickMainLoop(ctx, "complete");
+    await Promise.all(
+      pendingCompletions.map((completion) =>
+        ctx.db.insert("pendingCompletion", {
+          ...completion,
+          segment,
+        })
+      )
+    );
   }
 }
 

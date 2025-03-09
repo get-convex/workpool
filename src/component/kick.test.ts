@@ -14,7 +14,7 @@ import { kickMainLoop } from "./kick.js";
 import { DEFAULT_LOG_LEVEL } from "./logging.js";
 import schema from "./schema.js";
 import { modules } from "./setup.test.js";
-import { fromSegment, nextSegment, toSegment } from "./shared";
+import { currentSegment, fromSegment, nextSegment, toSegment } from "./shared";
 import { DEFAULT_MAX_PARALLELISM } from "./shared.js";
 
 describe("kickMainLoop", () => {
@@ -74,11 +74,12 @@ describe("kickMainLoop", () => {
       expect(runStatus.state.kind).toBe("running");
 
       // Second kick should not change state
-      await kickMainLoop(ctx, "enqueue");
+      const segment = await kickMainLoop(ctx, "enqueue");
       const afterStatus = await ctx.db.query("runStatus").unique();
       assert(afterStatus);
       expect(afterStatus.state.kind).toBe("running");
       expect(afterStatus._id).toBe(runStatus._id);
+      expect(segment).toBe(nextSegment());
     });
   });
 
@@ -115,7 +116,8 @@ describe("kickMainLoop", () => {
       });
 
       // Kick should reschedule to run sooner
-      await kickMainLoop(ctx, "enqueue");
+      const segment = await kickMainLoop(ctx, "enqueue");
+      expect(segment).toBe(currentSegment());
 
       const afterStatus = await ctx.db.query("runStatus").unique();
       assert(afterStatus);
@@ -156,7 +158,8 @@ describe("kickMainLoop", () => {
       });
 
       // Kick should not change state when saturated
-      await kickMainLoop(ctx, "enqueue");
+      const segment = await kickMainLoop(ctx, "enqueue");
+      expect(segment).toBe(nextSegment());
       const afterStatus = await ctx.db.query("runStatus").unique();
       assert(afterStatus);
       expect(afterStatus.state.kind).toBe("scheduled");
@@ -209,13 +212,15 @@ describe("kickMainLoop", () => {
   test("handles race conditions between multiple kicks", async () => {
     const t = convexTest(schema, modules);
     // Run kicks in separate transactions to simulate concurrent access
-    await Promise.all(
+    const segments = await Promise.all(
       Array.from({ length: 10 }, () =>
         t.run(async (ctx) => {
-          await kickMainLoop(ctx, "enqueue");
+          const segment = await kickMainLoop(ctx, "enqueue");
+          return segment;
         })
       )
     );
+    expect(segments.filter((s) => s === currentSegment())).toHaveLength(1);
 
     // Check final state in a new transaction
     await t.run(async (ctx) => {

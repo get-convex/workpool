@@ -45,11 +45,11 @@ export const enqueue = mutation({
       ...workArgs,
       attempts: 0,
     });
+    const limit = await kickMainLoop(ctx, "enqueue", config);
     await ctx.db.insert("pendingStart", {
       workId,
-      segment: max(toSegment(runAt), nextSegment()),
+      segment: max(toSegment(runAt), limit),
     });
-    await kickMainLoop(ctx, "enqueue", config);
     recordEnqueued(console, { workId, fnName: workArgs.fnName, runAt });
     return workId;
   },
@@ -61,11 +61,14 @@ export const cancel = mutation({
     logLevel,
   },
   handler: async (ctx, { id, logLevel }) => {
-    const canceled = await cancelWorkItem(ctx, id, nextSegment(), logLevel);
-    if (canceled) {
-      await kickMainLoop(ctx, "cancel", { logLevel });
+    const shouldCancel = await shouldCancelWorkItem(ctx, id, logLevel);
+    if (shouldCancel) {
+      const segment = await kickMainLoop(ctx, "cancel", { logLevel });
+      await ctx.db.insert("pendingCancelation", {
+        workId: id,
+        segment,
+      });
     }
-    // TODO: stats event
   },
 });
 
@@ -74,20 +77,30 @@ export const cancelAll = mutation({
   args: { logLevel, before: v.optional(v.number()) },
   handler: async (ctx, { logLevel, before }) => {
     const beforeTime = before ?? Date.now();
-    const segment = nextSegment();
     const pageOfWork = await ctx.db
       .query("work")
       .withIndex("by_creation_time", (q) => q.lte("_creationTime", beforeTime))
       .order("desc")
       .take(PAGE_SIZE);
-    const canceled = await Promise.all(
+    const shouldCancel = await Promise.all(
       pageOfWork.map(async ({ _id }) =>
-        cancelWorkItem(ctx, _id, segment, logLevel)
+        shouldCancelWorkItem(ctx, _id, logLevel)
       )
     );
-    if (canceled.some((c) => c)) {
-      await kickMainLoop(ctx, "cancel", { logLevel });
+    let segment = nextSegment();
+    if (shouldCancel.some((c) => c)) {
+      segment = await kickMainLoop(ctx, "cancel", { logLevel });
     }
+    await Promise.all(
+      pageOfWork.map(({ _id }, index) => {
+        if (shouldCancel[index]) {
+          return ctx.db.insert("pendingCancelation", {
+            workId: _id,
+            segment,
+          });
+        }
+      })
+    );
     if (pageOfWork.length === PAGE_SIZE) {
       await ctx.scheduler.runAfter(0, api.lib.cancelAll, {
         logLevel,
@@ -124,10 +137,9 @@ export const status = query({
   },
 });
 
-async function cancelWorkItem(
+async function shouldCancelWorkItem(
   ctx: MutationCtx,
   workId: Id<"work">,
-  segment: bigint,
   logLevel: LogLevel
 ) {
   const console = createLogger(logLevel);
@@ -145,10 +157,6 @@ async function cancelWorkItem(
     console.warn(`[cancel] work ${workId} has already been canceled`);
     return false;
   }
-  await ctx.db.insert("pendingCancelation", {
-    workId,
-    segment,
-  });
   return true;
 }
 
