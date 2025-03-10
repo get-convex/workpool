@@ -21,7 +21,7 @@ import {
   RunResult,
   toSegment,
 } from "./shared.js";
-import { recordCompleted, recordReport, recordStarted } from "./stats.js";
+import { recordCompleted, generateReport, recordStarted } from "./stats.js";
 
 const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
 const SECOND = 1000;
@@ -100,7 +100,7 @@ export const main = internalMutation({
         // It's been a while, let's start fresh.
         lastReportTs = Date.now();
       }
-      recordReport(console, state);
+      await generateReport(ctx, console, state, globals);
       state.report = {
         completed: 0,
         succeeded: 0,

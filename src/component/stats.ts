@@ -1,26 +1,25 @@
 import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel.js";
-import { internalQuery, query } from "./_generated/server.js";
-import { DEFAULT_MAX_PARALLELISM } from "./shared.js";
-import { Logger } from "./logging.js";
+import {
+  internalMutation,
+  internalQuery,
+  MutationCtx,
+} from "./_generated/server.js";
+import {
+  Config,
+  DEFAULT_MAX_PARALLELISM,
+  getCurrentSegment,
+} from "./shared.js";
+import { createLogger, Logger, logLevel, shouldLog } from "./logging.js";
+import { internal } from "./_generated/api.js";
+import schema from "./schema.js";
+import { paginator } from "convex-helpers/server/pagination";
+
+const BACKLOG_BATCH_SIZE = 100;
 
 /**
  * Record stats about work execution. Intended to be queried by Axiom or Datadog.
- */
-
-/**
- * Sample axiom dashboard query:
-
-workpool
-| extend parsed_message = iff(
-	isnotnull(parse_json(trim("'", tostring(["data.message"])))),
-	parse_json(trim("'", tostring(["data.message"]))),
-	parse_json('{}')
-)
-| extend startLag = parsed_message["startLag"]
-| extend fnName = parsed_message["fnName"]
-| summarize avg(todouble(startLag)) by bin_auto(_time), tostring(fnName)
-
+ * See the [README](https://github.com/get-convex/workpool) for example queries.
  */
 
 export function recordEnqueued(
@@ -65,16 +64,97 @@ export function recordCompleted(
   });
 }
 
-export function recordReport(console: Logger, state: Doc<"internalState">) {
-  const { completed, succeeded, failed, retries, canceled } = state.report;
+export async function generateReport(
+  ctx: MutationCtx,
+  console: Logger,
+  state: Doc<"internalState">,
+  { maxParallelism, logLevel }: Config
+) {
+  if (!shouldLog(logLevel, "REPORT")) {
+    // Don't waste time if we're not going to log.
+    return;
+  }
+  const currentSegment = getCurrentSegment();
+  const pendingStart = await paginator(ctx.db, schema)
+    .query("pendingStart")
+    .withIndex("segment", (q) =>
+      q
+        .gte("segment", state.segmentCursors.incoming)
+        .lt("segment", currentSegment)
+    )
+    .paginate({
+      numItems: maxParallelism,
+      cursor: null,
+    });
+  if (pendingStart.isDone) {
+    recordReport(console, {
+      ...state.report,
+      running: state.running.length,
+      backlog: pendingStart.page.length,
+    });
+  } else {
+    await ctx.scheduler.runAfter(0, internal.stats.calculateBacklogAndReport, {
+      startSegment: state.segmentCursors.incoming,
+      endSegment: currentSegment,
+      cursor: pendingStart.continueCursor,
+      report: state.report,
+      running: state.running.length,
+      logLevel,
+    });
+  }
+}
+
+export const calculateBacklogAndReport = internalMutation({
+  args: {
+    startSegment: v.int64(),
+    endSegment: v.int64(),
+    cursor: v.string(),
+    report: schema.tables.internalState.validator.fields.report,
+    running: v.number(),
+    logLevel,
+  },
+  handler: async (ctx, args) => {
+    const pendingStart = await paginator(ctx.db, schema)
+      .query("pendingStart")
+      .withIndex("segment", (q) =>
+        q.gte("segment", args.startSegment).lt("segment", args.endSegment)
+      )
+      .paginate({
+        numItems: BACKLOG_BATCH_SIZE,
+        cursor: args.cursor,
+      });
+    const console = createLogger(args.logLevel);
+    if (pendingStart.isDone) {
+      recordReport(console, {
+        ...args.report,
+        running: args.running,
+        backlog: pendingStart.page.length,
+      });
+    } else {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.stats.calculateBacklogAndReport,
+        {
+          startSegment: args.startSegment,
+          endSegment: args.endSegment,
+          cursor: pendingStart.continueCursor,
+          report: args.report,
+          running: args.running,
+          logLevel: args.logLevel,
+        }
+      );
+    }
+  },
+});
+
+function recordReport(
+  console: Logger,
+  report: Doc<"internalState">["report"] & { running: number; backlog: number }
+) {
+  const { completed, failed, retries } = report;
   const withoutRetries = completed - retries;
   console.event("report", {
-    running: state.running.length,
-    completed,
-    succeeded,
-    failed,
-    retries,
-    canceled,
+    ...report,
     failureRate: completed ? (failed + retries) / completed : 0,
     permanentFailureRate: withoutRetries ? failed / withoutRetries : 0,
   });
