@@ -2,6 +2,8 @@ import { v, Infer } from "convex/values";
 
 export const DEFAULT_LOG_LEVEL: LogLevel = "REPORT";
 
+// NOTE: the ordering here is important! A config level of "INFO" will log
+// "INFO", "REPORT", "WARN",and "ERROR" events.
 export const logLevel = v.union(
   v.literal("DEBUG"),
   v.literal("INFO"),
@@ -30,7 +32,7 @@ const logLevelByName = logLevelOrder.reduce(
   {} as Record<LogLevel, number>
 );
 export function shouldLog(config: LogLevel, level: LogLevel) {
-  return logLevelByName[config] <= logLevelByName[level];
+  return logLevelByName[config] >= logLevelByName[level];
 }
 const DEBUG = logLevelByName["DEBUG"];
 const INFO = logLevelByName["INFO"];

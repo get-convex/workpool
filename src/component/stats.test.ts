@@ -10,7 +10,7 @@ import {
 } from "vitest";
 import schema from "./schema";
 import { internal } from "./_generated/api";
-import { Logger } from "./logging";
+import { Logger, shouldLog } from "./logging";
 import { getCurrentSegment } from "./shared";
 import { paginator } from "convex-helpers/server/pagination";
 
@@ -44,6 +44,18 @@ describe("stats", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  describe("shouldLog", () => {
+    it("should return true if the log level is above the config level", () => {
+      expect(shouldLog("INFO", "DEBUG")).toBe(true);
+    });
+    it("should return false if the log level is below the config level", () => {
+      expect(shouldLog("INFO", "WARN")).toBe(false);
+    });
+    it("should return true if the log level is equal to the config level", () => {
+      expect(shouldLog("INFO", "INFO")).toBe(true);
+    });
   });
 
   describe("generateReport", () => {
@@ -162,6 +174,7 @@ describe("stats", () => {
         canceled: 0,
         failureRate: 0.4, // (failed + retries) / completed = (2 + 2) / 10 = 0.4
         permanentFailureRate: 0.25, // failed / (completed - retries) = 2 / (10 - 2) = 2/8
+        lastReportTs: expect.any(Number),
       });
     });
 
