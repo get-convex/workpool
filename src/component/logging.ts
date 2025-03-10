@@ -22,21 +22,24 @@ export type Logger = {
 };
 
 const logLevelOrder = logLevel.members.map((l) => l.value);
-const logLevelOrderMap = logLevelOrder.reduce(
+const logLevelByName = logLevelOrder.reduce(
   (acc, l, i) => {
     acc[l] = i;
     return acc;
   },
   {} as Record<LogLevel, number>
 );
-const DEBUG = logLevelOrderMap["DEBUG"];
-const INFO = logLevelOrderMap["INFO"];
-const REPORT = logLevelOrderMap["REPORT"];
-const WARN = logLevelOrderMap["WARN"];
-const ERROR = logLevelOrderMap["ERROR"];
+export function shouldLog(config: LogLevel, level: LogLevel) {
+  return logLevelByName[config] <= logLevelByName[level];
+}
+const DEBUG = logLevelByName["DEBUG"];
+const INFO = logLevelByName["INFO"];
+const REPORT = logLevelByName["REPORT"];
+const WARN = logLevelByName["WARN"];
+const ERROR = logLevelByName["ERROR"];
 
 export function createLogger(level?: LogLevel): Logger {
-  const levelIndex = logLevelOrderMap[level ?? DEFAULT_LOG_LEVEL];
+  const levelIndex = logLevelByName[level ?? DEFAULT_LOG_LEVEL];
   if (levelIndex === undefined) {
     throw new Error(`Invalid log level: ${level}`);
   }
