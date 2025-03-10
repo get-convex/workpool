@@ -314,6 +314,48 @@ You can cancel work by calling `pool.cancel(id)` or all of them with
 
 This will avoid starting or retrying, but will not stop in-progress work.
 
+## Monitoring the workpool
+
+If you want to know the status of your workpool, here are some queries to use
+for [Axiom](https://axiom.co/docs/send-data/convex).
+Just replace `your-dataset` with your dataset's name (which is also
+what you enter in the log streaming configuration in the Convex dashboard).
+
+Note: these are optimized for monitors. For dashboards, you might want to change
+`bin(_time, X)` to `bin_auto(_time)`.
+
+### Are functions failing (after retries)
+
+```
+['your-dataset']
+| extend parsed_message = iff(isnotnull(parse_json(trim("'", tostring(["data.message"])))),
+  parse_json(trim("'", tostring(["data.message"]))),
+  parse_json('{}') )
+| where parsed_message has "event" and parsed_message["event"] == "report"
+| extend permanentFailureRate = parsed_message["permanentFailureRate"]
+| summarize avg(todouble(permanentFailureRate))
+  by bin(_time, 5m), tostring(["data.function.component_path"])
+```
+
+### Is there a big delay between being enqueued and starting
+
+```
+['your-dataset']
+| extend parsed_message = iff(isnotnull(parse_json(trim("'", tostring(["data.message"])))),
+  parse_json(trim("'", tostring(["data.message"]))),
+  parse_json('{}') )
+| where parsed_message has "event" and parsed_message["event"] == "started"
+| summarize avg(todouble(parsed_message["startLag"])/1000)
+  by bin(_time, 1m), tostring(parsed_message["fnName"])
+```
+
+While similar to the backlog size, this is a more concrete value, since the
+events in the backlog may take variable amounts of time. This is a more user-
+visible metric, though it is a "lagging" indicator - this will be high when the
+backlog was large enough to delay the processing of an entry. So alerting on
+the backlog size will give you a faster indicator, while this is a metric of the
+severity of the incident.
+
 <!-- END: Include on https://convex.dev/components -->
 
 ```
