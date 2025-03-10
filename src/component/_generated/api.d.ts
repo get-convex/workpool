@@ -87,9 +87,6 @@ export type Mounts = {
       | { state: "finished" }
     >;
   };
-  stats: {
-    queueLength: FunctionReference<"query", "public", {}, number>;
-  };
 };
 // For now fullApiWithMounts is only fullApi which provides
 // jump-to-definition in component client code.

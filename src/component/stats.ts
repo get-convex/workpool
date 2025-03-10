@@ -81,19 +81,6 @@ export function recordReport(console: Logger, state: Doc<"internalState">) {
 
 /**
  * Warning: this should not be used from a mutation, as it will cause conflicts.
- * Use this to debug or diagnose your queue length when it's backed up.
- */
-export const queueLength = query({
-  args: {},
-  returns: v.number(),
-  handler: async (ctx) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (ctx.db.query("pendingStart") as any).count();
-  },
-});
-
-/**
- * Warning: this should not be used from a mutation, as it will cause conflicts.
  * Use this while developing to see the state of the queue.
  */
 export const diagnostics = internalQuery({
