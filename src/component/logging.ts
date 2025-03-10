@@ -13,6 +13,7 @@ export type LogLevel = Infer<typeof logLevel>;
 
 export type Logger = {
   debug: (...args: unknown[]) => void;
+  info: (...args: unknown[]) => void;
   warn: (...args: unknown[]) => void;
   error: (...args: unknown[]) => void;
   time: (label: string) => void;
@@ -43,6 +44,11 @@ export function createLogger(level?: LogLevel): Logger {
     debug: (...args: unknown[]) => {
       if (levelIndex <= DEBUG) {
         console.debug(...args);
+      }
+    },
+    info: (...args: unknown[]) => {
+      if (levelIndex <= INFO) {
+        console.info(...args);
       }
     },
     warn: (...args: unknown[]) => {
