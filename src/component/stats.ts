@@ -69,6 +69,7 @@ export function recordReport(console: Logger, state: Doc<"internalState">) {
   const { completed, succeeded, failed, retries, canceled } = state.report;
   const withoutRetries = completed - retries;
   console.event("report", {
+    running: state.running.length,
     completed,
     succeeded,
     failed,
