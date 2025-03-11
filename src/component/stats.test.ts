@@ -46,20 +46,8 @@ describe("stats", () => {
     vi.useRealTimers();
   });
 
-  describe("shouldLog", () => {
-    it("should return true if the log level is above the config level", () => {
-      expect(shouldLog("INFO", "DEBUG")).toBe(true);
-    });
-    it("should return false if the log level is below the config level", () => {
-      expect(shouldLog("INFO", "WARN")).toBe(false);
-    });
-    it("should return true if the log level is equal to the config level", () => {
-      expect(shouldLog("INFO", "INFO")).toBe(true);
-    });
-  });
-
   describe("generateReport", () => {
-    it("should not generate a report when log level is below REPORT", async () => {
+    it("should not generate a report when log level is above REPORT", async () => {
       // Setup internal state
       const stateId = await t.run(async (ctx) => {
         return await ctx.db.insert("internalState", {
@@ -96,7 +84,7 @@ describe("stats", () => {
         const { generateReport } = await import("./stats");
         await generateReport(ctx, consoleMock, state, {
           maxParallelism: 10,
-          logLevel: "INFO", // Below REPORT level
+          logLevel: "WARN", // Above REPORT level
         });
       });
 

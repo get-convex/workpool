@@ -32,7 +32,7 @@ const logLevelByName = logLevelOrder.reduce(
   {} as Record<LogLevel, number>
 );
 export function shouldLog(config: LogLevel, level: LogLevel) {
-  return logLevelByName[config] >= logLevelByName[level];
+  return logLevelByName[config] <= logLevelByName[level];
 }
 const DEBUG = logLevelByName["DEBUG"];
 const INFO = logLevelByName["INFO"];
