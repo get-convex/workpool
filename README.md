@@ -117,6 +117,11 @@ export const emailSent = internalMutation({
 });
 ```
 
+Note: the `onComplete` handler runs in a different transaction than the job
+enqueued. If you want to run it in the same transaction, you can do that work
+at the end of the enqueued function, before returning. This is generally faster
+and more typesafe when handling the "success" case.
+
 #### Idempotency?
 
 Idempotent actions are actions that can be run multiple times safely. This typically
