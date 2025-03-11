@@ -242,6 +242,44 @@ export const onComplete = internalMutation({
   },
 });
 
+export const noop = internalMutation({
+  args: { started: v.number() },
+  handler: async (ctx, args) => {
+    console.warn(`lag: ${Date.now() - args.started}`);
+    return Date.now();
+  },
+});
+
+export const complete = internalMutation({
+  args: {
+    workId: workIdValidator,
+    context: v.number(),
+    result: resultValidator,
+  },
+  handler: async (ctx, args) => {
+    if (args.result.kind === "success") {
+      console.warn("onComplete delay", Date.now() - args.result.returnValue);
+    }
+    console.warn("total", (Date.now() - args.context) / 1000);
+  },
+});
+
+export const singleLatency = internalMutation({
+  args: {},
+  handler: async (ctx, _args) => {
+    const started = Date.now();
+    await bigPool.enqueueMutation(
+      ctx,
+      internal.example.noop,
+      { started },
+      {
+        context: started,
+        onComplete: internal.example.complete,
+      }
+    );
+  },
+});
+
 const N = 100;
 const BASE_MS = 100;
 const MAX_MS = 1000;
@@ -253,7 +291,7 @@ export const runPaced = internalAction({
     const start = Date.now();
     for (let i = 0; i < (args.n ?? N); i++) {
       const args = {
-        fate: "succeed",
+        fate: "fail randomly",
         ms: BASE_MS + (MAX_MS - BASE_MS) * Math.random(),
       } as FunctionArgs<typeof internal.example.myAction>;
       const id: WorkId = await bigPool.enqueueAction(
