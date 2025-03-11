@@ -13,12 +13,7 @@ import { internal } from "./_generated/api";
 import { Id, Doc } from "./_generated/dataModel";
 import { MutationCtx } from "./_generated/server";
 import { WithoutSystemFields } from "convex/server";
-import { recover as recoverMutation } from "./recovery";
-
-// We call it directly so we can mock the system.get. A hack for now.
-// But this avoids the warning about calling directly.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const recover = (recoverMutation as any)._handler as typeof recoverMutation;
+import { recoveryHandler } from "./recovery";
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -209,7 +204,7 @@ describe("recovery", () => {
           return await originalGet(id);
         };
 
-        await recover(ctx, {
+        await recoveryHandler(ctx, {
           jobs: [
             {
               scheduledId,
@@ -275,7 +270,7 @@ describe("recovery", () => {
           return await originalGet(id);
         };
 
-        await recover(ctx, {
+        await recoveryHandler(ctx, {
           jobs: [
             {
               scheduledId,
@@ -340,7 +335,7 @@ describe("recovery", () => {
           return await originalGet(id);
         };
 
-        await recover(ctx, {
+        await recoveryHandler(ctx, {
           jobs: [
             {
               scheduledId,
@@ -429,7 +424,7 @@ describe("recovery", () => {
           return await originalGet(id);
         };
 
-        await recover(ctx, {
+        await recoveryHandler(ctx, {
           jobs: [
             {
               scheduledId: scheduledId1,
@@ -516,7 +511,7 @@ describe("recovery", () => {
           return await originalGet(id);
         };
 
-        await recover(ctx, {
+        await recoveryHandler(ctx, {
           jobs: [
             {
               scheduledId,
