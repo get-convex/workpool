@@ -263,8 +263,8 @@ The retry options work like this:
 - If it fails, it will wait _around_ `initialBackoffMs` and then try again.
 - Each subsequent retry waits `initialBackoffMs * base^<retryNumber - 1>`.
 - The standard base is 2.
-- The actual wait time uses "jitter" to avoid all retries happening at once,
-  if they all failed at the same time.
+- The actual wait time uses "jitter" to avoid all retries happening at once
+  if they all fail at the same time.
 
 You can override the retry behavior per-call with the `retry` option.
 
@@ -306,6 +306,10 @@ The status will be one of:
 - `{ kind: "pending"; previousAttempts: number }`: The function has not started yet.
 - `{ kind: "running"; previousAttempts: number }`: The function is currently running.
 - `{ kind: "finished" }`: The function has succeeded, failed, or been canceled.
+
+To get the result of your function, you can either write to the database from
+within your function, call or schedule another function from there, or use the
+`onComplete` handler to respond to the job result.
 
 ## Canceling work
 

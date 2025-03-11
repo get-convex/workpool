@@ -55,17 +55,20 @@ export class Workpool {
       maxParallelism?: number;
       /** How much to log. This is updated on each call to `enqueue*`,
        * `status`, or `cancel*`.
-       * Default is WARN.
-       * With INFO, you can see events for started and completed work, which can
-       * be parsed by tools like [Axiom](https://axiom.co) for monitoring.
+       * Default is REPORT, which logs warnings, errors, and a periodic report.
+       * With INFO, you can also see events for started and completed work.
+       * Stats generated can be parsed by tools like
+       * [Axiom](https://axiom.co) for monitoring.
        * With DEBUG, you can see timers and internal events for work being
        * scheduled.
        */
       logLevel?: LogLevel;
-      /** Default retry behavior for enqueued actions. */
+      /** Default retry behavior for enqueued actions.
+       * See {@link RetryBehavior}.
+       */
       defaultRetryBehavior?: RetryBehavior;
       /** Whether to retry actions that fail by default. Default: false.
-       * NOTE: Only do this if your actions are idempotent.
+       * NOTE: Only enable this if your actions are idempotent.
        * See the docs (README.md) for more details.
        */
       retryActionsByDefault?: boolean;
@@ -151,50 +154,42 @@ export class Workpool {
     });
     return id as WorkId;
   }
+  /**
+   * Cancels a work item. If it's already started, it will be allowed to finish
+   * but will not be retried.
+   *
+   * @param ctx - The mutation or action context that can call ctx.runMutation.
+   * @param id - The ID of the work to cancel.
+   */
   async cancel(ctx: RunMutationCtx, id: WorkId): Promise<void> {
     await ctx.runMutation(this.component.lib.cancel, {
       id,
       logLevel: this.options.logLevel ?? getDefaultLogLevel(),
     });
   }
+  /**
+   * Cancels all pending work items. See {@link cancel}.
+   *
+   * @param ctx - The mutation or action context that can call ctx.runMutation.
+   */
   async cancelAll(ctx: RunMutationCtx): Promise<void> {
     await ctx.runMutation(this.component.lib.cancelAll, {
       logLevel: this.options.logLevel ?? getDefaultLogLevel(),
     });
   }
+  /**
+   * Gets the status of a work item.
+   *
+   * @param ctx - The query context that can call ctx.runQuery.
+   * @param id - The ID of the work to get the status of.
+   * @returns The status of the work item. One of:
+   * - `{ state: "pending", previousAttempts: number }`
+   * - `{ state: "running", previousAttempts: number }`
+   * - `{ state: "finished" }`
+   */
   async status(ctx: RunQueryCtx, id: WorkId): Promise<Status> {
     return ctx.runQuery(this.component.lib.status, { id });
   }
-}
-
-function getRetryBehavior(
-  defaultRetryBehavior: RetryBehavior | undefined,
-  retryActionsByDefault: boolean | undefined,
-  retryOverride: boolean | RetryBehavior | undefined
-): RetryBehavior | undefined {
-  const defaultRetry = defaultRetryBehavior ?? DEFAULT_RETRY_BEHAVIOR;
-  const retryByDefault = retryActionsByDefault ?? false;
-  if (retryOverride === true) {
-    return defaultRetry;
-  }
-  if (retryOverride === false) {
-    return undefined;
-  }
-  return retryOverride ?? (retryByDefault ? defaultRetry : undefined);
-}
-
-async function defaultEnqueueArgs(
-  fn: FunctionReference<"action" | "mutation", FunctionVisibility>,
-  { logLevel, maxParallelism }: Partial<Config>
-) {
-  return {
-    fnHandle: await createFunctionHandle(fn),
-    fnName: getFunctionName(fn),
-    config: {
-      logLevel: logLevel ?? getDefaultLogLevel(),
-      maxParallelism: maxParallelism ?? DEFAULT_MAX_PARALLELISM,
-    },
-  };
 }
 
 export type SchedulerOptions =
@@ -263,6 +258,40 @@ export type OnCompleteArgs = {
 };
 // ensure OnCompleteArgs satisfies SharedOnCompleteArgs
 const _ = {} as OnCompleteArgs satisfies SharedOnCompleteArgs;
+
+//
+// Helper functions
+//
+
+function getRetryBehavior(
+  defaultRetryBehavior: RetryBehavior | undefined,
+  retryActionsByDefault: boolean | undefined,
+  retryOverride: boolean | RetryBehavior | undefined
+): RetryBehavior | undefined {
+  const defaultRetry = defaultRetryBehavior ?? DEFAULT_RETRY_BEHAVIOR;
+  const retryByDefault = retryActionsByDefault ?? false;
+  if (retryOverride === true) {
+    return defaultRetry;
+  }
+  if (retryOverride === false) {
+    return undefined;
+  }
+  return retryOverride ?? (retryByDefault ? defaultRetry : undefined);
+}
+
+async function defaultEnqueueArgs(
+  fn: FunctionReference<"action" | "mutation", FunctionVisibility>,
+  { logLevel, maxParallelism }: Partial<Config>
+) {
+  return {
+    fnHandle: await createFunctionHandle(fn),
+    fnName: getFunctionName(fn),
+    config: {
+      logLevel: logLevel ?? getDefaultLogLevel(),
+      maxParallelism: maxParallelism ?? DEFAULT_MAX_PARALLELISM,
+    },
+  };
+}
 
 function getRunAt(options?: SchedulerOptions): number {
   if (!options) {
