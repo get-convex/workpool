@@ -324,29 +324,65 @@ what you enter in the log streaming configuration in the Convex dashboard).
 Note: these are optimized for monitors. For dashboards, you might want to change
 `bin(_time, X)` to `bin_auto(_time)`.
 
-### Are functions failing (after retries)
+### Is it backlogged
 
-```
+Reports the current backlog length, where "backlog" is tasks that are past due,
+not including tasks that have been scheduled for the future. This reports the
+max for 1 minute intervals (which is roughly how often the report is generated).
+
+```txt
 ['your-dataset']
 | extend parsed_message = iff(isnotnull(parse_json(trim("'", tostring(["data.message"])))),
   parse_json(trim("'", tostring(["data.message"]))),
   parse_json('{}') )
-| where parsed_message has "event" and parsed_message["event"] == "report"
+| where parsed_message["component"] == "workpool" and parsed_message["event"] == "report"
+| summarize max_backlog = max(toint(parsed_message["backlog"]))
+  by bin(_time, 1m), workpool = tostring(["data.function.component_path"])
+```
+
+### Are functions failing (after retries)
+
+Reports the overall average failure rate per registered workpool in 5 minute intervals.
+
+```txt
+['your-dataset']
+| extend parsed_message = iff(isnotnull(parse_json(trim("'", tostring(["data.message"])))),
+  parse_json(trim("'", tostring(["data.message"]))),
+  parse_json('{}') )
+| where parsed_message["component"] == "workpool" and parsed_message["event"] == "report"
 | extend permanentFailureRate = parsed_message["permanentFailureRate"]
 | summarize avg(todouble(permanentFailureRate))
-  by bin(_time, 5m), tostring(["data.function.component_path"])
+  by bin(\_time, 5m), workpool = tostring(["data.function.component_path"])
+```
+
+### Are functions retrying a lot
+
+Reports the ratio (0 to 1) of failures per function, in 5 minute intervals.
+Note: to get this data, set the workpool `logLevel` to `"INFO"` (or `"DEBUG"`).
+
+```txt
+['your-dataset']
+| extend parsed_message = iff( 	isnotnull(parse_json(trim("'", tostring(["data.message"])))),
+  parse_json(trim("'", tostring(["data.message"]))),
+  parse_json('{}') )
+| where parsed_message["component"] == "workpool" and (parsed_message["event"] == "completed") and parsed_message["status"] != "canceled"
+| summarize failure_ratio = avg(iff(parsed_message["status"] != "success", 1, 0))
+  by bin(_time, 5m), function = tostring(parsed_message["fnName"])
 ```
 
 ### Is there a big delay between being enqueued and starting
 
-```
+Reports the average time between enqueueing work and it actually starting.
+Note: to get this data, set the workpool `logLevel` to `"INFO"` (or `"DEBUG"`).
+
+```txt
 ['your-dataset']
 | extend parsed_message = iff(isnotnull(parse_json(trim("'", tostring(["data.message"])))),
   parse_json(trim("'", tostring(["data.message"]))),
   parse_json('{}') )
-| where parsed_message has "event" and parsed_message["event"] == "started"
-| summarize avg(todouble(parsed_message["startLag"])/1000)
-  by bin(_time, 1m), tostring(parsed_message["fnName"])
+| where parsed_message["component"] == "workpool" and parsed_message["event"] == "started"
+| summarize start_lag_seconds = avg(todouble(parsed_message["startLag"])/1000)
+  by bin(_time, 1m), function = tostring(parsed_message["fnName"])
 ```
 
 While similar to the backlog size, this is a more concrete value, since the
@@ -357,7 +393,3 @@ the backlog size will give you a faster indicator, while this is a metric of the
 severity of the incident.
 
 <!-- END: Include on https://convex.dev/components -->
-
-```
-
-```
