@@ -10,7 +10,7 @@ import {
 } from "vitest";
 import schema from "./schema";
 import { internal } from "./_generated/api";
-import { Logger, shouldLog } from "./logging";
+import { Logger } from "./logging";
 import { getCurrentSegment } from "./shared";
 import { paginator } from "convex-helpers/server/pagination";
 
