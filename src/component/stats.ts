@@ -153,10 +153,12 @@ function recordReport(
 ) {
   const { completed, failed, retries } = report;
   const withoutRetries = completed - retries;
+  const failureRate = completed ? (failed + retries) / completed : 0;
+  const permanentFailureRate = withoutRetries ? failed / withoutRetries : 0;
   console.event("report", {
     ...report,
-    failureRate: completed ? (failed + retries) / completed : 0,
-    permanentFailureRate: withoutRetries ? failed / withoutRetries : 0,
+    failureRate: Number(failureRate.toFixed(4)),
+    permanentFailureRate: Number(permanentFailureRate.toFixed(4)),
   });
 }
 
