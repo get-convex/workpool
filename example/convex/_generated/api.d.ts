@@ -47,7 +47,7 @@ export declare const components: {
         "internal",
         {
           id: string;
-          logLevel: "DEBUG" | "INFO" | "REPORT" | "WARN" | "ERROR";
+          logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
         },
         any
       >;
@@ -56,7 +56,7 @@ export declare const components: {
         "internal",
         {
           before?: number;
-          logLevel: "DEBUG" | "INFO" | "REPORT" | "WARN" | "ERROR";
+          logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
         },
         any
       >;
@@ -65,7 +65,7 @@ export declare const components: {
         "internal",
         {
           config: {
-            logLevel: "DEBUG" | "INFO" | "REPORT" | "WARN" | "ERROR";
+            logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
             maxParallelism: number;
           };
           fnArgs: any;
@@ -99,7 +99,7 @@ export declare const components: {
         "internal",
         {
           id: string;
-          logLevel: "DEBUG" | "INFO" | "REPORT" | "WARN" | "ERROR";
+          logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
         },
         any
       >;
@@ -108,7 +108,7 @@ export declare const components: {
         "internal",
         {
           before?: number;
-          logLevel: "DEBUG" | "INFO" | "REPORT" | "WARN" | "ERROR";
+          logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
         },
         any
       >;
@@ -117,7 +117,7 @@ export declare const components: {
         "internal",
         {
           config: {
-            logLevel: "DEBUG" | "INFO" | "REPORT" | "WARN" | "ERROR";
+            logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
             maxParallelism: number;
           };
           fnArgs: any;
@@ -151,7 +151,7 @@ export declare const components: {
         "internal",
         {
           id: string;
-          logLevel: "DEBUG" | "INFO" | "REPORT" | "WARN" | "ERROR";
+          logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
         },
         any
       >;
@@ -160,7 +160,7 @@ export declare const components: {
         "internal",
         {
           before?: number;
-          logLevel: "DEBUG" | "INFO" | "REPORT" | "WARN" | "ERROR";
+          logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
         },
         any
       >;
@@ -169,7 +169,7 @@ export declare const components: {
         "internal",
         {
           config: {
-            logLevel: "DEBUG" | "INFO" | "REPORT" | "WARN" | "ERROR";
+            logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
             maxParallelism: number;
           };
           fnArgs: any;

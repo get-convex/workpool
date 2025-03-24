@@ -47,7 +47,10 @@ export type Mounts = {
     cancel: FunctionReference<
       "mutation",
       "public",
-      { id: string; logLevel: "DEBUG" | "INFO" | "REPORT" | "WARN" | "ERROR" },
+      {
+        id: string;
+        logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
+      },
       any
     >;
     cancelAll: FunctionReference<
@@ -55,7 +58,7 @@ export type Mounts = {
       "public",
       {
         before?: number;
-        logLevel: "DEBUG" | "INFO" | "REPORT" | "WARN" | "ERROR";
+        logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
       },
       any
     >;
@@ -64,7 +67,7 @@ export type Mounts = {
       "public",
       {
         config: {
-          logLevel: "DEBUG" | "INFO" | "REPORT" | "WARN" | "ERROR";
+          logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
           maxParallelism: number;
         };
         fnArgs: any;

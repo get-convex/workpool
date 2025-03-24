@@ -24,7 +24,9 @@ import {
 } from "../component/shared.js";
 import { RunMutationCtx, RunQueryCtx, UseApi } from "./utils.js";
 export { resultValidator, type RunResult, type RetryBehavior };
+export { resultValidator as vResultValidator };
 export { retryBehavior as vRetryBehavior } from "../component/shared.js";
+export { logLevel as vLogLevel } from "../component/logging.js";
 
 // Attempts will run with delay [0, 250, 500, 1000, 2000] (ms)
 export const DEFAULT_RETRY_BEHAVIOR: RetryBehavior = {

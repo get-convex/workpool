@@ -6,6 +6,7 @@ export const DEFAULT_LOG_LEVEL: LogLevel = "REPORT";
 // "INFO", "REPORT", "WARN",and "ERROR" events.
 export const logLevel = v.union(
   v.literal("DEBUG"),
+  v.literal("TRACE"),
   v.literal("INFO"),
   v.literal("REPORT"),
   v.literal("WARN"),
@@ -35,6 +36,7 @@ export function shouldLog(config: LogLevel, level: LogLevel) {
   return logLevelByName[config] <= logLevelByName[level];
 }
 const DEBUG = logLevelByName["DEBUG"];
+const TRACE = logLevelByName["TRACE"];
 const INFO = logLevelByName["INFO"];
 const REPORT = logLevelByName["REPORT"];
 const WARN = logLevelByName["WARN"];
@@ -67,12 +69,12 @@ export function createLogger(level?: LogLevel): Logger {
       }
     },
     time: (label: string) => {
-      if (levelIndex <= DEBUG) {
+      if (levelIndex <= TRACE) {
         console.time(label);
       }
     },
     timeEnd: (label: string) => {
-      if (levelIndex <= DEBUG) {
+      if (levelIndex <= TRACE) {
         console.timeEnd(label);
       }
     },
