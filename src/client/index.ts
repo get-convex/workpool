@@ -1,6 +1,7 @@
 import {
   createFunctionHandle,
   DefaultFunctionArgs,
+  FunctionHandle,
   FunctionReference,
   FunctionVisibility,
   getFunctionName,
@@ -99,6 +100,12 @@ export class Workpool {
        * If unset, it will use the Workpool's configured default.
        */
       retry?: boolean | RetryBehavior;
+      /**
+       * The name of the function. By default, if you pass in api.foo.bar.baz,
+       * it will use "foo/bar:baz" as the name. If you pass in a function handle,
+       * it will use the function handle directly.
+       */
+      name?: string;
     } & CallbackOptions &
       SchedulerOptions
   ): Promise<WorkId> {
@@ -141,7 +148,15 @@ export class Workpool {
     ctx: RunMutationCtx,
     fn: FunctionReference<"mutation", FunctionVisibility, Args, ReturnType>,
     fnArgs: Args,
-    options?: CallbackOptions & SchedulerOptions
+    options?: CallbackOptions &
+      SchedulerOptions & {
+        /**
+         * The name of the function. By default, if you pass in api.foo.bar.baz,
+         * it will use "foo/bar:baz" as the name. If you pass in a function handle,
+         * it will use the function handle directly.
+         */
+        name?: string;
+      }
   ): Promise<WorkId> {
     const onComplete: OnComplete | undefined = options?.onComplete
       ? {
@@ -284,12 +299,18 @@ function getRetryBehavior(
 }
 
 async function defaultEnqueueArgs(
-  fn: FunctionReference<"action" | "mutation", FunctionVisibility>,
-  { logLevel, maxParallelism }: Partial<Config>
+  fn:
+    | FunctionReference<"action" | "mutation", FunctionVisibility>
+    | FunctionHandle<"action" | "mutation", DefaultFunctionArgs>,
+  { logLevel, maxParallelism, name }: Partial<Config> & { name?: string }
 ) {
+  const [fnHandle, fnName] =
+    typeof fn === "string" && fn.startsWith("function://")
+      ? [fn, name ?? fn]
+      : [await createFunctionHandle(fn), name ?? getFunctionName(fn)];
   return {
-    fnHandle: await createFunctionHandle(fn),
-    fnName: getFunctionName(fn),
+    fnHandle,
+    fnName,
     config: {
       logLevel: logLevel ?? getDefaultLogLevel(),
       maxParallelism: maxParallelism ?? DEFAULT_MAX_PARALLELISM,
