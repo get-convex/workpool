@@ -3,11 +3,13 @@
 import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
-import componentSchema from "../../src/component/schema";
+import componentSchema from "../node_modules/@convex-dev/workpool/src/component/schema";
 import { api } from "./_generated/api";
 
 const modules = import.meta.glob("./**/*.ts");
-const componentModules = import.meta.glob("../../src/component/**/*.ts");
+const componentModules = import.meta.glob(
+  "../node_modules/@convex-dev/workpool/src/component/**/*.ts"
+);
 
 describe("workpool", () => {
   async function setupTest() {
