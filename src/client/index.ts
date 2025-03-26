@@ -121,7 +121,7 @@ export class Workpool {
         }
       : undefined;
     const id = await ctx.runMutation(this.component.lib.enqueue, {
-      ...(await defaultEnqueueArgs(fn, this.options)),
+      ...(await defaultEnqueueArgs(fn, options?.name, this.options)),
       fnArgs,
       fnType: "action",
       runAt: getRunAt(options),
@@ -165,7 +165,7 @@ export class Workpool {
         }
       : undefined;
     const id = await ctx.runMutation(this.component.lib.enqueue, {
-      ...(await defaultEnqueueArgs(fn, this.options)),
+      ...(await defaultEnqueueArgs(fn, options?.name, this.options)),
       fnArgs,
       fnType: "mutation",
       runAt: getRunAt(options),
@@ -302,7 +302,8 @@ async function defaultEnqueueArgs(
   fn:
     | FunctionReference<"action" | "mutation", FunctionVisibility>
     | FunctionHandle<"action" | "mutation", DefaultFunctionArgs>,
-  { logLevel, maxParallelism, name }: Partial<Config> & { name?: string }
+  name: string | undefined,
+  { logLevel, maxParallelism }: Partial<Config>
 ) {
   const [fnHandle, fnName] =
     typeof fn === "string" && fn.startsWith("function://")
