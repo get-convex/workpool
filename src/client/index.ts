@@ -9,11 +9,7 @@ import {
 } from "convex/server";
 import { v, VString } from "convex/values";
 import { Mounts } from "../component/_generated/api.js";
-import {
-  DEFAULT_LOG_LEVEL,
-  type LogLevel,
-  logLevel,
-} from "../component/logging.js";
+import { DEFAULT_LOG_LEVEL, type LogLevel } from "../component/logging.js";
 import {
   Config,
   DEFAULT_MAX_PARALLELISM,
@@ -73,6 +69,9 @@ export type WorkpoolOptions = {
    * scheduled.
    */
   logLevel?: LogLevel;
+} & WorkpoolRetryOptions;
+
+export type WorkpoolRetryOptions = {
   /** Default retry behavior for enqueued actions.
    * See {@link RetryBehavior}.
    */
