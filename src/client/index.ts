@@ -58,6 +58,32 @@ export type RetryOption = {
   retry?: boolean | RetryBehavior;
 };
 
+export type WorkpoolOptions = {
+  /** How many actions/mutations can be running at once within this pool.
+   * Min 1, Max 300.
+   */
+  maxParallelism?: number;
+  /** How much to log. This is updated on each call to `enqueue*`,
+   * `status`, or `cancel*`.
+   * Default is REPORT, which logs warnings, errors, and a periodic report.
+   * With INFO, you can also see events for started and completed work.
+   * Stats generated can be parsed by tools like
+   * [Axiom](https://axiom.co) for monitoring.
+   * With DEBUG, you can see timers and internal events for work being
+   * scheduled.
+   */
+  logLevel?: LogLevel;
+  /** Default retry behavior for enqueued actions.
+   * See {@link RetryBehavior}.
+   */
+  defaultRetryBehavior?: RetryBehavior;
+  /** Whether to retry actions that fail by default. Default: false.
+   * NOTE: Only enable this if your actions are idempotent.
+   * See the docs (README.md) for more details.
+   */
+  retryActionsByDefault?: boolean;
+};
+
 export class Workpool {
   /**
    * Initializes a Workpool.
@@ -68,35 +94,11 @@ export class Workpool {
    *
    * @param component - The component to use, like `components.workpool` from
    *   `./_generated/api.ts`.
-   * @param options - The options for the Workpool.
+   * @param options - The {@link WorkpoolOptions} for the Workpool.
    */
   constructor(
     private component: UseApi<Mounts>, // UseApi<api> for jump to definition
-    public options: {
-      /** How many actions/mutations can be running at once within this pool.
-       * Min 1, Max 300.
-       */
-      maxParallelism?: number;
-      /** How much to log. This is updated on each call to `enqueue*`,
-       * `status`, or `cancel*`.
-       * Default is REPORT, which logs warnings, errors, and a periodic report.
-       * With INFO, you can also see events for started and completed work.
-       * Stats generated can be parsed by tools like
-       * [Axiom](https://axiom.co) for monitoring.
-       * With DEBUG, you can see timers and internal events for work being
-       * scheduled.
-       */
-      logLevel?: LogLevel;
-      /** Default retry behavior for enqueued actions.
-       * See {@link RetryBehavior}.
-       */
-      defaultRetryBehavior?: RetryBehavior;
-      /** Whether to retry actions that fail by default. Default: false.
-       * NOTE: Only enable this if your actions are idempotent.
-       * See the docs (README.md) for more details.
-       */
-      retryActionsByDefault?: boolean;
-    }
+    public options: WorkpoolOptions
   ) {}
   /**
    * Enqueues an action to be run.
