@@ -40,6 +40,24 @@ export type WorkId = string & { __isWorkId: true };
 export const workIdValidator = v.string() as VString<WorkId>;
 export { workIdValidator as vWorkIdValidator };
 
+export type NameOption = {
+  /**
+   * The name of the function. By default, if you pass in api.foo.bar.baz,
+   * it will use "foo/bar:baz" as the name. If you pass in a function handle,
+   * it will use the function handle directly.
+   */
+  name?: string;
+};
+
+export type RetryOption = {
+  /** Whether to retry the action if it fails.
+   * If true, it will use the default retry behavior.
+   * If custom behavior is provided, it will retry using that behavior.
+   * If unset, it will use the Workpool's configured default.
+   */
+  retry?: boolean | RetryBehavior;
+};
+
 export class Workpool {
   /**
    * Initializes a Workpool.
@@ -94,21 +112,7 @@ export class Workpool {
     ctx: RunMutationCtx,
     fn: FunctionReference<"action", FunctionVisibility, Args, ReturnType>,
     fnArgs: Args,
-    options?: {
-      /** Whether to retry the action if it fails.
-       * If true, it will use the default retry behavior.
-       * If custom behavior is provided, it will retry using that behavior.
-       * If unset, it will use the Workpool's configured default.
-       */
-      retry?: boolean | RetryBehavior;
-      /**
-       * The name of the function. By default, if you pass in api.foo.bar.baz,
-       * it will use "foo/bar:baz" as the name. If you pass in a function handle,
-       * it will use the function handle directly.
-       */
-      name?: string;
-    } & CallbackOptions &
-      SchedulerOptions
+    options?: RetryOption & CallbackOptions & SchedulerOptions & NameOption
   ): Promise<WorkId> {
     const retryBehavior = getRetryBehavior(
       this.options.defaultRetryBehavior,
@@ -149,15 +153,7 @@ export class Workpool {
     ctx: RunMutationCtx,
     fn: FunctionReference<"mutation", FunctionVisibility, Args, ReturnType>,
     fnArgs: Args,
-    options?: CallbackOptions &
-      SchedulerOptions & {
-        /**
-         * The name of the function. By default, if you pass in api.foo.bar.baz,
-         * it will use "foo/bar:baz" as the name. If you pass in a function handle,
-         * it will use the function handle directly.
-         */
-        name?: string;
-      }
+    options?: CallbackOptions & SchedulerOptions & NameOption
   ): Promise<WorkId> {
     const onComplete: OnComplete | undefined = options?.onComplete
       ? {
@@ -179,15 +175,7 @@ export class Workpool {
     ctx: RunMutationCtx,
     fn: FunctionReference<"query", FunctionVisibility, Args, ReturnType>,
     fnArgs: Args,
-    options?: CallbackOptions &
-      SchedulerOptions & {
-        /**
-         * The name of the function. By default, if you pass in api.foo.bar.baz,
-         * it will use "foo/bar:baz" as the name. If you pass in a function handle,
-         * it will use the function handle directly.
-         */
-        name?: string;
-      }
+    options?: CallbackOptions & SchedulerOptions & NameOption
   ): Promise<WorkId> {
     const onComplete: OnComplete | undefined = options?.onComplete
       ? {
