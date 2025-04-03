@@ -73,7 +73,7 @@ export type Mounts = {
         fnArgs: any;
         fnHandle: string;
         fnName: string;
-        fnType: "action" | "mutation";
+        fnType: "action" | "mutation" | "query";
         onComplete?: { context?: any; fnHandle: string };
         retryBehavior?: {
           base: number;

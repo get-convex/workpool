@@ -173,6 +173,37 @@ export class Workpool {
     });
     return id as WorkId;
   }
+
+  async enqueueQuery<Args extends DefaultFunctionArgs, ReturnType>(
+    ctx: RunMutationCtx,
+    fn: FunctionReference<"mutation", FunctionVisibility, Args, ReturnType>,
+    fnArgs: Args,
+    options?: CallbackOptions &
+      SchedulerOptions & {
+        /**
+         * The name of the function. By default, if you pass in api.foo.bar.baz,
+         * it will use "foo/bar:baz" as the name. If you pass in a function handle,
+         * it will use the function handle directly.
+         */
+        name?: string;
+      }
+  ): Promise<WorkId> {
+    const onComplete: OnComplete | undefined = options?.onComplete
+      ? {
+          fnHandle: await createFunctionHandle(options.onComplete),
+          context: options.context,
+        }
+      : undefined;
+    const id = await ctx.runMutation(this.component.lib.enqueue, {
+      ...(await defaultEnqueueArgs(fn, options?.name, this.options)),
+      fnArgs,
+      fnType: "query",
+      runAt: getRunAt(options),
+      onComplete,
+    });
+    return id as WorkId;
+  }
+
   /**
    * Cancels a work item. If it's already started, it will be allowed to finish
    * but will not be retried.

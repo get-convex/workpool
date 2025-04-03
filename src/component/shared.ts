@@ -3,6 +3,12 @@ import { Infer } from "convex/values";
 import { v } from "convex/values";
 import { Logger, logLevel } from "./logging.js";
 
+export const fnType = v.union(
+  v.literal("action"),
+  v.literal("mutation"),
+  v.literal("query")
+);
+
 export const DEFAULT_MAX_PARALLELISM = 10;
 const SEGMENT_MS = 100;
 export const SECOND = 1000;

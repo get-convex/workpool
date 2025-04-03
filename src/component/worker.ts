@@ -15,14 +15,17 @@ export const runMutationWrapper = internalMutation({
     workId: v.id("work"),
     fnHandle: v.string(),
     fnArgs: v.any(),
+    fnType: v.union(v.literal("query"), v.literal("mutation")),
     logLevel,
     attempt: v.number(),
   },
   handler: async (ctx, { workId, attempt, ...args }) => {
     const console = createLogger(args.logLevel);
-    const fnHandle = args.fnHandle as FunctionHandle<"mutation">;
+    const fnHandle = args.fnHandle;
     try {
-      const returnValue = await ctx.runMutation(fnHandle, args.fnArgs);
+      const returnValue = await (args.fnType === "query"
+        ? ctx.runQuery(fnHandle as FunctionHandle<"query">, args.fnArgs)
+        : ctx.runMutation(fnHandle as FunctionHandle<"mutation">, args.fnArgs));
       // NOTE: we could run the `saveResult` handler here, or call `ctx.runMutation`,
       // but we want the mutation to be a separate transaction to reduce the window for OCCs.
       await ctx.scheduler.runAfter(0, internal.complete.complete, {

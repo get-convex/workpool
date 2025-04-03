@@ -71,7 +71,7 @@ export declare const components: {
           fnArgs: any;
           fnHandle: string;
           fnName: string;
-          fnType: "action" | "mutation";
+          fnType: "action" | "mutation" | "query";
           onComplete?: { context?: any; fnHandle: string };
           retryBehavior?: {
             base: number;
@@ -123,7 +123,7 @@ export declare const components: {
           fnArgs: any;
           fnHandle: string;
           fnName: string;
-          fnType: "action" | "mutation";
+          fnType: "action" | "mutation" | "query";
           onComplete?: { context?: any; fnHandle: string };
           retryBehavior?: {
             base: number;
@@ -175,7 +175,7 @@ export declare const components: {
           fnArgs: any;
           fnHandle: string;
           fnName: string;
-          fnType: "action" | "mutation";
+          fnType: "action" | "mutation" | "query";
           onComplete?: { context?: any; fnHandle: string };
           retryBehavior?: {
             base: number;

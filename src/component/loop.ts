@@ -552,8 +552,11 @@ async function beginWork(
   const args = { workId, fnHandle, fnArgs, logLevel, attempt };
   if (work.fnType === "action") {
     return ctx.scheduler.runAfter(0, internal.worker.runActionWrapper, args);
-  } else if (work.fnType === "mutation") {
-    return ctx.scheduler.runAfter(0, internal.worker.runMutationWrapper, args);
+  } else if (work.fnType === "mutation" || work.fnType === "query") {
+    return ctx.scheduler.runAfter(0, internal.worker.runMutationWrapper, {
+      ...args,
+      fnType: work.fnType,
+    });
   } else {
     throw new Error(`Unexpected fnType ${work.fnType}`);
   }

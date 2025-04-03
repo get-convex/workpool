@@ -1,6 +1,12 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import { config, onComplete, retryBehavior, runResult } from "./shared.js";
+import {
+  fnType,
+  config,
+  onComplete,
+  retryBehavior,
+  runResult,
+} from "./shared.js";
 
 // Represents a slice of time to process work.
 const segment = v.int64();
@@ -53,7 +59,7 @@ export default defineSchema({
 
   // Written on enqueue. Deleted by `complete` for success, failure, canceled.
   work: defineTable({
-    fnType: v.union(v.literal("action"), v.literal("mutation")),
+    fnType,
     fnHandle: v.string(),
     fnName: v.string(),
     fnArgs: v.any(),

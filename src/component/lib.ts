@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { api } from "./_generated/api.js";
+import { fnType } from "./shared.js";
 import { Id } from "./_generated/dataModel.js";
 import { mutation, MutationCtx, query } from "./_generated/server.js";
 import { kickMainLoop } from "./kick.js";
@@ -23,7 +24,7 @@ export const enqueue = mutation({
     fnHandle: v.string(),
     fnName: v.string(),
     fnArgs: v.any(),
-    fnType: v.union(v.literal("action"), v.literal("mutation")),
+    fnType,
     runAt: v.number(),
     // TODO: annotation?
     onComplete: v.optional(onComplete),
