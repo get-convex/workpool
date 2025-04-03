@@ -215,7 +215,7 @@ export class Workpool {
   async cancel(ctx: RunMutationCtx, id: WorkId): Promise<void> {
     await ctx.runMutation(this.component.lib.cancel, {
       id,
-      logLevel: this.options.logLevel ?? getDefaultLogLevel(),
+      logLevel: this.options.logLevel ?? DEFAULT_LOG_LEVEL,
     });
   }
   /**
@@ -225,7 +225,7 @@ export class Workpool {
    */
   async cancelAll(ctx: RunMutationCtx): Promise<void> {
     await ctx.runMutation(this.component.lib.cancelAll, {
-      logLevel: this.options.logLevel ?? getDefaultLogLevel(),
+      logLevel: this.options.logLevel ?? DEFAULT_LOG_LEVEL,
     });
   }
   /**
@@ -345,7 +345,7 @@ async function defaultEnqueueArgs(
     fnHandle,
     fnName,
     config: {
-      logLevel: logLevel ?? getDefaultLogLevel(),
+      logLevel: logLevel ?? DEFAULT_LOG_LEVEL,
       maxParallelism: maxParallelism ?? DEFAULT_MAX_PARALLELISM,
     },
   };
@@ -362,21 +362,4 @@ function getRunAt(options?: SchedulerOptions): number {
     return Date.now() + options.runAfter;
   }
   return Date.now();
-}
-
-function getDefaultLogLevel(): LogLevel {
-  if (process.env.WORKPOOL_LOG_LEVEL) {
-    if (
-      !logLevel.members
-        .map((m) => m.value as string)
-        .includes(process.env.WORKPOOL_LOG_LEVEL)
-    ) {
-      console.warn(
-        `Invalid log level (${process.env.WORKPOOL_LOG_LEVEL}), defaulting to "INFO"`
-      );
-    } else {
-      return process.env.WORKPOOL_LOG_LEVEL as LogLevel;
-    }
-  }
-  return DEFAULT_LOG_LEVEL;
 }
