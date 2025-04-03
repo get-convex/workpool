@@ -3,6 +3,7 @@ import {
   DefaultFunctionArgs,
   FunctionHandle,
   FunctionReference,
+  FunctionType,
   FunctionVisibility,
   getFunctionName,
 } from "convex/server";
@@ -176,7 +177,7 @@ export class Workpool {
 
   async enqueueQuery<Args extends DefaultFunctionArgs, ReturnType>(
     ctx: RunMutationCtx,
-    fn: FunctionReference<"mutation", FunctionVisibility, Args, ReturnType>,
+    fn: FunctionReference<"query", FunctionVisibility, Args, ReturnType>,
     fnArgs: Args,
     options?: CallbackOptions &
       SchedulerOptions & {
@@ -331,8 +332,8 @@ function getRetryBehavior(
 
 async function defaultEnqueueArgs(
   fn:
-    | FunctionReference<"action" | "mutation", FunctionVisibility>
-    | FunctionHandle<"action" | "mutation", DefaultFunctionArgs>,
+    | FunctionReference<FunctionType, FunctionVisibility>
+    | FunctionHandle<FunctionType, DefaultFunctionArgs>,
   name: string | undefined,
   { logLevel, maxParallelism }: Partial<Config>
 ) {
