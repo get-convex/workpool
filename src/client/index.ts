@@ -53,7 +53,7 @@ export class Workpool {
    */
   constructor(
     private component: UseApi<Mounts>, // UseApi<api> for jump to definition
-    private options: {
+    public options: {
       /** How many actions/mutations can be running at once within this pool.
        * Min 1, Max 300.
        */
