@@ -45,6 +45,18 @@ describe("workpool", () => {
     expect(await t.query(api.example.queryData, {})).toEqual([1]);
   });
 
+  test("enqueueQuery executes successfully", async () => {
+    const id = await t.mutation(api.example.enqueueOneQuery, { add: 42 });
+    expect(await t.query(api.example.status, { id })).toEqual({
+      state: "pending",
+      previousAttempts: 0,
+    });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await t.query(api.example.status, { id })).toEqual({
+      state: "finished",
+    });
+  });
+
   test("enqueueMany with low parallelism", async () => {
     // 20 is larger than max parallelism 3
     for (let i = 0; i < 20; i++) {
