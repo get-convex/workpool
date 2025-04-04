@@ -21,11 +21,13 @@ import {
   Status,
 } from "../component/shared.js";
 import { RunMutationCtx, RunQueryCtx, UseApi } from "./utils.js";
-export { resultValidator, type RunResult, type RetryBehavior };
-export { retryBehavior as vRetryBehavior } from "../component/shared.js";
+export { resultValidator, type RunResult, type RetryBehavior, type OnComplete };
+export {
+  retryBehavior as vRetryBehavior,
+  onComplete as vOnComplete,
+} from "../component/shared.js";
 export { logLevel as vLogLevel, type LogLevel } from "../component/logging.js";
 export { resultValidator as vResultValidator };
-export type { OnComplete };
 
 // Attempts will run with delay [0, 250, 500, 1000, 2000] (ms)
 export const DEFAULT_RETRY_BEHAVIOR: RetryBehavior = {
