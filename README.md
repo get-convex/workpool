@@ -88,12 +88,14 @@ const sendEmailReliablyWithRetries = mutation({
   args: {
     emailType: v.string(),
     userId: v.id("users"),
+    title: v.string(),
+    body: v.string(),
   },
   handler: async (ctx, args) => {
     // ... do other things in the transaction
     await pool.enqueueAction(ctx, internal.email.send, args, {
       onComplete: internal.email.emailSent,
-      context: { emailType, userId },
+      context: { emailType: args.emailType, userId: args.userId },
       retry: false, // don't retry this action, as we can't guarantee idempotency.
     });
   },
