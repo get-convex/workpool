@@ -100,7 +100,7 @@ export const emailSent = internalMutation({
   },
   handler: async (ctx, args) => {
     if (args.result.kind === "canceled") return;
-    await ctx.db.insert("userEmailLog", {
+    const emailLogId = await ctx.db.insert("userEmailLog", {
       userId: args.context.userId,
       emailType: args.context.emailType,
       result: args.result.kind === "success" ? args.result.returnValue : null,
@@ -110,7 +110,7 @@ export const emailSent = internalMutation({
       await pool.enqueueAction(ctx, internal.email.checkResendStatus, args, {
         retry: { maxAttempts: 10, initialBackoffMs: 250, base: 2 }, // custom
         onComplete: internal.email.handleEmailStatus,
-        context: args.context,
+        context: { emailLogId },
       });
     }
   },
