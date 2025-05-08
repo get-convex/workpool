@@ -27,7 +27,7 @@ const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 const RECOVERY_THRESHOLD_MS = 5 * MINUTE; // attempt to recover jobs this old.
-const RECOVERY_PERIOD_SEGMENTS = toSegment(1 * MINUTE); // how often to check.
+export const RECOVERY_PERIOD_SEGMENTS = toSegment(1 * MINUTE); // how often to check.
 const CURSOR_BUFFER_SEGMENTS = toSegment(2 * SECOND); // buffer for cursor updates.
 export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
   generation: 0n,
