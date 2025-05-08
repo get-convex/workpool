@@ -17,7 +17,7 @@ import {
  */
 export async function kickMainLoop(
   ctx: MutationCtx,
-  source: "enqueue" | "cancel" | "complete",
+  source: "enqueue" | "cancel" | "complete" | "kick",
   config?: Partial<Config>
 ): Promise<bigint> {
   const globals = await getOrUpdateGlobals(ctx, config);
@@ -75,7 +75,7 @@ export const forceKick = internalMutation({
   handler: async (ctx) => {
     const runStatus = await getOrCreateRunStatus(ctx);
     await ctx.db.delete(runStatus._id);
-    await kickMainLoop(ctx, "complete");
+    await kickMainLoop(ctx, "kick");
   },
 });
 
