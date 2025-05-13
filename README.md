@@ -84,12 +84,21 @@ const pool = new Workpool(components.emailWorkpool, {
   defaultRetryBehavior: { maxAttempts: 3, initialBackoffMs: 1000, base: 2 },
 });
 
-//...
-
-await pool.enqueueAction(ctx, internal.email.send, args, {
-  onComplete: internal.email.emailSent,
-  context: { emailType, userId },
-  retry: false, // don't retry this action, as we can't guarantee idempotency.
+const sendEmailReliablyWithRetries = mutation({
+  args: {
+    emailType: v.string(),
+    userId: v.id("users"),
+    title: v.string(),
+    body: v.string(),
+  },
+  handler: async (ctx, args) => {
+    // ... do other things in the transaction
+    await pool.enqueueAction(ctx, internal.email.send, args, {
+      onComplete: internal.email.emailSent,
+      context: { emailType: args.emailType, userId: args.userId },
+      retry: false, // don't retry this action, as we can't guarantee idempotency.
+    });
+  },
 });
 
 export const emailSent = internalMutation({
@@ -224,16 +233,34 @@ const pool = new Workpool(components.emailWorkpool, { maxParallelism: 10 });
 Then you have the following interface on `pool`:
 
 ```ts
-// Schedule functions to run in the background.
-const id = await pool.enqueueMutation(ctx, internal.foo.bar, args);
-// Or for an action:
-const id = await pool.enqueueAction(ctx, internal.foo.baz, args);
+import { vWorkIdValidator } from "@convex-dev/workpool";
 
-// Is it done yet? Did it succeed or fail?
-const status = await pool.status(id);
+export const myMutation = mutation({
+  args: {},
+  handler: async (ctx, args) => {
+    // Schedule functions to run in the background.
+    const id = await pool.enqueueMutation(ctx, internal.foo.bar, args);
+    // Or for an action:
+    const id = await pool.enqueueAction(ctx, internal.foo.baz, args);
+  },
+});
 
-// You can cancel the work, if it hasn't finished yet.
-await pool.cancel(id);
+export const getStatus = query({
+  args: { id: vWorkIdValidator },
+  handler: async (ctx, args) => {
+    // Is it done yet? Did it succeed or fail?
+    const status = await pool.status(args.id);
+    return status;
+  },
+});
+
+export const cancelWork = mutation({
+  args: { id: vWorkIdValidator },
+  handler: async (ctx, args) => {
+    // You can cancel the work, if it hasn't finished yet.
+    await pool.cancel(ctx, args.id);
+  },
+});
 ```
 
 See more example usage in [example.ts](./example/convex/example.ts).
