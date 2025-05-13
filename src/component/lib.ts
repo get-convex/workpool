@@ -18,6 +18,7 @@ import {
 import { recordEnqueued } from "./stats.js";
 
 const MAX_POSSIBLE_PARALLELISM = 100;
+const MAX_PARALLELISM_SOFT_LIMIT = 50;
 
 export const enqueue = mutation({
   args: {
@@ -35,9 +36,14 @@ export const enqueue = mutation({
   handler: async (ctx, { config, runAt, ...workArgs }) => {
     const console = createLogger(config.logLevel);
     if (config.maxParallelism > MAX_POSSIBLE_PARALLELISM) {
-      throw new Error(`maxParallelism must be <= ${MAX_POSSIBLE_PARALLELISM}`);
-    }
-    if (config.maxParallelism < 1) {
+      throw new Error(
+        `maxParallelism must be <= ${MAX_PARALLELISM_SOFT_LIMIT}`
+      );
+    } else if (config.maxParallelism > MAX_PARALLELISM_SOFT_LIMIT) {
+      console.warn(
+        `maxParallelism should be <= ${MAX_PARALLELISM_SOFT_LIMIT}, but is set to ${config.maxParallelism}. This will be an error in a future version.`
+      );
+    } else if (config.maxParallelism < 1) {
       throw new Error("maxParallelism must be >= 1");
     }
     runAt = boundScheduledTime(runAt, console);
