@@ -506,14 +506,20 @@ async function handleStart(
   // Schedule as many as needed to reach maxParallelism.
   const toSchedule = maxParallelism - state.running.length;
 
-  const pending = await ctx.db
-    .query("pendingStart")
-    .withIndex("segment", (q) =>
-      q
-        .gte("segment", state.segmentCursors.incoming - CURSOR_BUFFER_SEGMENTS)
-        .lte("segment", segment)
-    )
-    .take(toSchedule);
+  const pending =
+    toSchedule > 0
+      ? await ctx.db
+          .query("pendingStart")
+          .withIndex("segment", (q) =>
+            q
+              .gte(
+                "segment",
+                state.segmentCursors.incoming - CURSOR_BUFFER_SEGMENTS
+              )
+              .lte("segment", segment)
+          )
+          .take(toSchedule)
+      : [];
 
   state.segmentCursors.incoming = pending.at(-1)?.segment ?? segment;
   console.debug(`[main] scheduling ${pending.length} pending work`);
