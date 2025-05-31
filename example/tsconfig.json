@@ -18,7 +18,10 @@
      * to compile TypeScript because differences between tsconfig.json files can
      * cause the code to be compiled differently.
      */
-    "customConditions": ["@convex-dev/component-source"]
+    "customConditions": ["@convex-dev/component-source"],
+    "paths": {
+      "@/convex/*": ["./convex/*"]
+    }
   },
   "include": ["./src", "vite.config.ts"]
 }
