@@ -17,8 +17,10 @@ import {
   DEFAULT_MAX_PARALLELISM,
   getCurrentSegment,
   getNextSegment,
+  HOUR,
   toSegment,
 } from "./shared";
+import { DEFAULT_LOG_LEVEL } from "./logging";
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -32,9 +34,17 @@ describe("loop", () => {
 
   async function setMaxParallelism(maxParallelism: number) {
     await t.run(async (ctx) => {
-      await ctx.db.patch((await ctx.db.query("globals").unique())!._id, {
-        maxParallelism,
-      });
+      const globals = await ctx.db.query("globals").unique();
+      if (!globals) {
+        await ctx.db.insert("globals", {
+          logLevel: DEFAULT_LOG_LEVEL,
+          maxParallelism,
+        });
+      } else {
+        await ctx.db.patch(globals._id, {
+          maxParallelism,
+        });
+      }
     });
   }
 
@@ -574,20 +584,7 @@ describe("loop", () => {
     it("should handle generation mismatch", async () => {
       // Setup state with different generation
       await t.run(async (ctx) => {
-        await ctx.db.insert("internalState", {
-          generation: 2n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: 0n,
-          report: {
-            completed: 0,
-            succeeded: 0,
-            failed: 0,
-            retries: 0,
-            canceled: 0,
-            lastReportTs: Date.now(),
-          },
-          running: [],
-        });
+        await insertInternalState(ctx, { generation: 2n });
       });
 
       // Call main with mismatched generation
@@ -606,25 +603,8 @@ describe("loop", () => {
         const scheduledId = await makeDummyScheduledFunction(ctx, workId);
 
         // Create internal state
-        await ctx.db.insert("internalState", {
-          generation: 1n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: 0n,
-          report: {
-            completed: 0,
-            succeeded: 0,
-            failed: 0,
-            retries: 0,
-            canceled: 0,
-            lastReportTs: Date.now(),
-          },
-          running: [
-            {
-              workId,
-              scheduledId,
-              started: 900000,
-            },
-          ],
+        await insertInternalState(ctx, {
+          running: [{ workId, scheduledId, started: 900000 }],
         });
 
         // Create pending completion
@@ -672,18 +652,7 @@ describe("loop", () => {
         const scheduledId = await makeDummyScheduledFunction(ctx, workId);
 
         // Create internal state
-        await ctx.db.insert("internalState", {
-          generation: 1n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: 0n,
-          report: {
-            completed: 0,
-            succeeded: 0,
-            failed: 0,
-            retries: 0,
-            canceled: 0,
-            lastReportTs: Date.now(),
-          },
+        await insertInternalState(ctx, {
           running: [
             {
               workId,
@@ -743,25 +712,8 @@ describe("loop", () => {
         );
 
         // Create internal state
-        await ctx.db.insert("internalState", {
-          generation: 1n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: 0n,
-          report: {
-            completed: 0,
-            succeeded: 0,
-            failed: 0,
-            retries: 0,
-            canceled: 0,
-            lastReportTs: Date.now(),
-          },
-          running: [
-            {
-              workId: runningWorkId,
-              scheduledId,
-              started: 900000,
-            },
-          ],
+        await insertInternalState(ctx, {
+          running: [{ workId: runningWorkId, scheduledId, started: 900000 }],
         });
 
         // Create work
@@ -816,20 +768,7 @@ describe("loop", () => {
       // Setup state with pending start items
       const workId = await t.run<Id<"work">>(async (ctx) => {
         // Create internal state
-        await ctx.db.insert("internalState", {
-          generation: 1n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: 0n,
-          report: {
-            completed: 0,
-            succeeded: 0,
-            failed: 0,
-            retries: 0,
-            canceled: 0,
-            lastReportTs: Date.now(),
-          },
-          running: [],
-        });
+        await insertInternalState(ctx);
 
         // Create work
         const workId = await makeDummyWork(ctx);
@@ -872,25 +811,9 @@ describe("loop", () => {
         const scheduledId = await makeDummyScheduledFunction(ctx, workId);
 
         // Create internal state with old job
-        await ctx.db.insert("internalState", {
-          generation: 1n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
+        await insertInternalState(ctx, {
           lastRecovery: 0n,
-          report: {
-            completed: 0,
-            succeeded: 0,
-            failed: 0,
-            retries: 0,
-            canceled: 0,
-            lastReportTs: Date.now(),
-          },
-          running: [
-            {
-              workId,
-              scheduledId,
-              started: oldTime,
-            },
-          ],
+          running: [{ workId, scheduledId, started: oldTime }],
         });
       });
 
@@ -918,20 +841,7 @@ describe("loop", () => {
     it("should handle generation mismatch", async () => {
       // Setup state with different generation
       await t.run(async (ctx) => {
-        await ctx.db.insert("internalState", {
-          generation: 2n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: 0n,
-          report: {
-            completed: 0,
-            succeeded: 0,
-            failed: 0,
-            retries: 0,
-            canceled: 0,
-            lastReportTs: Date.now(),
-          },
-          running: [],
-        });
+        await insertInternalState(ctx, { generation: 2n });
       });
 
       // Call updateRunStatus with mismatched generation
@@ -950,20 +860,7 @@ describe("loop", () => {
         const workId = await makeDummyWork(ctx);
 
         // Create internal state
-        await ctx.db.insert("internalState", {
-          generation: 1n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: 0n,
-          report: {
-            completed: 0,
-            succeeded: 0,
-            failed: 0,
-            retries: 0,
-            canceled: 0,
-            lastReportTs: Date.now(),
-          },
-          running: [],
-        });
+        await insertInternalState(ctx, {});
 
         // Create run status
         await ctx.db.insert("runStatus", {
@@ -998,20 +895,7 @@ describe("loop", () => {
       // Setup state with no work
       await t.run(async (ctx) => {
         // Create internal state with no running jobs
-        await ctx.db.insert("internalState", {
-          generation: 1n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: 0n,
-          report: {
-            completed: 0,
-            succeeded: 0,
-            failed: 0,
-            retries: 0,
-            canceled: 0,
-            lastReportTs: Date.now(),
-          },
-          running: [],
-        });
+        await insertInternalState(ctx, {});
 
         // Create run status in running state
         await ctx.db.insert("runStatus", {
@@ -1056,18 +940,7 @@ describe("loop", () => {
         );
 
         // Create internal state with max running jobs
-        await ctx.db.insert("internalState", {
-          generation: 1n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: now,
-          report: {
-            completed: 0,
-            succeeded: 0,
-            failed: 0,
-            retries: 0,
-            canceled: 0,
-            lastReportTs: Date.now(),
-          },
+        await insertInternalState(ctx, {
           running: runningJobs,
         });
 
