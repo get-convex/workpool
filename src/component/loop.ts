@@ -28,7 +28,7 @@ const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 const RECOVERY_THRESHOLD_MS = 5 * MINUTE; // attempt to recover jobs this old.
 export const RECOVERY_PERIOD_SEGMENTS = toSegment(1 * MINUTE); // how often to check.
-const CURSOR_BUFFER_SEGMENTS = toSegment(2 * SECOND); // buffer for cursor updates.
+const CURSOR_BUFFER_SEGMENTS = toSegment(30 * SECOND); // buffer for cursor updates.
 export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
   generation: 0n,
   segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
