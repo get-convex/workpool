@@ -94,7 +94,7 @@ export async function generateReport(
     });
   } else {
     await ctx.scheduler.runAfter(0, internal.stats.calculateBacklogAndReport, {
-      startSegment: state.segmentCursors.incoming,
+      startSegment: 0n,
       endSegment: currentSegment,
       cursor: pendingStart.continueCursor,
       report: state.report,
