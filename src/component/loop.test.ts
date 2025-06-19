@@ -973,6 +973,59 @@ describe("loop", () => {
         expect(runStatus!.state.saturated).toBe(true);
       });
     });
+
+    it("should reset cursors correctly when there's old work detected", async () => {
+      // Setup state with old work
+      const now = getCurrentSegment();
+      await t.run(async (ctx) => {
+        // Create internal state with old work
+        await insertInternalState(ctx, {
+          segmentCursors: {
+            incoming: now - 1n,
+            completion: now - 1n,
+            cancelation: now - 1n,
+          },
+        });
+      });
+
+      // Insert very old work
+      await t.run(async (ctx) => {
+        const workId = await makeDummyWork(ctx);
+        await ctx.db.insert("pendingStart", {
+          workId,
+          segment: 0n,
+        });
+      });
+
+      // Call updateRunStatus
+      await t.mutation(internal.loop.updateRunStatus, {
+        generation: 1n,
+        segment: now,
+      });
+
+      // Verify cursors were reset
+      await t.run(async (ctx) => {
+        const state = await ctx.db.query("internalState").unique();
+        expect(state).toBeDefined();
+        expect(state!.segmentCursors.incoming).toBe(0n);
+      });
+
+      // Set maxParallelism to 0 so it doesn't schedule anything / make progress
+      await setMaxParallelism(0);
+
+      // Run main
+      await t.mutation(internal.loop.main, {
+        generation: 1n,
+        segment: now,
+      });
+
+      // Verify start cursor weren't updated
+      await t.run(async (ctx) => {
+        const state = await ctx.db.query("internalState").unique();
+        expect(state).toBeDefined();
+        expect(state!.segmentCursors.incoming).toBe(0n);
+      });
+    });
   });
 
   describe("complete function", () => {

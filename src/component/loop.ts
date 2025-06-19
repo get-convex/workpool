@@ -521,7 +521,14 @@ async function handleStart(
           .take(toSchedule)
       : [];
 
-  state.segmentCursors.incoming = pending.at(-1)?.segment ?? segment;
+  if (pending) {
+    if (pending.length > 0) {
+      state.segmentCursors.incoming = pending.at(-1)!.segment;
+    } else if (toSchedule > 0) {
+      // We have no more pending work, update to now
+      state.segmentCursors.incoming = segment;
+    }
+  }
   console.debug(`[main] scheduling ${pending.length} pending work`);
   // Start new work.
   state.running.push(
