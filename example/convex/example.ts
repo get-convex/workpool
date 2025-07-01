@@ -11,6 +11,7 @@ import {
   vWorkIdValidator,
   Workpool,
   vResultValidator,
+  vOnCompleteValidator,
 } from "@convex-dev/workpool";
 import { v } from "convex/values";
 import { createLogger } from "../../src/component/logging";
@@ -246,12 +247,9 @@ export const myAction = internalAction({
   },
 });
 
-export const onComplete = internalMutation({
-  args: {
-    workId: vWorkIdValidator,
-    context: v.number(),
-    result: vResultValidator,
-  },
+// A convenient way to define the onComplete mutation.
+export const onComplete = bigPool.defineOnComplete({
+  context: v.number(),
   handler: async (ctx, args) => {
     console.info("total", (Date.now() - args.context) / 1000);
   },
@@ -265,12 +263,9 @@ export const noop = internalMutation({
   },
 });
 
+// Another way to define the onComplete mutation.
 export const complete = internalMutation({
-  args: {
-    workId: vWorkIdValidator,
-    context: v.number(),
-    result: vResultValidator,
-  },
+  args: vOnCompleteValidator(v.number()),
   handler: async (ctx, args) => {
     if (args.result.kind === "success") {
       console.warn("onComplete delay", Date.now() - args.result.returnValue);
