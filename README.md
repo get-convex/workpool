@@ -102,21 +102,19 @@ const sendEmailReliablyWithRetries = mutation({
 });
 
 export const emailSent = internalMutation({
-  args: {
-    workId: workIdValidator,
-    result: resultValidator,
-    context: v.object({ emailType: v.string(), userId: v.id("users") }),
-  },
-  handler: async (ctx, args) => {
-    if (args.result.kind === "canceled") return;
+  args: vOnCompleteValidator(
+    v.object({ emailType: v.string(), userId: v.id("users") })
+  ),
+  handler: async (ctx, { workId, context, result }) => {
+    if (result.kind === "canceled") return;
     const emailLogId = await ctx.db.insert("userEmailLog", {
-      userId: args.context.userId,
-      emailType: args.context.emailType,
-      result: args.result.kind === "success" ? args.result.returnValue : null,
-      error: args.result.kind === "failed" ? args.result.error : null,
+      userId: context.userId,
+      emailType: context.emailType,
+      result: result.kind === "success" ? result.returnValue : null,
+      error: result.kind === "failed" ? result.error : null,
     });
-    if (args.result.kind === "failed") {
-      await pool.enqueueAction(ctx, internal.email.checkResendStatus, args, {
+    if (result.kind === "failed") {
+      await pool.enqueueAction(ctx, internal.email.checkResendStatus, context, {
         retry: { maxAttempts: 10, initialBackoffMs: 250, base: 2 }, // custom
         onComplete: internal.email.handleEmailStatus,
         context: { emailLogId },
@@ -130,6 +128,17 @@ Note: the `onComplete` handler runs in a different transaction than the job
 enqueued. If you want to run it in the same transaction, you can do that work
 at the end of the enqueued function, before returning. This is generally faster
 and more typesafe when handling the "success" case.
+
+You can also use this equivalent helper to define an `onComplete` mutation.
+Note the `DataModel` type parameter, if you want ctx.db to be type safe.
+```ts
+export const emailSent = pool.defineOnComplete<DataModel>({
+  context: v.object({ emailType: v.string(), userId: v.id("users") }),
+  handler: async (ctx, { workId, context, result }) => {
+    // ...
+  },
+});
+```
 
 #### Idempotency?
 
