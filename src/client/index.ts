@@ -5,85 +5,51 @@ import {
   FunctionReference,
   FunctionType,
   FunctionVisibility,
+  GenericDataModel,
+  GenericMutationCtx,
   getFunctionName,
+  internalMutationGeneric,
+  RegisteredMutation,
 } from "convex/server";
-import { v, VString } from "convex/values";
+import { Infer, v, Validator, VAny, VString } from "convex/values";
 import { Mounts } from "../component/_generated/api.js";
 import { DEFAULT_LOG_LEVEL, type LogLevel } from "../component/logging.js";
 import {
   Config,
   DEFAULT_MAX_PARALLELISM,
   OnComplete,
-  runResult as resultValidator,
+  vResultValidator,
   type RetryBehavior,
   RunResult,
   OnCompleteArgs as SharedOnCompleteArgs,
   Status,
 } from "../component/shared.js";
 import { RunMutationCtx, RunQueryCtx, UseApi } from "./utils.js";
-export { resultValidator, type RunResult, type RetryBehavior, type OnComplete };
+export {
+  vResultValidator,
+  type RunResult,
+  type RetryBehavior,
+  type OnComplete,
+};
 export {
   retryBehavior as vRetryBehavior,
   onComplete as vOnComplete,
 } from "../component/shared.js";
 export { logLevel as vLogLevel, type LogLevel } from "../component/logging.js";
-export { resultValidator as vResultValidator };
+export type WorkId = string & { __isWorkId: true };
+export const vWorkIdValidator = v.string() as VString<WorkId>;
+export {
+  /** @deprecated Use `vWorkIdValidator` instead. */
+  vWorkIdValidator as workIdValidator,
+  /** @deprecated Use `vResultValidator` instead. */
+  vResultValidator as resultValidator,
+};
 
 // Attempts will run with delay [0, 250, 500, 1000, 2000] (ms)
 export const DEFAULT_RETRY_BEHAVIOR: RetryBehavior = {
   maxAttempts: 5,
   initialBackoffMs: 250,
   base: 2,
-};
-export type WorkId = string & { __isWorkId: true };
-export const workIdValidator = v.string() as VString<WorkId>;
-export { workIdValidator as vWorkIdValidator };
-
-export type NameOption = {
-  /**
-   * The name of the function. By default, if you pass in api.foo.bar.baz,
-   * it will use "foo/bar:baz" as the name. If you pass in a function handle,
-   * it will use the function handle directly.
-   */
-  name?: string;
-};
-
-export type RetryOption = {
-  /** Whether to retry the action if it fails.
-   * If true, it will use the default retry behavior.
-   * If custom behavior is provided, it will retry using that behavior.
-   * If unset, it will use the Workpool's configured default.
-   */
-  retry?: boolean | RetryBehavior;
-};
-
-export type WorkpoolOptions = {
-  /** How many actions/mutations can be running at once within this pool.
-   * Min 1, Max 300.
-   */
-  maxParallelism?: number;
-  /** How much to log. This is updated on each call to `enqueue*`,
-   * `status`, or `cancel*`.
-   * Default is REPORT, which logs warnings, errors, and a periodic report.
-   * With INFO, you can also see events for started and completed work.
-   * Stats generated can be parsed by tools like
-   * [Axiom](https://axiom.co) for monitoring.
-   * With DEBUG, you can see timers and internal events for work being
-   * scheduled.
-   */
-  logLevel?: LogLevel;
-} & WorkpoolRetryOptions;
-
-export type WorkpoolRetryOptions = {
-  /** Default retry behavior for enqueued actions.
-   * See {@link RetryBehavior}.
-   */
-  defaultRetryBehavior?: RetryBehavior;
-  /** Whether to retry actions that fail by default. Default: false.
-   * NOTE: Only enable this if your actions are idempotent.
-   * See the docs (README.md) for more details.
-   */
-  retryActionsByDefault?: boolean;
 };
 
 export class Workpool {
@@ -233,8 +199,122 @@ export class Workpool {
   async status(ctx: RunQueryCtx, id: WorkId): Promise<Status> {
     return ctx.runQuery(this.component.lib.status, { id });
   }
+
+  /**
+   * Defines a mutation that will be run after a work item completes.
+   * You can pass this to a call to enqueue* like so:
+   * ```ts
+   * export const myOnComplete = workpool.defineOnComplete({
+   *   context: v.literal("myContextValue"), // optional
+   *   handler: async (ctx, {workId, context, result}) => {
+   *     // ... do something with the result
+   *   },
+   * });
+   *
+   * // in some other function:
+   * const workId = await workpool.enqueueAction(ctx, internal.foo.bar, {
+   *   // ... args to action
+   * }, {
+   *   onComplete: internal.foo.myOnComplete,
+   * });
+   * ```
+   */
+  defineOnComplete<
+    DataModel extends GenericDataModel,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    V extends Validator<any, "required", any> = VAny,
+  >({
+    context,
+    handler,
+  }: {
+    context?: V;
+    handler: (
+      ctx: GenericMutationCtx<DataModel>,
+      args: {
+        workId: WorkId;
+        context: Infer<V>;
+        result: RunResult;
+      }
+    ) => Promise<void>;
+  }): RegisteredMutation<"internal", OnCompleteArgs, null> {
+    return internalMutationGeneric({
+      args: vOnCompleteValidator(context),
+      handler,
+    });
+  }
 }
 
+/**
+ * Returns a validator to use for the onComplete mutation.
+ * To be used like:
+ * ```ts
+ * export const myOnComplete = internalMutation({
+ *   args: vOnCompleteValidator(v.string()),
+ *   handler: async (ctx, {workId, context, result}) => {
+ *     // context has been validated as a string
+ *     // ... do something with the result
+ *   },
+ * });
+ * @param context - The context validator. If not provided, it will be `v.any()`.
+ * @returns The validator for the onComplete mutation.
+ */
+export function vOnCompleteValidator<
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  V extends Validator<any, "required", any> = VAny,
+>(context?: V) {
+  return v.object({
+    workId: vWorkIdValidator,
+    context: context ?? v.any(),
+    result: vResultValidator,
+  });
+}
+
+export type NameOption = {
+  /**
+   * The name of the function. By default, if you pass in api.foo.bar.baz,
+   * it will use "foo/bar:baz" as the name. If you pass in a function handle,
+   * it will use the function handle directly.
+   */
+  name?: string;
+};
+
+export type RetryOption = {
+  /** Whether to retry the action if it fails.
+   * If true, it will use the default retry behavior.
+   * If custom behavior is provided, it will retry using that behavior.
+   * If unset, it will use the Workpool's configured default.
+   */
+  retry?: boolean | RetryBehavior;
+};
+
+export type WorkpoolOptions = {
+  /** How many actions/mutations can be running at once within this pool.
+   * Min 1, Max 300.
+   */
+  maxParallelism?: number;
+  /** How much to log. This is updated on each call to `enqueue*`,
+   * `status`, or `cancel*`.
+   * Default is REPORT, which logs warnings, errors, and a periodic report.
+   * With INFO, you can also see events for started and completed work.
+   * Stats generated can be parsed by tools like
+   * [Axiom](https://axiom.co) for monitoring.
+   * With DEBUG, you can see timers and internal events for work being
+   * scheduled.
+   */
+  logLevel?: LogLevel;
+} & WorkpoolRetryOptions;
+
+export type WorkpoolRetryOptions = {
+  /** Default retry behavior for enqueued actions.
+   * See {@link RetryBehavior}.
+   */
+  defaultRetryBehavior?: RetryBehavior;
+  /** Whether to retry actions that fail by default. Default: false.
+   * NOTE: Only enable this if your actions are idempotent.
+   * See the docs (README.md) for more details.
+   */
+  retryActionsByDefault?: boolean;
+};
 export type SchedulerOptions =
   | {
       /**
@@ -259,12 +339,18 @@ export type CallbackOptions = {
    * The context type is for your use, feel free to provide a validator for it.
    * e.g.
    * ```ts
+   * export const completion = workpool.defineOnComplete({
+   *   context: v.string(),
+   *   handler: async (ctx, {workId, context, result}) => {
+   *     // context has been validated as a string
+   *     // ... do something with the result
+   *   },
+   * });
+   * ```
+   * or more manually:
+   * ```ts
    * export const completion = internalMutation({
-   *  args: {
-   *    workId: workIdValidator,
-   *    context: v.any(),
-   *    result: resultValidator,
-   *  },
+   *  args: vOnCompleteValidator(v.string()),
    *  handler: async (ctx, args) => {
    *    console.log(args.result, "Got Context back -> ", args.context, Date.now() - args.context);
    *  },

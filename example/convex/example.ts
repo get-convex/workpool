@@ -8,9 +8,9 @@ import {
 import { api, components, internal } from "./_generated/api";
 import {
   WorkId,
-  workIdValidator,
+  vWorkIdValidator,
   Workpool,
-  resultValidator,
+  vResultValidator,
 } from "@convex-dev/workpool";
 import { v } from "convex/values";
 import { createLogger } from "../../src/component/logging";
@@ -87,14 +87,14 @@ export const enqueueOneQuery = mutation({
 });
 
 export const cancelMutation = mutation({
-  args: { id: workIdValidator },
+  args: { id: vWorkIdValidator },
   handler: async (ctx, { id }) => {
     await smallPool.cancel(ctx, id);
   },
 });
 
 export const status = query({
-  args: { id: workIdValidator },
+  args: { id: vWorkIdValidator },
   handler: async (ctx, { id }) => {
     return await smallPool.status(ctx, id);
   },
@@ -248,9 +248,9 @@ export const myAction = internalAction({
 
 export const onComplete = internalMutation({
   args: {
-    workId: workIdValidator,
+    workId: vWorkIdValidator,
     context: v.number(),
-    result: resultValidator,
+    result: vResultValidator,
   },
   handler: async (ctx, args) => {
     console.info("total", (Date.now() - args.context) / 1000);
@@ -267,9 +267,9 @@ export const noop = internalMutation({
 
 export const complete = internalMutation({
   args: {
-    workId: workIdValidator,
+    workId: vWorkIdValidator,
     context: v.number(),
-    result: resultValidator,
+    result: vResultValidator,
   },
   handler: async (ctx, args) => {
     if (args.result.kind === "success") {
@@ -327,7 +327,7 @@ export const runPaced = internalAction({
 
 export const cancel = internalAction({
   args: {
-    id: v.optional(workIdValidator),
+    id: v.optional(vWorkIdValidator),
   },
   handler: async (ctx, args) => {
     console.debug("Canceling", args.id);
