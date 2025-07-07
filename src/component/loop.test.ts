@@ -17,7 +17,6 @@ import {
   DEFAULT_MAX_PARALLELISM,
   getCurrentSegment,
   getNextSegment,
-  HOUR,
   toSegment,
 } from "./shared";
 import { DEFAULT_LOG_LEVEL } from "./logging";

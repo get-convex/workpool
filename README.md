@@ -131,6 +131,7 @@ and more typesafe when handling the "success" case.
 
 You can also use this equivalent helper to define an `onComplete` mutation.
 Note the `DataModel` type parameter, if you want ctx.db to be type safe.
+
 ```ts
 export const emailSent = pool.defineOnComplete<DataModel>({
   context: v.object({ emailType: v.string(), userId: v.id("users") }),
