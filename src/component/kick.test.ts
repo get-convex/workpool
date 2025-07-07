@@ -9,7 +9,6 @@ import {
   vi,
 } from "vitest";
 import { internal } from "./_generated/api";
-import { Id } from "./_generated/dataModel.js";
 import { kickMainLoop } from "./kick.js";
 import { DEFAULT_LOG_LEVEL } from "./logging.js";
 import schema from "./schema.js";
