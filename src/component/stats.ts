@@ -15,8 +15,6 @@ import { internal } from "./_generated/api.js";
 import schema from "./schema.js";
 import { paginator } from "convex-helpers/server/pagination";
 
-const BACKLOG_BATCH_SIZE = 100;
-
 /**
  * Record stats about work execution. Intended to be queried by Axiom or Datadog.
  * See the [README](https://github.com/get-convex/workpool) for example queries.
@@ -114,36 +112,15 @@ export const calculateBacklogAndReport = internalMutation({
     logLevel,
   },
   handler: async (ctx, args) => {
-    const pendingStart = await paginator(ctx.db, schema)
-      .query("pendingStart")
-      .withIndex("segment", (q) =>
-        q.gte("segment", args.startSegment).lt("segment", args.endSegment)
-      )
-      .paginate({
-        numItems: BACKLOG_BATCH_SIZE,
-        cursor: args.cursor,
-      });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pendingStart = await(ctx.db.query("pendingStart") as any).count();
+
     const console = createLogger(args.logLevel);
-    if (pendingStart.isDone) {
-      recordReport(console, {
-        ...args.report,
-        running: args.running,
-        backlog: pendingStart.page.length,
-      });
-    } else {
-      await ctx.scheduler.runAfter(
-        0,
-        internal.stats.calculateBacklogAndReport,
-        {
-          startSegment: args.startSegment,
-          endSegment: args.endSegment,
-          cursor: pendingStart.continueCursor,
-          report: args.report,
-          running: args.running,
-          logLevel: args.logLevel,
-        }
-      );
-    }
+    recordReport(console, {
+      ...args.report,
+      running: args.running,
+      backlog: pendingStart,
+    });
   },
 });
 

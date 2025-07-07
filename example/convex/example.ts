@@ -10,7 +10,6 @@ import {
   WorkId,
   vWorkIdValidator,
   Workpool,
-  vResultValidator,
   vOnCompleteValidator,
 } from "@convex-dev/workpool";
 import { v } from "convex/values";
