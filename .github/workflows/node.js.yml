@@ -16,3 +16,4 @@ jobs:
       - run: cd example && npm i && cd ..
       - run: npm run lint
       - run: npm test
+      - run: npx pkg-pr-new publish
