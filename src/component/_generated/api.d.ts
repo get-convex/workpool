@@ -10,6 +10,7 @@
 
 import type * as complete from "../complete.js";
 import type * as crons from "../crons.js";
+import type * as danger from "../danger.js";
 import type * as kick from "../kick.js";
 import type * as lib from "../lib.js";
 import type * as logging from "../logging.js";
@@ -36,6 +37,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   complete: typeof complete;
   crons: typeof crons;
+  danger: typeof danger;
   kick: typeof kick;
   lib: typeof lib;
   logging: typeof logging;
