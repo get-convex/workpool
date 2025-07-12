@@ -280,6 +280,7 @@ See more example usage in [example.ts](./example/convex/example.ts).
 Check out the [docstrings](./src/client/index.ts), but notable options include:
 
 - `maxParallelism`: How many actions/mutations can run at once within this pool.
+  Avoid exceeding 100 on Pro, 20 on the free plan, across all workpools and workflows.
 - `retryActionsByDefault`: Whether to retry actions that fail by default.
 - `defaultRetryBehavior`: The default retry behavior for enqueued actions.
 
