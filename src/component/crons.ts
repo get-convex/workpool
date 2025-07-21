@@ -61,6 +61,6 @@ export const recover = internalMutation({
   },
 });
 
-crons.interval("recover", { minutes: 5 }, internal.crons.recover);
+crons.interval("recover", { minutes: 30 }, internal.crons.recover);
 
 export default crons;

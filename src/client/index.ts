@@ -289,7 +289,7 @@ export type RetryOption = {
 
 export type WorkpoolOptions = {
   /** How many actions/mutations can be running at once within this pool.
-   * Min 1, Max 300.
+   * Min 1, Suggested max: 100 on Pro, 20 on the free plan.
    */
   maxParallelism?: number;
   /** How much to log. This is updated on each call to `enqueue*`,
