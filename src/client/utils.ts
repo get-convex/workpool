@@ -1,20 +1,24 @@
 import {
   Expand,
+  FunctionArgs,
   FunctionReference,
-  GenericMutationCtx,
-  GenericQueryCtx,
+  FunctionReturnType,
 } from "convex/server";
 import { GenericId } from "convex/values";
-
-import { GenericDataModel } from "convex/server";
 
 /* Type utils follow */
 
 export type RunQueryCtx = {
-  runQuery: GenericQueryCtx<GenericDataModel>["runQuery"];
+  runQuery: <Query extends FunctionReference<"query", "internal">>(
+    query: Query,
+    args: FunctionArgs<Query>
+  ) => Promise<FunctionReturnType<Query>>;
 };
-export type RunMutationCtx = {
-  runMutation: GenericMutationCtx<GenericDataModel>["runMutation"];
+export type RunMutationCtx = RunQueryCtx & {
+  runMutation: <Mutation extends FunctionReference<"mutation", "internal">>(
+    mutation: Mutation,
+    args: FunctionArgs<Mutation>
+  ) => Promise<FunctionReturnType<Mutation>>;
 };
 
 export type OpaqueIds<T> =
