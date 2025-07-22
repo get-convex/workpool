@@ -3,6 +3,10 @@ import {
   FunctionArgs,
   FunctionReference,
   FunctionReturnType,
+  FunctionType,
+  FunctionVisibility,
+  getFunctionAddress,
+  getFunctionName,
 } from "convex/server";
 import { GenericId } from "convex/values";
 
@@ -47,3 +51,15 @@ export type UseApi<API> = Expand<{
       >
     : UseApi<API[mod]>;
 }>;
+
+export function safeFunctionName(
+  f: FunctionReference<FunctionType, FunctionVisibility>
+) {
+  const address = getFunctionAddress(f);
+  return (
+    address.name ||
+    address.reference ||
+    address.functionHandle ||
+    getFunctionName(f)
+  );
+}

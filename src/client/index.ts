@@ -7,7 +7,6 @@ import {
   FunctionVisibility,
   GenericDataModel,
   GenericMutationCtx,
-  getFunctionName,
   internalMutationGeneric,
   RegisteredMutation,
 } from "convex/server";
@@ -24,7 +23,12 @@ import {
   OnCompleteArgs as SharedOnCompleteArgs,
   Status,
 } from "../component/shared.js";
-import { RunMutationCtx, RunQueryCtx, UseApi } from "./utils.js";
+import {
+  RunMutationCtx,
+  RunQueryCtx,
+  safeFunctionName,
+  UseApi,
+} from "./utils.js";
 export {
   vResultValidator,
   type RunResult,
@@ -418,7 +422,7 @@ async function defaultEnqueueArgs(
   const [fnHandle, fnName] =
     typeof fn === "string" && fn.startsWith("function://")
       ? [fn, name ?? fn]
-      : [await createFunctionHandle(fn), name ?? getFunctionName(fn)];
+      : [await createFunctionHandle(fn), name ?? safeFunctionName(fn)];
   return {
     fnHandle,
     fnName,
