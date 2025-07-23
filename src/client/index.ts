@@ -29,16 +29,8 @@ import {
   safeFunctionName,
   UseApi,
 } from "./utils.js";
-export {
-  vResultValidator,
-  type RunResult,
-  type RetryBehavior,
-  type OnComplete,
-};
-export {
-  retryBehavior as vRetryBehavior,
-  onComplete as vOnComplete,
-} from "../component/shared.js";
+export { vResultValidator, type RunResult, type RetryBehavior };
+export { retryBehavior as vRetryBehavior } from "../component/shared.js";
 export { logLevel as vLogLevel, type LogLevel } from "../component/logging.js";
 export type WorkId = string & { __isWorkId: true };
 export const vWorkIdValidator = v.string() as VString<WorkId>;
@@ -242,7 +234,7 @@ export class Workpool {
     ) => Promise<void>;
   }): RegisteredMutation<"internal", OnCompleteArgs, null> {
     return internalMutationGeneric({
-      args: vOnCompleteValidator(context),
+      args: vOnCompleteArgs(context),
       handler,
     });
   }
@@ -253,7 +245,7 @@ export class Workpool {
  * To be used like:
  * ```ts
  * export const myOnComplete = internalMutation({
- *   args: vOnCompleteValidator(v.string()),
+ *   args: vOnCompleteArgs(v.string()),
  *   handler: async (ctx, {workId, context, result}) => {
  *     // context has been validated as a string
  *     // ... do something with the result
@@ -262,7 +254,7 @@ export class Workpool {
  * @param context - The context validator. If not provided, it will be `v.any()`.
  * @returns The validator for the onComplete mutation.
  */
-export function vOnCompleteValidator<
+export function vOnCompleteArgs<
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   V extends Validator<any, "required", any> = VAny,
 >(context?: V) {
@@ -354,7 +346,7 @@ export type CallbackOptions = {
    * or more manually:
    * ```ts
    * export const completion = internalMutation({
-   *  args: vOnCompleteValidator(v.string()),
+   *  args: vOnCompleteArgs(v.string()),
    *  handler: async (ctx, args) => {
    *    console.log(args.result, "Got Context back -> ", args.context, Date.now() - args.context);
    *  },
@@ -389,8 +381,12 @@ export type OnCompleteArgs = {
    */
   result: RunResult;
 };
+
 // ensure OnCompleteArgs satisfies SharedOnCompleteArgs
 const _ = {} as OnCompleteArgs satisfies SharedOnCompleteArgs;
+const _2 = {} as OnCompleteArgs satisfies Infer<
+  ReturnType<typeof vOnCompleteArgs<VAny>>
+>;
 
 //
 // Helper functions

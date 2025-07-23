@@ -10,7 +10,7 @@ import {
   WorkId,
   vWorkIdValidator,
   Workpool,
-  vOnCompleteValidator,
+  vOnCompleteArgs,
 } from "@convex-dev/workpool";
 import { v } from "convex/values";
 import { createLogger } from "../../src/component/logging";
@@ -264,7 +264,7 @@ export const noop = internalMutation({
 
 // Another way to define the onComplete mutation.
 export const complete = internalMutation({
-  args: vOnCompleteValidator(v.number()),
+  args: vOnCompleteArgs(v.number()),
   handler: async (ctx, args) => {
     if (args.result.kind === "success") {
       console.warn("onComplete delay", Date.now() - args.result.returnValue);
