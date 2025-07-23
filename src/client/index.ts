@@ -218,7 +218,7 @@ export class Workpool {
   defineOnComplete<
     DataModel extends GenericDataModel,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    V extends Validator<any, "required", any> = VAny,
+    V extends Validator<any, any, any> = VAny<any, "optional">,
   >({
     context,
     handler,
@@ -260,7 +260,7 @@ export function vOnCompleteArgs<
 >(context?: V) {
   return v.object({
     workId: vWorkIdValidator,
-    context: context ?? v.any(),
+    context: context ?? v.optional(v.any()),
     result: vResultValidator,
   });
 }
