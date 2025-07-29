@@ -83,7 +83,7 @@ export async function completeHandler(
       }
       if (job.runResult.kind !== "canceled") {
         pendingCompletions.push({
-          runResult: job.runResult,
+          runResult: stripResult(job.runResult),
           workId: job.workId,
           retry,
         });
@@ -101,6 +101,13 @@ export async function completeHandler(
       )
     );
   }
+}
+
+function stripResult(result: RunResult): RunResult {
+  if (result.kind === "success") {
+    return { kind: "success", returnValue: null };
+  }
+  return result;
 }
 
 export const complete = internalMutation({
