@@ -42,6 +42,8 @@ export {
 };
 /** @deprecated Use `vOnCompleteArgs(<your-context-validator>)` instead. */
 export const vOnComplete = vOnCompleteArgs(v.any());
+/** @deprecated Use `vOnCompleteArgs()` instead. */
+export const vOnCompleteValidator = vOnCompleteArgs;
 
 // Attempts will run with delay [0, 250, 500, 1000, 2000] (ms)
 export const DEFAULT_RETRY_BEHAVIOR: RetryBehavior = {
