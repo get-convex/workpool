@@ -40,7 +40,7 @@ export {
   /** @deprecated Use `vResultValidator` instead. */
   vResultValidator as resultValidator,
 };
-/** @deprecated Use `vOnCompleteArgs(<your-context-validator>)` instead. */
+/** Equivalent to `vOnCompleteArgs(<your-context-validator>)`. */
 export const vOnComplete = vOnCompleteArgs(v.any());
 /** @deprecated Use `vOnCompleteArgs()` instead. */
 export const vOnCompleteValidator = vOnCompleteArgs;
