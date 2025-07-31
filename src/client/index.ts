@@ -264,7 +264,7 @@ export function vOnCompleteArgs<
 >(context?: V) {
   return v.object({
     workId: vWorkIdValidator,
-    context: context ?? v.optional(v.any()),
+    context: (context ?? v.optional(v.any())) as V,
     result: vResultValidator,
   });
 }
