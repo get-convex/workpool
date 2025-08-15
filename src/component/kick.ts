@@ -9,6 +9,8 @@ import {
   fromSegment,
   getCurrentSegment,
   getNextSegment,
+  SECOND,
+  toSegment,
 } from "./shared.js";
 
 /**
@@ -40,7 +42,7 @@ export async function kickMainLoop(
       );
       return next;
     }
-    if (runStatus.state.segment <= next) {
+    if (runStatus.state.segment <= toSegment(Date.now() + SECOND)) {
       console.debug(
         `[${source}] main is scheduled to run soon enough, so we don't need to kick it`
       );
