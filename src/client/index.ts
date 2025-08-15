@@ -163,6 +163,63 @@ export class Workpool {
     return id as WorkId;
   }
 
+  async enqueueMutationBatch<Args extends DefaultFunctionArgs, ReturnType>(
+    ctx: RunMutationCtx,
+    fn: FunctionReference<"mutation", FunctionVisibility, Args, ReturnType>,
+    argsArray: Array<Args>,
+    options?: CallbackOptions & SchedulerOptions & NameOption
+  ): Promise<WorkId[]> {
+    return this._enqueueBatch(ctx, fn, argsArray, "mutation", options);
+  }
+  async enqueueActionBatch<Args extends DefaultFunctionArgs, ReturnType>(
+    ctx: RunMutationCtx,
+    fn: FunctionReference<"action", FunctionVisibility, Args, ReturnType>,
+    argsArray: Array<Args>,
+    options?: CallbackOptions & SchedulerOptions & NameOption
+  ): Promise<WorkId[]> {
+    return this._enqueueBatch(ctx, fn, argsArray, "action", options);
+  }
+  async enqueueQueryBatch<Args extends DefaultFunctionArgs, ReturnType>(
+    ctx: RunMutationCtx,
+    fn: FunctionReference<"query", FunctionVisibility, Args, ReturnType>,
+    argsArray: Array<Args>,
+    options?: CallbackOptions & SchedulerOptions & NameOption
+  ): Promise<WorkId[]> {
+    return this._enqueueBatch(ctx, fn, argsArray, "query", options);
+  }
+
+  async _enqueueBatch<
+    FnType extends FunctionType,
+    Args extends DefaultFunctionArgs,
+    ReturnType,
+  >(
+    ctx: RunMutationCtx,
+    fn: FunctionReference<FnType, FunctionVisibility, Args, ReturnType>,
+    argsArray: Array<Args>,
+    fnType: FnType,
+    options?: CallbackOptions & SchedulerOptions & NameOption & RetryOption
+  ): Promise<WorkId[]> {
+    const defaults = await defaultEnqueueArgs(fn, options?.name, this.options);
+    const onComplete: OnComplete | undefined = options?.onComplete
+      ? {
+          fnHandle: await createFunctionHandle(options.onComplete),
+          context: options.context,
+        }
+      : undefined;
+    const ids = await ctx.runMutation(this.component.lib.enqueueBatch, {
+      items: argsArray.map((fnArgs) => ({
+        fnHandle: defaults.fnHandle,
+        fnName: defaults.fnName,
+        fnArgs,
+        fnType,
+        runAt: getRunAt(options),
+        onComplete,
+      })),
+      config: defaults.config,
+    });
+    return ids as WorkId[];
+  }
+
   /**
    * Cancels a work item. If it's already started, it will be allowed to finish
    * but will not be retried.

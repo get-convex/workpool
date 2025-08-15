@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { ObjectType, v } from "convex/values";
 import { api } from "./_generated/api.js";
 import { fnType } from "./shared.js";
 import { Id } from "./_generated/dataModel.js";
@@ -20,44 +20,66 @@ import { recordEnqueued } from "./stats.js";
 const MAX_POSSIBLE_PARALLELISM = 100;
 const MAX_PARALLELISM_SOFT_LIMIT = 50;
 
+const itemArgs = {
+  fnHandle: v.string(),
+  fnName: v.string(),
+  fnArgs: v.any(),
+  fnType,
+  runAt: v.number(),
+  // TODO: annotation?
+  onComplete: v.optional(onComplete),
+  retryBehavior: v.optional(retryBehavior),
+};
+const enqueueArgs = {
+  ...itemArgs,
+  config,
+};
 export const enqueue = mutation({
+  args: enqueueArgs,
+  returns: v.id("work"),
+  handler: enqueueHandler,
+});
+async function enqueueHandler(
+  ctx: MutationCtx,
+  { config, runAt, ...workArgs }: ObjectType<typeof enqueueArgs>
+) {
+  const console = createLogger(config.logLevel);
+  if (config.maxParallelism > MAX_POSSIBLE_PARALLELISM) {
+    throw new Error(`maxParallelism must be <= ${MAX_PARALLELISM_SOFT_LIMIT}`);
+  } else if (config.maxParallelism > MAX_PARALLELISM_SOFT_LIMIT) {
+    console.warn(
+      `maxParallelism should be <= ${MAX_PARALLELISM_SOFT_LIMIT}, but is set to ${config.maxParallelism}. This will be an error in a future version.`
+    );
+  } else if (config.maxParallelism < 1) {
+    throw new Error("maxParallelism must be >= 1");
+  }
+  runAt = boundScheduledTime(runAt, console);
+  const workId = await ctx.db.insert("work", {
+    ...workArgs,
+    attempts: 0,
+  });
+  const limit = await kickMainLoop(ctx, "enqueue", config);
+  await ctx.db.insert("pendingStart", {
+    workId,
+    segment: max(toSegment(runAt), limit),
+  });
+  recordEnqueued(console, { workId, fnName: workArgs.fnName, runAt });
+  return workId;
+}
+
+export const enqueueBatch = mutation({
   args: {
-    fnHandle: v.string(),
-    fnName: v.string(),
-    fnArgs: v.any(),
-    fnType,
-    runAt: v.number(),
-    // TODO: annotation?
-    onComplete: v.optional(onComplete),
-    retryBehavior: v.optional(retryBehavior),
+    items: v.array(v.object(itemArgs)),
     config,
   },
-  returns: v.id("work"),
-  handler: async (ctx, { config, runAt, ...workArgs }) => {
-    const console = createLogger(config.logLevel);
-    if (config.maxParallelism > MAX_POSSIBLE_PARALLELISM) {
-      throw new Error(
-        `maxParallelism must be <= ${MAX_PARALLELISM_SOFT_LIMIT}`
-      );
-    } else if (config.maxParallelism > MAX_PARALLELISM_SOFT_LIMIT) {
-      console.warn(
-        `maxParallelism should be <= ${MAX_PARALLELISM_SOFT_LIMIT}, but is set to ${config.maxParallelism}. This will be an error in a future version.`
-      );
-    } else if (config.maxParallelism < 1) {
-      throw new Error("maxParallelism must be >= 1");
-    }
-    runAt = boundScheduledTime(runAt, console);
-    const workId = await ctx.db.insert("work", {
-      ...workArgs,
-      attempts: 0,
-    });
-    const limit = await kickMainLoop(ctx, "enqueue", config);
-    await ctx.db.insert("pendingStart", {
-      workId,
-      segment: max(toSegment(runAt), limit),
-    });
-    recordEnqueued(console, { workId, fnName: workArgs.fnName, runAt });
-    return workId;
+  returns: v.array(v.id("work")),
+  handler: async (ctx, { config, items }) => {
+    return Promise.all(
+      items.map(async (item) => {
+        const workId = await enqueueHandler(ctx, { config, ...item });
+        return workId;
+      })
+    );
   },
 });
 
