@@ -52,6 +52,9 @@ export const DEFAULT_RETRY_BEHAVIOR: RetryBehavior = {
   base: 2,
 };
 
+// UseApi<api> for jump to definition
+export type WorkpoolComponent = UseApi<Mounts>;
+
 export class Workpool {
   /**
    * Initializes a Workpool.
@@ -65,9 +68,10 @@ export class Workpool {
    * @param options - The {@link WorkpoolOptions} for the Workpool.
    */
   constructor(
-    private component: UseApi<Mounts>, // UseApi<api> for jump to definition
+    public component: WorkpoolComponent,
     public options: WorkpoolOptions
   ) {}
+
   /**
    * Enqueues an action to be run.
    *
@@ -82,28 +86,48 @@ export class Workpool {
     ctx: RunMutationCtx,
     fn: FunctionReference<"action", FunctionVisibility, Args, ReturnType>,
     fnArgs: Args,
-    options?: RetryOption & CallbackOptions & SchedulerOptions & NameOption
+    options?: RetryOption & EnqueueOptions
   ): Promise<WorkId> {
     const retryBehavior = getRetryBehavior(
       this.options.defaultRetryBehavior,
       this.options.retryActionsByDefault,
       options?.retry
     );
-    const onComplete: OnComplete | undefined = options?.onComplete
-      ? {
-          fnHandle: await createFunctionHandle(options.onComplete),
-          context: options.context,
-        }
-      : undefined;
-    const id = await ctx.runMutation(this.component.lib.enqueue, {
-      ...(await defaultEnqueueArgs(fn, options?.name, this.options)),
-      fnArgs,
-      fnType: "action",
-      runAt: getRunAt(options),
-      onComplete,
+    return enqueue(this.component, ctx, "action", fn, fnArgs, {
       retryBehavior,
+      ...this.options,
+      ...options,
     });
-    return id as WorkId;
+  }
+
+  /**
+   * Enqueues a batch of actions to be run.
+   * Each action will be run independently, and the onComplete handler will
+   * be called for each action.
+   *
+   * @param ctx - The mutation or action ctx that can call ctx.runMutation.
+   * @param fn - The action to run, like `internal.example.myAction`.
+   * @param argsArray - The arguments to pass to the action.
+   * @param options - The options for the actions to specify retry behavior,
+   *   onComplete handling, and scheduling via `runAt` or `runAfter`.
+   * @returns The IDs of the work that was enqueued.
+   */
+  async enqueueActionBatch<Args extends DefaultFunctionArgs, ReturnType>(
+    ctx: RunMutationCtx,
+    fn: FunctionReference<"action", FunctionVisibility, Args, ReturnType>,
+    argsArray: Array<Args>,
+    options?: RetryOption & EnqueueOptions
+  ): Promise<WorkId[]> {
+    const retryBehavior = getRetryBehavior(
+      this.options.defaultRetryBehavior,
+      this.options.retryActionsByDefault,
+      options?.retry
+    );
+    return enqueueBatch(this.component, ctx, "action", fn, argsArray, {
+      retryBehavior,
+      ...this.options,
+      ...options,
+    });
   }
 
   /**
@@ -123,101 +147,81 @@ export class Workpool {
     ctx: RunMutationCtx,
     fn: FunctionReference<"mutation", FunctionVisibility, Args, ReturnType>,
     fnArgs: Args,
-    options?: CallbackOptions & SchedulerOptions & NameOption
+    options?: EnqueueOptions
   ): Promise<WorkId> {
-    const onComplete: OnComplete | undefined = options?.onComplete
-      ? {
-          fnHandle: await createFunctionHandle(options.onComplete),
-          context: options.context,
-        }
-      : undefined;
-    const id = await ctx.runMutation(this.component.lib.enqueue, {
-      ...(await defaultEnqueueArgs(fn, options?.name, this.options)),
-      fnArgs,
-      fnType: "mutation",
-      runAt: getRunAt(options),
-      onComplete,
+    return enqueue(this.component, ctx, "mutation", fn, fnArgs, {
+      ...this.options,
+      ...options,
     });
-    return id as WorkId;
   }
-
-  async enqueueQuery<Args extends DefaultFunctionArgs, ReturnType>(
-    ctx: RunMutationCtx,
-    fn: FunctionReference<"query", FunctionVisibility, Args, ReturnType>,
-    fnArgs: Args,
-    options?: CallbackOptions & SchedulerOptions & NameOption
-  ): Promise<WorkId> {
-    const onComplete: OnComplete | undefined = options?.onComplete
-      ? {
-          fnHandle: await createFunctionHandle(options.onComplete),
-          context: options.context,
-        }
-      : undefined;
-    const id = await ctx.runMutation(this.component.lib.enqueue, {
-      ...(await defaultEnqueueArgs(fn, options?.name, this.options)),
-      fnArgs,
-      fnType: "query",
-      runAt: getRunAt(options),
-      onComplete,
-    });
-    return id as WorkId;
-  }
-
+  /**
+   * Enqueues a batch of mutations to be run.
+   * Each mutation will be run independently, and the onComplete handler will
+   * be called for each mutation.
+   *
+   * @param ctx - The mutation or action context that can call ctx.runMutation.
+   * @param fn - The mutation to run, like `internal.example.myMutation`.
+   * @param argsArray - The arguments to pass to the mutations.
+   * @param options - The options for the mutations to specify onComplete handling
+   *   and scheduling via `runAt` or `runAfter`.
+   */
   async enqueueMutationBatch<Args extends DefaultFunctionArgs, ReturnType>(
     ctx: RunMutationCtx,
     fn: FunctionReference<"mutation", FunctionVisibility, Args, ReturnType>,
     argsArray: Array<Args>,
-    options?: CallbackOptions & SchedulerOptions & NameOption
+    options?: EnqueueOptions
   ): Promise<WorkId[]> {
-    return this._enqueueBatch(ctx, fn, argsArray, "mutation", options);
+    return enqueueBatch(this.component, ctx, "mutation", fn, argsArray, {
+      ...this.options,
+      ...options,
+    });
   }
-  async enqueueActionBatch<Args extends DefaultFunctionArgs, ReturnType>(
+
+  /**
+   * Enqueues a query to be run.
+   * Usually not what you want, but it can be useful during workflows.
+   * The query is run in a mutation and the result is returned to the caller,
+   * so it can conflict if other mutations are writing the value.
+   *
+   * @param ctx - The mutation or action context that can call ctx.runMutation.
+   * @param fn - The query to run, like `internal.example.myQuery`.
+   * @param fnArgs - The arguments to pass to the query.
+   * @param options - The options for the query to specify onComplete handling
+   *   and scheduling via `runAt` or `runAfter`.
+   */
+  async enqueueQuery<Args extends DefaultFunctionArgs, ReturnType>(
     ctx: RunMutationCtx,
-    fn: FunctionReference<"action", FunctionVisibility, Args, ReturnType>,
-    argsArray: Array<Args>,
-    options?: CallbackOptions & SchedulerOptions & NameOption
-  ): Promise<WorkId[]> {
-    return this._enqueueBatch(ctx, fn, argsArray, "action", options);
+    fn: FunctionReference<"query", FunctionVisibility, Args, ReturnType>,
+    fnArgs: Args,
+    options?: EnqueueOptions
+  ): Promise<WorkId> {
+    return enqueue(this.component, ctx, "query", fn, fnArgs, {
+      ...this.options,
+      ...options,
+    });
   }
+
+  /**
+   * Enqueues a batch of queries to be run.
+   * Each query will be run independently, and the onComplete handler will
+   * be called for each query.
+   *
+   * @param ctx - The mutation or action context that can call ctx.runMutation.
+   * @param fn - The query to run, like `internal.example.myQuery`.
+   * @param argsArray - The arguments to pass to the queries.
+   * @param options - The options for the queries to specify onComplete handling
+   *   and scheduling via `runAt` or `runAfter`.
+   */
   async enqueueQueryBatch<Args extends DefaultFunctionArgs, ReturnType>(
     ctx: RunMutationCtx,
     fn: FunctionReference<"query", FunctionVisibility, Args, ReturnType>,
     argsArray: Array<Args>,
-    options?: CallbackOptions & SchedulerOptions & NameOption
+    options?: EnqueueOptions
   ): Promise<WorkId[]> {
-    return this._enqueueBatch(ctx, fn, argsArray, "query", options);
-  }
-
-  async _enqueueBatch<
-    FnType extends FunctionType,
-    Args extends DefaultFunctionArgs,
-    ReturnType,
-  >(
-    ctx: RunMutationCtx,
-    fn: FunctionReference<FnType, FunctionVisibility, Args, ReturnType>,
-    argsArray: Array<Args>,
-    fnType: FnType,
-    options?: CallbackOptions & SchedulerOptions & NameOption & RetryOption
-  ): Promise<WorkId[]> {
-    const defaults = await defaultEnqueueArgs(fn, options?.name, this.options);
-    const onComplete: OnComplete | undefined = options?.onComplete
-      ? {
-          fnHandle: await createFunctionHandle(options.onComplete),
-          context: options.context,
-        }
-      : undefined;
-    const ids = await ctx.runMutation(this.component.lib.enqueueBatch, {
-      items: argsArray.map((fnArgs) => ({
-        fnHandle: defaults.fnHandle,
-        fnName: defaults.fnName,
-        fnArgs,
-        fnType,
-        runAt: getRunAt(options),
-        onComplete,
-      })),
-      config: defaults.config,
+    return enqueueBatch(this.component, ctx, "query", fn, argsArray, {
+      ...this.options,
+      ...options,
     });
-    return ids as WorkId[];
   }
 
   /**
@@ -337,15 +341,6 @@ export function vOnCompleteArgs<
   });
 }
 
-export type NameOption = {
-  /**
-   * The name of the function. By default, if you pass in api.foo.bar.baz,
-   * it will use "foo/bar:baz" as the name. If you pass in a function handle,
-   * it will use the function handle directly.
-   */
-  name?: string;
-};
-
 export type RetryOption = {
   /** Whether to retry the action if it fails.
    * If true, it will use the default retry behavior.
@@ -383,25 +378,14 @@ export type WorkpoolRetryOptions = {
    */
   retryActionsByDefault?: boolean;
 };
-export type SchedulerOptions =
-  | {
-      /**
-       * The time (ms since epoch) to run the action at.
-       * If not provided, the action will be run as soon as possible.
-       * Note: this is advisory only. It may run later.
-       */
-      runAt?: number;
-    }
-  | {
-      /**
-       * The number of milliseconds to run the action after.
-       * If not provided, the action will be run as soon as possible.
-       * Note: this is advisory only. It may run later.
-       */
-      runAfter?: number;
-    };
 
-export type CallbackOptions = {
+export type EnqueueOptions = {
+  /**
+   * The name of the function. By default, if you pass in api.foo.bar.baz,
+   * it will use "foo/bar:baz" as the name. If you pass in a function handle,
+   * it will use the function handle directly.
+   */
+  name?: string;
   /**
    * A mutation to run after the function succeeds, fails, or is canceled.
    * The context type is for your use, feel free to provide a validator for it.
@@ -436,7 +420,24 @@ export type CallbackOptions = {
    * Useful for passing data from the enqueue site to the onComplete site.
    */
   context?: unknown;
-};
+} & (
+  | {
+      /**
+       * The time (ms since epoch) to run the action at.
+       * If not provided, the action will be run as soon as possible.
+       * Note: this is advisory only. It may run later.
+       */
+      runAt?: number;
+    }
+  | {
+      /**
+       * The number of milliseconds to run the action after.
+       * If not provided, the action will be run as soon as possible.
+       * Note: this is advisory only. It may run later.
+       */
+      runAfter?: number;
+    }
+);
 
 export type OnCompleteArgs = {
   /**
@@ -480,36 +481,105 @@ function getRetryBehavior(
   return retryOverride ?? (retryByDefault ? defaultRetry : undefined);
 }
 
-async function defaultEnqueueArgs(
+async function enqueueArgs(
   fn:
     | FunctionReference<FunctionType, FunctionVisibility>
     | FunctionHandle<FunctionType, DefaultFunctionArgs>,
-  name: string | undefined,
-  { logLevel, maxParallelism }: Partial<Config>
+  opts:
+    | (EnqueueOptions & Partial<Config> & { retryBehavior?: RetryBehavior })
+    | undefined
 ) {
   const [fnHandle, fnName] =
     typeof fn === "string" && fn.startsWith("function://")
-      ? [fn, name ?? fn]
-      : [await createFunctionHandle(fn), name ?? safeFunctionName(fn)];
+      ? [fn, opts?.name ?? fn]
+      : [await createFunctionHandle(fn), opts?.name ?? safeFunctionName(fn)];
+  const onComplete: OnComplete | undefined = opts?.onComplete
+    ? {
+        fnHandle: await createFunctionHandle(opts.onComplete),
+        context: opts.context,
+      }
+    : undefined;
   return {
     fnHandle,
     fnName,
+    onComplete,
+    runAt: getRunAt(opts),
+    retryBehavior: opts?.retryBehavior,
     config: {
-      logLevel: logLevel ?? DEFAULT_LOG_LEVEL,
-      maxParallelism: maxParallelism ?? DEFAULT_MAX_PARALLELISM,
+      logLevel: opts?.logLevel ?? DEFAULT_LOG_LEVEL,
+      maxParallelism: opts?.maxParallelism ?? DEFAULT_MAX_PARALLELISM,
     },
   };
 }
 
-function getRunAt(options?: SchedulerOptions): number {
+function getRunAt(
+  options:
+    | {
+        runAt?: number;
+        runAfter?: number;
+      }
+    | undefined
+): number {
   if (!options) {
     return Date.now();
   }
-  if ("runAt" in options && options.runAt !== undefined) {
+  if (options.runAt !== undefined) {
     return options.runAt;
   }
-  if ("runAfter" in options && options.runAfter !== undefined) {
+  if (options.runAfter !== undefined) {
     return Date.now() + options.runAfter;
   }
   return Date.now();
+}
+
+export async function enqueueBatch<
+  FnType extends FunctionType,
+  Args extends DefaultFunctionArgs,
+  ReturnType,
+>(
+  component: UseApi<Mounts>,
+  ctx: RunMutationCtx,
+  fnType: FnType,
+  fn: FunctionReference<FnType, FunctionVisibility, Args, ReturnType>,
+  fnArgsArray: Array<Args>,
+  options: EnqueueOptions & {
+    retryBehavior?: RetryBehavior;
+    maxParallelism?: number;
+    logLevel?: LogLevel;
+  }
+): Promise<WorkId[]> {
+  const { config, ...defaults } = await enqueueArgs(fn, options);
+  const ids = await ctx.runMutation(component.lib.enqueueBatch, {
+    items: fnArgsArray.map((fnArgs) => ({
+      ...defaults,
+      fnArgs,
+      fnType,
+    })),
+    config,
+  });
+  return ids as WorkId[];
+}
+
+export async function enqueue<
+  FnType extends FunctionType,
+  Args extends DefaultFunctionArgs,
+  ReturnType,
+>(
+  component: UseApi<Mounts>,
+  ctx: RunMutationCtx,
+  fnType: FnType,
+  fn: FunctionReference<FnType, FunctionVisibility, Args, ReturnType>,
+  fnArgs: Args,
+  options: EnqueueOptions & {
+    retryBehavior?: RetryBehavior;
+    maxParallelism?: number;
+    logLevel?: LogLevel;
+  }
+): Promise<WorkId> {
+  const id = await ctx.runMutation(component.lib.enqueue, {
+    ...(await enqueueArgs(fn, options)),
+    fnArgs,
+    fnType,
+  });
+  return id as WorkId;
 }
