@@ -115,6 +115,16 @@ export declare const components: {
         | { previousAttempts: number; state: "running" }
         | { state: "finished" }
       >;
+      statusBatch: FunctionReference<
+        "query",
+        "internal",
+        { ids: Array<string> },
+        Array<
+          | { previousAttempts: number; state: "pending" }
+          | { previousAttempts: number; state: "running" }
+          | { state: "finished" }
+        >
+      >;
     };
   };
   bigPool: {
@@ -191,6 +201,16 @@ export declare const components: {
         | { previousAttempts: number; state: "running" }
         | { state: "finished" }
       >;
+      statusBatch: FunctionReference<
+        "query",
+        "internal",
+        { ids: Array<string> },
+        Array<
+          | { previousAttempts: number; state: "pending" }
+          | { previousAttempts: number; state: "running" }
+          | { state: "finished" }
+        >
+      >;
     };
   };
   serializedPool: {
@@ -266,6 +286,16 @@ export declare const components: {
         | { previousAttempts: number; state: "pending" }
         | { previousAttempts: number; state: "running" }
         | { state: "finished" }
+      >;
+      statusBatch: FunctionReference<
+        "query",
+        "internal",
+        { ids: Array<string> },
+        Array<
+          | { previousAttempts: number; state: "pending" }
+          | { previousAttempts: number; state: "running" }
+          | { state: "finished" }
+        >
       >;
     };
   };

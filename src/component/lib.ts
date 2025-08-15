@@ -2,7 +2,7 @@ import { ObjectType, v } from "convex/values";
 import { api } from "./_generated/api.js";
 import { fnType } from "./shared.js";
 import { Id } from "./_generated/dataModel.js";
-import { mutation, MutationCtx, query } from "./_generated/server.js";
+import { mutation, MutationCtx, query, QueryCtx } from "./_generated/server.js";
 import { kickMainLoop } from "./kick.js";
 import { createLogger, LogLevel, logLevel } from "./logging.js";
 import {
@@ -141,27 +141,38 @@ export const cancelAll = mutation({
 export const status = query({
   args: { id: v.id("work") },
   returns: statusValidator,
-  handler: async (ctx, { id }) => {
-    const work = await ctx.db.get(id);
-    if (!work) {
-      return { state: "finished" } as const;
-    }
-    const pendingStart = await ctx.db
-      .query("pendingStart")
-      .withIndex("workId", (q) => q.eq("workId", id))
-      .unique();
-    if (pendingStart) {
-      return { state: "pending", previousAttempts: work.attempts } as const;
-    }
-    const pendingCompletion = await ctx.db
-      .query("pendingCompletion")
-      .withIndex("workId", (q) => q.eq("workId", id))
-      .unique();
-    if (pendingCompletion?.retry) {
-      return { state: "pending", previousAttempts: work.attempts } as const;
-    }
-    // Assume it's in progress. It could be pending cancelation
-    return { state: "running", previousAttempts: work.attempts } as const;
+  handler: statusHandler,
+});
+async function statusHandler(ctx: QueryCtx, { id }: { id: Id<"work"> }) {
+  const work = await ctx.db.get(id);
+  if (!work) {
+    return { state: "finished" } as const;
+  }
+  const pendingStart = await ctx.db
+    .query("pendingStart")
+    .withIndex("workId", (q) => q.eq("workId", id))
+    .unique();
+  if (pendingStart) {
+    return { state: "pending", previousAttempts: work.attempts } as const;
+  }
+  const pendingCompletion = await ctx.db
+    .query("pendingCompletion")
+    .withIndex("workId", (q) => q.eq("workId", id))
+    .unique();
+  if (pendingCompletion?.retry) {
+    return { state: "pending", previousAttempts: work.attempts } as const;
+  }
+  // Assume it's in progress. It could be pending cancelation
+  return { state: "running", previousAttempts: work.attempts } as const;
+}
+
+export const statusBatch = query({
+  args: { ids: v.array(v.id("work")) },
+  returns: v.array(statusValidator),
+  handler: async (ctx, { ids }) => {
+    return await Promise.all(
+      ids.map(async (id) => await statusHandler(ctx, { id }))
+    );
   },
 });
 

@@ -258,6 +258,17 @@ export class Workpool {
   }
 
   /**
+   * Gets the status of a batch of work items.
+   *
+   * @param ctx - The query context that can call ctx.runQuery.
+   * @param ids - The IDs of the work to get the status of.
+   * @returns The status of the work items.
+   */
+  async statusBatch(ctx: RunQueryCtx, ids: WorkId[]): Promise<Status[]> {
+    return ctx.runQuery(this.component.lib.statusBatch, { ids });
+  }
+
+  /**
    * Defines a mutation that will be run after a work item completes.
    * You can pass this to a call to enqueue* like so:
    * ```ts

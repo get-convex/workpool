@@ -121,6 +121,16 @@ export type Mounts = {
       | { previousAttempts: number; state: "running" }
       | { state: "finished" }
     >;
+    statusBatch: FunctionReference<
+      "query",
+      "public",
+      { ids: Array<string> },
+      Array<
+        | { previousAttempts: number; state: "pending" }
+        | { previousAttempts: number; state: "running" }
+        | { state: "finished" }
+      >
+    >;
   };
 };
 // For now fullApiWithMounts is only fullApi which provides
