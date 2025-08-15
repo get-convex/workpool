@@ -211,6 +211,20 @@ export const startForegroundWork = internalAction({
   },
 });
 
+export const enqueueABatchOfActions = internalAction({
+  args: {},
+  handler: async (ctx, _args) => {
+    await bigPool.enqueueActionBatch(
+      ctx,
+      internal.example.myAction,
+      Array.from({ length: 100 }, () => ({
+        fate: "succeed",
+        ms: 1000,
+      }))
+    );
+  },
+});
+
 const fate = v.union(
   v.literal("succeed"),
   v.literal("fail randomly"),
