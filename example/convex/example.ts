@@ -214,10 +214,10 @@ export const startForegroundWork = internalAction({
 export const enqueueABatchOfActions = internalAction({
   args: {},
   handler: async (ctx, _args) => {
-    await bigPool.enqueueActionBatch(
+    await smallPool.enqueueActionBatch(
       ctx,
       internal.example.myAction,
-      Array.from({ length: 100 }, () => ({
+      Array.from({ length: 10 }, () => ({
         fate: "succeed",
         ms: 1000,
       }))
