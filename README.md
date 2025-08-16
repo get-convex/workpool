@@ -12,9 +12,7 @@ This Convex component pools actions and mutations to restrict parallel requests.
 - An `onComplete` callback so you can build durable, reliable workflows. Called
   when the work is finished, whether it succeeded, failed, or was canceled.
 
-## Use cases
-
-### Separating and throttling async workloads
+## Separating and throttling async workloads
 
 Suppose you have some important async work, like sending verification emails,
 and some less important async work, like scraping data from an API. If all of
@@ -51,9 +49,9 @@ export const downloadLatestWeather = mutation({
 });
 ```
 
-### Durable, reliable workflows meet workpool
+## Durable, reliable workflows
 
-#### Retry management
+### Retry management
 
 Imagine that the payment processor is a 3rd party API, and they temporarily have an
 outage. Now imagine you implement your own action retrying logic for your busy app.
@@ -65,7 +63,7 @@ Creating an upper bound on how much work will be done in parallel is a good way 
 mitigate this risk. Actions that are currently backing off awaiting retry will not tie
 up a thread in the workpool.
 
-#### Completion handling
+### Completion handling
 
 By handing off asynchronous work, it will be guaranteed to run, and with retries
 you can account for temporary failures, while avoiding a "stampeding herd"
@@ -114,7 +112,7 @@ export const emailSent = internalMutation({
       error: result.kind === "failed" ? result.error : null,
     });
     if (result.kind === "failed") {
-      await pool.enqueueAction(ctx, internal.email.checkResendStatus, context, {
+      await pool.enqueueAction(ctx, internal.email.checkStatus, { userId }, {
         retry: { maxAttempts: 10, initialBackoffMs: 250, base: 2 }, // custom
         onComplete: internal.email.handleEmailStatus,
         context: { emailLogId },
@@ -141,7 +139,7 @@ export const emailSent = pool.defineOnComplete<DataModel>({
 });
 ```
 
-#### Idempotency?
+### Idempotency
 
 Idempotent actions are actions that can be run multiple times safely. This typically
 means they don't cause any side effects that would be a problem if executed twice or more.
@@ -162,10 +160,10 @@ If you're creating complex workflows with many steps involving 3rd party APIs:
 1.  You should ensure that each step is an idempotent Convex action.
 2.  You should use this component to manage these actions so it all just works!
 
-### Optimize OCC errors
+### Reducing database write conflicts (aka OCC errors)
 
 With limited parallelism, you can reduce
-[OCC errors](https://docs.convex.dev/error#1)
+[write conflicts](https://docs.convex.dev/error#1)
 from mutations that read and write the same data.
 
 Consider this action that calls a mutation to increment a singleton counter.
@@ -199,7 +197,44 @@ Effectively, Workpool runs async functions similar to
 `ctx.scheduler.runAfter(0, ...)`, but it limits the number of functions that
 can run in parallel.
 
-## Pre-requisite: Convex
+## Reactive status of asynchronous work
+
+The workpool stores the status of each function in the database, and thanks to
+Convex's reactive queries, you can read it in a query to power a reactive UI.
+
+By default, it will keep the status for 1 day but you can change this with
+the `statusTtl` option to `Workpool`.
+
+To keep the status forever, set `statusTtl: Number.POSITIVE_INFINITY`.
+
+You can read the status of a function by calling `pool.status(id)`.
+
+```ts
+import { vWorkIdValidator } from "@convex-dev/workpool";
+import { query } from "./_generated/server";
+
+export const getStatus = query({
+  args: { id: vWorkIdValidator },
+  handler: async (ctx, args) => {
+    const status = await pool.status(args.id);
+    return status;
+  },
+});
+```
+
+The status will be one of:
+
+- `{ kind: "pending"; previousAttempts: number }`: The function has not started yet.
+- `{ kind: "running"; previousAttempts: number }`: The function is currently running.
+- `{ kind: "finished" }`: The function has succeeded, failed, or been canceled.
+
+To get the result of your function, you can either write to the database from
+within your function, call or schedule another function from there, or use the
+`onComplete` handler to respond to the job result.
+
+## Get started
+
+### Pre-requisite: Convex
 
 You'll need an existing Convex project to use the component.
 Convex is a hosted backend platform, including a database, serverless functions,
@@ -207,7 +242,7 @@ and a ton more you can learn about [here](https://docs.convex.dev/get-started).
 
 Run `npm create convex` or follow any of the [quickstarts](https://docs.convex.dev/home) to set one up.
 
-## Installation
+### Install the component
 
 See [`example/`](./example/convex/) for a working demo.
 
@@ -231,49 +266,7 @@ app.use(workpool, { name: "scrapeWorkpool" });
 export default app;
 ```
 
-## Usage
-
-```ts
-import { components } from "./_generated/api";
-import { Workpool } from "@convex-dev/workpool";
-
-const pool = new Workpool(components.emailWorkpool, { maxParallelism: 10 });
-```
-
-Then you have the following interface on `pool`:
-
-```ts
-import { vWorkIdValidator } from "@convex-dev/workpool";
-
-export const myMutation = mutation({
-  args: {},
-  handler: async (ctx, args) => {
-    // Schedule functions to run in the background.
-    const id = await pool.enqueueMutation(ctx, internal.foo.bar, args);
-    // Or for an action:
-    const id = await pool.enqueueAction(ctx, internal.foo.baz, args);
-  },
-});
-
-export const getStatus = query({
-  args: { id: vWorkIdValidator },
-  handler: async (ctx, args) => {
-    // Is it done yet? Did it succeed or fail?
-    const status = await pool.status(args.id);
-    return status;
-  },
-});
-
-export const cancelWork = mutation({
-  args: { id: vWorkIdValidator },
-  handler: async (ctx, args) => {
-    // You can cancel the work, if it hasn't finished yet.
-    await pool.cancel(ctx, args.id);
-  },
-});
-```
-
-See more example usage in [example.ts](./example/convex/example.ts).
+See example usage in [example.ts](./example/convex/example.ts).
 
 ### Configuring the Workpool
 
@@ -326,38 +319,48 @@ If you're running into issues with too many concurrent functions, there are
 alternatives to Workpool:
 
 - Try combining multiple mutations into a single mutation, with batching or
-  debouncing.
+  debouncing. See the next section for enqueueing multiple actions at once.
 - Call plain TypeScript functions if possible.
   - In particular, an action calling `ctx.runAction` has more overhead than just
     calling the action's handler directly.
 
 See [best practices](https://docs.convex.dev/production/best-practices) for more.
 
-## Reading function status
+### Batching
 
-The workpool stores the status of each function in the database, so you can
-read it even after the function has finished.
-By default, it will keep the status for 1 day but you can change this with
-the `statusTtl` option to `Workpool`.
+If you're enqueuing a lot of work, you can use `enqueueActionBatch` to enqueue
+a batch of actions at once, or the equivalents for queries or mutations.
 
-To keep the status forever, set `statusTtl: Number.POSITIVE_INFINITY`.
+This helps in two ways:
 
-You can read the status of a function by calling `pool.status(id)`.
+1.  It reduces the number of calls to the component, which reduces overhead
+    as each component call runs in a fresh container (for strong isolation).
+2.  When called from an action, it reduces the number of mutations that might
+    conflict with each other, especially if they were being called in parallel.
 
-The status will be one of:
+```ts
+await pool.enqueueActionBatch(ctx, internal.weather.scrape, [
+  { city: "New York" },
+  { city: "Los Angeles" },
+  { city: "Chicago" },
+]);
+```
 
-- `{ kind: "pending"; previousAttempts: number }`: The function has not started yet.
-- `{ kind: "running"; previousAttempts: number }`: The function is currently running.
-- `{ kind: "finished" }`: The function has succeeded, failed, or been canceled.
-
-To get the result of your function, you can either write to the database from
-within your function, call or schedule another function from there, or use the
-`onComplete` handler to respond to the job result.
 
 ## Canceling work
 
 You can cancel work by calling `pool.cancel(id)` or all of them with
 `pool.cancelAll()`.
+
+```ts
+export const cancelWork = mutation({
+  args: { id: vWorkIdValidator },
+  handler: async (ctx, args) => {
+    // You can cancel the work, if it hasn't finished yet.
+    await pool.cancel(ctx, args.id);
+  },
+});
+```
 
 This will avoid starting or retrying, but will not stop in-progress work.
 
