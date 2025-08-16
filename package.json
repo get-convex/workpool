@@ -7,7 +7,7 @@
     "email": "support@convex.dev",
     "url": "https://github.com/get-convex/workpool/issues"
   },
-  "version": "0.2.18-alpha.3",
+  "version": "0.2.18",
   "license": "Apache-2.0",
   "keywords": [
     "convex",
