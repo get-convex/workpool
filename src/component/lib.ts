@@ -1,10 +1,10 @@
-import { ObjectType, v } from "convex/values";
+import { Infer, ObjectType, v } from "convex/values";
 import { api } from "./_generated/api.js";
 import { fnType } from "./shared.js";
 import { Id } from "./_generated/dataModel.js";
 import { mutation, MutationCtx, query, QueryCtx } from "./_generated/server.js";
 import { kickMainLoop } from "./kick.js";
-import { createLogger, LogLevel, logLevel } from "./logging.js";
+import { createLogger, Logger, LogLevel, logLevel } from "./logging.js";
 import {
   boundScheduledTime,
   config,
@@ -37,30 +37,19 @@ const enqueueArgs = {
 export const enqueue = mutation({
   args: enqueueArgs,
   returns: v.id("work"),
-  handler: async (ctx, { config, runAt, ...workArgs }) => {
+  handler: async (ctx, { config, ...itemArgs }) => {
+    validateConfig(config);
+    const console = createLogger(config.logLevel);
     const kickSegment = await kickMainLoop(ctx, "enqueue", config);
-    return await enqueueHandler(ctx, kickSegment, {
-      config,
-      runAt,
-      ...workArgs,
-    });
+    return await enqueueHandler(ctx, console, kickSegment, itemArgs);
   },
 });
 async function enqueueHandler(
   ctx: MutationCtx,
+  console: Logger,
   kickSegment: bigint,
-  { config, runAt, ...workArgs }: ObjectType<typeof enqueueArgs>
+  { runAt, ...workArgs }: ObjectType<typeof itemArgs>
 ) {
-  const console = createLogger(config.logLevel);
-  if (config.maxParallelism > MAX_POSSIBLE_PARALLELISM) {
-    throw new Error(`maxParallelism must be <= ${MAX_PARALLELISM_SOFT_LIMIT}`);
-  } else if (config.maxParallelism > MAX_PARALLELISM_SOFT_LIMIT) {
-    console.warn(
-      `maxParallelism should be <= ${MAX_PARALLELISM_SOFT_LIMIT}, but is set to ${config.maxParallelism}. This will be an error in a future version.`
-    );
-  } else if (config.maxParallelism < 1) {
-    throw new Error("maxParallelism must be >= 1");
-  }
   runAt = boundScheduledTime(runAt, console);
   const workId = await ctx.db.insert("work", {
     ...workArgs,
@@ -74,6 +63,19 @@ async function enqueueHandler(
   return workId;
 }
 
+type Config = Infer<typeof config>;
+function validateConfig(config: Config) {
+  if (config.maxParallelism > MAX_POSSIBLE_PARALLELISM) {
+    throw new Error(`maxParallelism must be <= ${MAX_PARALLELISM_SOFT_LIMIT}`);
+  } else if (config.maxParallelism > MAX_PARALLELISM_SOFT_LIMIT) {
+    createLogger(config.logLevel).warn(
+      `maxParallelism should be <= ${MAX_PARALLELISM_SOFT_LIMIT}, but is set to ${config.maxParallelism}. This will be an error in a future version.`
+    );
+  } else if (config.maxParallelism < 1) {
+    throw new Error("maxParallelism must be >= 1");
+  }
+}
+
 export const enqueueBatch = mutation({
   args: {
     items: v.array(v.object(itemArgs)),
@@ -81,15 +83,11 @@ export const enqueueBatch = mutation({
   },
   returns: v.array(v.id("work")),
   handler: async (ctx, { config, items }) => {
+    validateConfig(config);
+    const console = createLogger(config.logLevel);
     const kickSegment = await kickMainLoop(ctx, "enqueue", config);
     return Promise.all(
-      items.map(async (item) => {
-        const workId = await enqueueHandler(ctx, kickSegment, {
-          config,
-          ...item,
-        });
-        return workId;
-      })
+      items.map((item) => enqueueHandler(ctx, console, kickSegment, item))
     );
   },
 });
