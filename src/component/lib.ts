@@ -37,10 +37,18 @@ const enqueueArgs = {
 export const enqueue = mutation({
   args: enqueueArgs,
   returns: v.id("work"),
-  handler: enqueueHandler,
+  handler: async (ctx, { config, runAt, ...workArgs }) => {
+    const kickSegment = await kickMainLoop(ctx, "enqueue", config);
+    return await enqueueHandler(ctx, kickSegment, {
+      config,
+      runAt,
+      ...workArgs,
+    });
+  },
 });
 async function enqueueHandler(
   ctx: MutationCtx,
+  kickSegment: bigint,
   { config, runAt, ...workArgs }: ObjectType<typeof enqueueArgs>
 ) {
   const console = createLogger(config.logLevel);
@@ -58,10 +66,9 @@ async function enqueueHandler(
     ...workArgs,
     attempts: 0,
   });
-  const limit = await kickMainLoop(ctx, "enqueue", config);
   await ctx.db.insert("pendingStart", {
     workId,
-    segment: max(toSegment(runAt), limit),
+    segment: max(toSegment(runAt), kickSegment),
   });
   recordEnqueued(console, { workId, fnName: workArgs.fnName, runAt });
   return workId;
@@ -74,9 +81,13 @@ export const enqueueBatch = mutation({
   },
   returns: v.array(v.id("work")),
   handler: async (ctx, { config, items }) => {
+    const kickSegment = await kickMainLoop(ctx, "enqueue", config);
     return Promise.all(
       items.map(async (item) => {
-        const workId = await enqueueHandler(ctx, { config, ...item });
+        const workId = await enqueueHandler(ctx, kickSegment, {
+          config,
+          ...item,
+        });
         return workId;
       })
     );
