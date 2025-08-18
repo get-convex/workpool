@@ -112,11 +112,16 @@ export const emailSent = internalMutation({
       error: result.kind === "failed" ? result.error : null,
     });
     if (result.kind === "failed") {
-      await pool.enqueueAction(ctx, internal.email.checkStatus, { userId }, {
-        retry: { maxAttempts: 10, initialBackoffMs: 250, base: 2 }, // custom
-        onComplete: internal.email.handleEmailStatus,
-        context: { emailLogId },
-      });
+      await pool.enqueueAction(
+        ctx,
+        internal.email.checkStatus,
+        { userId },
+        {
+          retry: { maxAttempts: 10, initialBackoffMs: 250, base: 2 }, // custom
+          onComplete: internal.email.handleEmailStatus,
+          context: { emailLogId },
+        }
+      );
     }
   },
 });
@@ -345,7 +350,6 @@ await pool.enqueueActionBatch(ctx, internal.weather.scrape, [
   { city: "Chicago" },
 ]);
 ```
-
 
 ## Canceling work
 
