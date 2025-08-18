@@ -343,6 +343,7 @@ export function vOnCompleteArgs<
 
 export type RetryOption = {
   /** Whether to retry the action if it fails.
+   * If false, the action won’t be retried.
    * If true, it will use the default retry behavior.
    * If custom behavior is provided, it will retry using that behavior.
    * If unset, it will use the Workpool's configured default.
