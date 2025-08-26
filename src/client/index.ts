@@ -247,6 +247,27 @@ export class Workpool {
       logLevel: this.options.logLevel ?? DEFAULT_LOG_LEVEL,
     });
   }
+
+  /**
+   * Manually marks a work item as complete. This is only needed for work items
+   * that were enqueued with manualCompletion: true.
+   *
+   * @param ctx - The mutation context that can call ctx.runMutation.
+   * @param id - The ID of the work to mark as complete.
+   * @param result - The result of the work. If not provided, defaults to success with null return value.
+   */
+  async markComplete(
+    ctx: RunMutationCtx,
+    id: WorkId,
+    result?: RunResult
+  ): Promise<void> {
+    await ctx.runMutation(this.component.lib.markComplete, {
+      id,
+      result: result ?? { kind: "success", returnValue: null },
+      logLevel: this.options.logLevel ?? DEFAULT_LOG_LEVEL,
+    });
+  }
+
   /**
    * Gets the status of a work item.
    *
@@ -421,6 +442,14 @@ export type EnqueueOptions = {
    * Useful for passing data from the enqueue site to the onComplete site.
    */
   context?: unknown;
+
+  /**
+   * If true, the workpool will not automatically mark the job as complete
+   * when the function finishes. Instead, you must manually call markComplete()
+   * to signal completion. This is useful for workflows where the function
+   * schedules additional work that should complete before the next job starts.
+   */
+  manualCompletion?: boolean;
 } & (
   | {
       /**
@@ -506,6 +535,7 @@ async function enqueueArgs(
     onComplete,
     runAt: getRunAt(opts),
     retryBehavior: opts?.retryBehavior,
+    manualCompletion: opts?.manualCompletion,
     config: {
       logLevel: opts?.logLevel ?? DEFAULT_LOG_LEVEL,
       maxParallelism: opts?.maxParallelism ?? DEFAULT_MAX_PARALLELISM,

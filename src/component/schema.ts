@@ -67,6 +67,7 @@ export default defineSchema({
     onComplete: v.optional(onComplete),
     retryBehavior: v.optional(retryBehavior),
     canceled: v.optional(v.boolean()),
+    manualCompletion: v.optional(v.boolean()), // if true, completion must be triggered manually
   }),
 
   // Written on enqueue & rescheduled for retry, read & deleted by `main`.

@@ -29,6 +29,7 @@ const itemArgs = {
   // TODO: annotation?
   onComplete: v.optional(onComplete),
   retryBehavior: v.optional(retryBehavior),
+  manualCompletion: v.optional(v.boolean()),
 };
 const enqueueArgs = {
   ...itemArgs,
@@ -171,6 +172,19 @@ async function statusHandler(ctx: QueryCtx, { id }: { id: Id<"work"> }) {
   if (pendingCompletion?.retry) {
     return { state: "pending", previousAttempts: work.attempts } as const;
   }
+  
+  // Check if this is a manual completion job that's waiting for manual completion
+  if (work.manualCompletion) {
+    // Check if the work is currently running by looking for it in internalState
+    const internalState = await ctx.db.query("internalState").unique();
+    const isRunning = internalState?.running?.some(r => r.workId === id) ?? false;
+    
+    if (isRunning) {
+      // Job has finished executing but is waiting for manual completion
+      return { state: "running", previousAttempts: work.attempts } as const;
+    }
+  }
+  
   // Assume it's in progress. It could be pending cancelation
   return { state: "running", previousAttempts: work.attempts } as const;
 }
@@ -207,6 +221,57 @@ async function shouldCancelWorkItem(
   }
   return true;
 }
+
+export const markComplete = mutation({
+  args: {
+    id: v.id("work"),
+    result: v.object({
+      kind: v.union(
+        v.literal("success"),
+        v.literal("failed"),
+        v.literal("canceled")
+      ),
+      returnValue: v.optional(v.any()),
+      error: v.optional(v.string()),
+    }),
+    logLevel,
+  },
+  returns: v.null(),
+  handler: async (ctx, { id, result, logLevel }) => {
+    const console = createLogger(logLevel);
+    
+    // Check if the work exists and is in manual completion mode
+    const work = await ctx.db.get(id);
+    if (!work) {
+      console.warn(`[markComplete] work ${id} doesn't exist`);
+      return null;
+    }
+    
+    if (!work.manualCompletion) {
+      console.warn(`[markComplete] work ${id} is not in manual completion mode`);
+      return null;
+    }
+    
+    // Check if the work is currently running by looking for it in internalState
+    const internalState = await ctx.db.query("internalState").unique();
+    const isRunning = internalState?.running?.some(r => r.workId === id) ?? false;
+    
+    if (!isRunning) {
+      console.warn(`[markComplete] work ${id} is not currently running`);
+      return null;
+    }
+    
+    console.debug(`[markComplete] manually completing work ${id} with result ${result.kind}`);
+    
+    // Schedule completion using the same mechanism as the worker
+    const { internal } = await import("./_generated/api.js");
+    await ctx.scheduler.runAfter(0, internal.complete.complete, {
+      jobs: [{ workId: id, runResult: result, attempt: work.attempts }],
+    });
+    
+    return null;
+  },
+});
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const console = "THIS IS A REMINDER TO USE createLogger";
