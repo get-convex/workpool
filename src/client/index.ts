@@ -242,9 +242,13 @@ export class Workpool {
    *
    * @param ctx - The mutation or action context that can call ctx.runMutation.
    */
-  async cancelAll(ctx: RunMutationCtx): Promise<void> {
+  async cancelAll(
+    ctx: RunMutationCtx,
+    options?: { limit?: number }
+  ): Promise<void> {
     await ctx.runMutation(this.component.lib.cancelAll, {
       logLevel: this.options.logLevel ?? DEFAULT_LOG_LEVEL,
+      ...options,
     });
   }
   /**
