@@ -147,6 +147,7 @@ export const cancelAll = mutation({
       await ctx.scheduler.runAfter(0, api.lib.cancelAll, {
         logLevel,
         before: pageOfWork[pageOfWork.length - 1]._creationTime,
+        limit: pageSize,
       });
     }
   },
