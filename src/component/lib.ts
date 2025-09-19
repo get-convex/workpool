@@ -111,14 +111,19 @@ export const cancel = mutation({
 
 const PAGE_SIZE = 64;
 export const cancelAll = mutation({
-  args: { logLevel, before: v.optional(v.number()) },
-  handler: async (ctx, { logLevel, before }) => {
+  args: {
+    logLevel,
+    before: v.optional(v.number()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, { logLevel, before, limit }) => {
     const beforeTime = before ?? Date.now();
+    const pageSize = limit ?? PAGE_SIZE;
     const pageOfWork = await ctx.db
       .query("work")
       .withIndex("by_creation_time", (q) => q.lte("_creationTime", beforeTime))
       .order("desc")
-      .take(PAGE_SIZE);
+      .take(pageSize);
     const shouldCancel = await Promise.all(
       pageOfWork.map(async ({ _id }) =>
         shouldCancelWorkItem(ctx, _id, logLevel)
@@ -138,10 +143,11 @@ export const cancelAll = mutation({
         }
       })
     );
-    if (pageOfWork.length === PAGE_SIZE) {
+    if (pageOfWork.length === pageSize) {
       await ctx.scheduler.runAfter(0, api.lib.cancelAll, {
         logLevel,
         before: pageOfWork[pageOfWork.length - 1]._creationTime,
+        limit: pageSize,
       });
     }
   },
