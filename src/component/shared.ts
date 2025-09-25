@@ -1,7 +1,7 @@
-import { Infer } from "convex/values";
+import type { Infer } from "convex/values";
 
 import { v } from "convex/values";
-import { Logger, logLevel } from "./logging.js";
+import { type Logger, logLevel } from "./logging.js";
 
 export const fnType = v.union(
   v.literal("action"),
