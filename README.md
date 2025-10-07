@@ -79,6 +79,7 @@ Example:
 ```ts
 const pool = new Workpool(components.emailWorkpool, {
   retryActionsByDefault: true,
+  // Specifies config for actions with retry: true, or if retried by default.
   defaultRetryBehavior: { maxAttempts: 3, initialBackoffMs: 1000, base: 2 },
 });
 

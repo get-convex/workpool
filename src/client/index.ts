@@ -374,6 +374,8 @@ export type WorkpoolOptions = {
 
 export type WorkpoolRetryOptions = {
   /** Default retry behavior for enqueued actions.
+   * Note: setting this doesn't mean actions will be retried by default.
+   * To retry actions by default, set `retryActionsByDefault: true`.
    * See {@link RetryBehavior}.
    */
   defaultRetryBehavior?: RetryBehavior;
