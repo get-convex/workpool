@@ -1,16 +1,16 @@
 import { v } from "convex/values";
-import { Doc, Id } from "./_generated/dataModel.js";
+import type { Doc, Id } from "./_generated/dataModel.js";
 import {
   internalMutation,
   internalQuery,
-  MutationCtx,
+  type MutationCtx,
 } from "./_generated/server.js";
 import {
-  Config,
+  type Config,
   DEFAULT_MAX_PARALLELISM,
   getCurrentSegment,
 } from "./shared.js";
-import { createLogger, Logger, logLevel, shouldLog } from "./logging.js";
+import { createLogger, type Logger, logLevel, shouldLog } from "./logging.js";
 import { internal } from "./_generated/api.js";
 import schema from "./schema.js";
 import { paginator } from "convex-helpers/server/pagination";

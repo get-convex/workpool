@@ -1,5 +1,5 @@
-import { Infer, v } from "convex/values";
-import { internalMutation, MutationCtx } from "./_generated/server.js";
+import { type Infer, v } from "convex/values";
+import { internalMutation, type MutationCtx } from "./_generated/server.js";
 import { completeArgs, completeHandler } from "./complete.js";
 import { createLogger } from "./logging.js";
 

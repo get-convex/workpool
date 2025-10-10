@@ -1,10 +1,14 @@
-import { FunctionHandle } from "convex/server";
-import { Infer, v } from "convex/values";
-import { Id } from "./_generated/dataModel.js";
-import { internalMutation, MutationCtx } from "./_generated/server.js";
+import type { FunctionHandle } from "convex/server";
+import { type Infer, v } from "convex/values";
+import type { Id } from "./_generated/dataModel.js";
+import { internalMutation, type MutationCtx } from "./_generated/server.js";
 import { kickMainLoop } from "./kick.js";
 import { createLogger } from "./logging.js";
-import { OnCompleteArgs, RunResult, vResultValidator } from "./shared.js";
+import {
+  type OnCompleteArgs,
+  type RunResult,
+  vResultValidator,
+} from "./shared.js";
 import { recordCompleted } from "./stats.js";
 
 export type CompleteJob = Infer<typeof completeArgs.fields.jobs.element>;

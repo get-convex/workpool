@@ -1,13 +1,23 @@
-import { Infer, ObjectType, v } from "convex/values";
+import { type Infer, type ObjectType, v } from "convex/values";
 import { api } from "./_generated/api.js";
-import { fnType } from "./shared.js";
-import { Id } from "./_generated/dataModel.js";
-import { mutation, MutationCtx, query, QueryCtx } from "./_generated/server.js";
+import type { Id } from "./_generated/dataModel.js";
+import {
+  mutation,
+  type MutationCtx,
+  query,
+  type QueryCtx,
+} from "./_generated/server.js";
 import { kickMainLoop } from "./kick.js";
-import { createLogger, Logger, LogLevel, logLevel } from "./logging.js";
+import {
+  createLogger,
+  type Logger,
+  type LogLevel,
+  logLevel,
+} from "./logging.js";
 import {
   boundScheduledTime,
   config,
+  fnType,
   getNextSegment,
   max,
   onComplete,

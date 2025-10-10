@@ -63,6 +63,7 @@ export type Mounts = {
       "public",
       {
         before?: number;
+        limit?: number;
         logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
       },
       any

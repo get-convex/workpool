@@ -1,16 +1,16 @@
 import { convexTest } from "convex-test";
 import {
+  afterEach,
+  assert,
+  beforeEach,
   describe,
   expect,
   it,
-  beforeEach,
-  afterEach,
   vi,
-  assert,
 } from "vitest";
-import { Id } from "./_generated/dataModel";
-import schema from "./schema";
-import { api } from "./_generated/api";
+import { api } from "./_generated/api.js";
+import type { Id } from "./_generated/dataModel.js";
+import schema from "./schema.js";
 
 const modules = import.meta.glob("./**/*.ts");
 

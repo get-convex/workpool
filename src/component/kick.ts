@@ -1,10 +1,10 @@
 import { internal } from "./_generated/api.js";
-import { internalMutation, MutationCtx } from "./_generated/server.js";
+import { internalMutation, type MutationCtx } from "./_generated/server.js";
 import { createLogger, DEFAULT_LOG_LEVEL } from "./logging.js";
 import { INITIAL_STATE } from "./loop.js";
 import {
   boundScheduledTime,
-  Config,
+  type Config,
   DEFAULT_MAX_PARALLELISM,
   fromSegment,
   getCurrentSegment,

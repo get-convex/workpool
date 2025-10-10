@@ -1,18 +1,18 @@
+import { paginator } from "convex-helpers/server/pagination";
 import { convexTest } from "convex-test";
 import {
+  afterEach,
+  assert,
+  beforeEach,
   describe,
   expect,
   it,
-  beforeEach,
-  afterEach,
   vi,
-  assert,
 } from "vitest";
-import schema from "./schema";
-import { internal } from "./_generated/api";
-import { Logger } from "./logging";
-import { getCurrentSegment } from "./shared";
-import { paginator } from "convex-helpers/server/pagination";
+import { internal } from "./_generated/api.js";
+import type { Logger } from "./logging.js";
+import schema from "./schema.js";
+import { getCurrentSegment } from "./shared.js";
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -81,7 +81,7 @@ describe("stats", () => {
 
       // Call generateReport with a log level that won't trigger reporting
       await t.run(async (ctx) => {
-        const { generateReport } = await import("./stats");
+        const { generateReport } = await import("./stats.js");
         await generateReport(ctx, consoleMock, state, {
           maxParallelism: 10,
           logLevel: "WARN", // Above REPORT level
@@ -144,7 +144,7 @@ describe("stats", () => {
 
       // Call generateReport with REPORT log level
       await t.run(async (ctx) => {
-        const { generateReport } = await import("./stats");
+        const { generateReport } = await import("./stats.js");
         await generateReport(ctx, consoleMock, state, {
           maxParallelism: 10,
           logLevel: "REPORT", // This should trigger reporting
@@ -223,7 +223,7 @@ describe("stats", () => {
 
       // Call generateReport with REPORT log level
       await t.run(async (ctx) => {
-        const { generateReport } = await import("./stats");
+        const { generateReport } = await import("./stats.js");
         await generateReport(ctx, consoleMock, state, {
           maxParallelism,
           logLevel: "REPORT", // This should trigger reporting

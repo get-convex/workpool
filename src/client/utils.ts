@@ -1,14 +1,14 @@
 import {
-  Expand,
-  FunctionArgs,
-  FunctionReference,
-  FunctionReturnType,
-  FunctionType,
-  FunctionVisibility,
+  type Expand,
+  type FunctionArgs,
+  type FunctionReference,
+  type FunctionReturnType,
+  type FunctionType,
+  type FunctionVisibility,
   getFunctionAddress,
   getFunctionName,
 } from "convex/server";
-import { GenericId } from "convex/values";
+import type { GenericId } from "convex/values";
 
 /* Type utils follow */
 

@@ -1,44 +1,50 @@
 import {
   createFunctionHandle,
-  DefaultFunctionArgs,
-  FunctionHandle,
-  FunctionReference,
-  FunctionType,
-  FunctionVisibility,
-  GenericDataModel,
-  GenericMutationCtx,
+  type DefaultFunctionArgs,
+  type FunctionHandle,
+  type FunctionReference,
+  type FunctionType,
+  type FunctionVisibility,
+  type GenericDataModel,
+  type GenericMutationCtx,
   internalMutationGeneric,
-  RegisteredMutation,
+  type RegisteredMutation,
 } from "convex/server";
-import { Infer, v, Validator, VAny, VString } from "convex/values";
-import { Mounts } from "../component/_generated/api.js";
+import {
+  type Infer,
+  v,
+  type Validator,
+  type VAny,
+  type VString,
+} from "convex/values";
+import type { Mounts } from "../component/_generated/api.js";
 import { DEFAULT_LOG_LEVEL, type LogLevel } from "../component/logging.js";
 import {
-  Config,
+  type Config,
   DEFAULT_MAX_PARALLELISM,
-  OnComplete,
-  vResultValidator,
+  type OnComplete,
   type RetryBehavior,
-  RunResult,
-  OnCompleteArgs as SharedOnCompleteArgs,
-  Status,
+  type RunResult,
+  type OnCompleteArgs as SharedOnCompleteArgs,
+  type Status,
+  vResultValidator,
 } from "../component/shared.js";
 import {
-  RunMutationCtx,
-  RunQueryCtx,
+  type RunMutationCtx,
+  type RunQueryCtx,
   safeFunctionName,
-  UseApi,
+  type UseApi,
 } from "./utils.js";
-export { vResultValidator, type RunResult, type RetryBehavior };
-export { retryBehavior as vRetryBehavior } from "../component/shared.js";
 export { logLevel as vLogLevel, type LogLevel } from "../component/logging.js";
+export { retryBehavior as vRetryBehavior } from "../component/shared.js";
+export { vResultValidator, type RetryBehavior, type RunResult };
 export type WorkId = string & { __isWorkId: true };
 export const vWorkIdValidator = v.string() as VString<WorkId>;
 export {
-  /** @deprecated Use `vWorkIdValidator` instead. */
-  vWorkIdValidator as workIdValidator,
   /** @deprecated Use `vResultValidator` instead. */
   vResultValidator as resultValidator,
+  /** @deprecated Use `vWorkIdValidator` instead. */
+  vWorkIdValidator as workIdValidator,
 };
 /** Equivalent to `vOnCompleteArgs(<your-context-validator>)`. */
 export const vOnComplete = vOnCompleteArgs(v.any());

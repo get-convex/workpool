@@ -1,21 +1,15 @@
 /// <reference types="vite/client" />
 
-import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import schema from "./schema";
-import componentSchema from "../node_modules/@convex-dev/workpool/src/component/schema";
 import { api } from "./_generated/api";
-
-const modules = import.meta.glob("./**/*.ts");
-const componentModules = import.meta.glob(
-  "../node_modules/@convex-dev/workpool/src/component/**/*.ts"
-);
+import { initConvexTest } from "./setup.test";
+import workpool from "@convex-dev/workpool/test";
 
 describe("workpool", () => {
   async function setupTest() {
-    const t = convexTest(schema, modules);
-    t.registerComponent("bigPool", componentSchema, componentModules);
-    t.registerComponent("smallPool", componentSchema, componentModules);
+    const t = initConvexTest();
+    t.registerComponent("bigPool", workpool.schema, workpool.modules);
+    t.registerComponent("smallPool", workpool.schema, workpool.modules);
     return t;
   }
 
