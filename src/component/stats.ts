@@ -151,7 +151,6 @@ export const diagnostics = internalQuery({
     const internalState = await ctx.db.query("internalState").unique();
     const inProgressWork = internalState?.running.length ?? 0;
     const maxParallelism = global?.maxParallelism ?? DEFAULT_MAX_PARALLELISM;
-    /* eslint-disable @typescript-eslint/no-explicit-any */
     const pendingStart = await (ctx.db.query("pendingStart") as any).count();
     const pendingCompletion = await (
       ctx.db.query("pendingCompletion") as any
@@ -160,7 +159,6 @@ export const diagnostics = internalQuery({
       ctx.db.query("pendingCancelation") as any
     ).count();
     const runStatus = await ctx.db.query("runStatus").unique();
-    /* eslint-enable @typescript-eslint/no-explicit-any */
     return {
       canceling: pendingCancelation,
       waiting: pendingStart,

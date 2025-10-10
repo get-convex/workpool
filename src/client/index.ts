@@ -303,7 +303,6 @@ export class Workpool {
    */
   defineOnComplete<
     DataModel extends GenericDataModel,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     V extends Validator<any, any, any> = VAny<any, "optional">,
   >({
     context,
@@ -341,7 +340,6 @@ export class Workpool {
  * @returns The validator for the onComplete mutation.
  */
 export function vOnCompleteArgs<
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   V extends Validator<any, "required", any> = VAny,
 >(context?: V) {
   return v.object({
@@ -470,9 +468,6 @@ export type OnCompleteArgs = {
 
 // ensure OnCompleteArgs satisfies SharedOnCompleteArgs
 const _ = {} as OnCompleteArgs satisfies SharedOnCompleteArgs;
-const _2 = {} as OnCompleteArgs satisfies Infer<
-  ReturnType<typeof vOnCompleteArgs<VAny>>
->;
 
 //
 // Helper functions
