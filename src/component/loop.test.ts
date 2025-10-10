@@ -1,5 +1,5 @@
 import { convexTest } from "convex-test";
-import { WithoutSystemFields } from "convex/server";
+import type { WithoutSystemFields } from "convex/server";
 import {
   afterEach,
   assert,
@@ -9,17 +9,17 @@ import {
   it,
   vi,
 } from "vitest";
-import { api, internal } from "./_generated/api";
-import { Doc, Id } from "./_generated/dataModel";
-import { MutationCtx } from "./_generated/server";
-import schema from "./schema";
+import { api, internal } from "./_generated/api.js";
+import type { Doc, Id } from "./_generated/dataModel.js";
+import type { MutationCtx } from "./_generated/server.js";
+import { DEFAULT_LOG_LEVEL } from "./logging.js";
+import schema from "./schema.js";
 import {
   DEFAULT_MAX_PARALLELISM,
   getCurrentSegment,
   getNextSegment,
   toSegment,
-} from "./shared";
-import { DEFAULT_LOG_LEVEL } from "./logging";
+} from "./shared.js";
 
 const modules = import.meta.glob("./**/*.ts");
 

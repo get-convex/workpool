@@ -112,7 +112,6 @@ export const calculateBacklogAndReport = internalMutation({
     logLevel,
   },
   handler: async (ctx, args) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const pendingStart = await (ctx.db.query("pendingStart") as any).count();
 
     const console = createLogger(args.logLevel);

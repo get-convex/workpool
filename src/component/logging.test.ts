@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldLog } from "./logging";
+import { shouldLog } from "./logging.js";
 
 describe("logging", () => {
   describe("shouldLog", () => {

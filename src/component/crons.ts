@@ -1,8 +1,8 @@
 import { cronJobs } from "convex/server";
-import { internal } from "./_generated/api";
-import { internalMutation } from "./_generated/server";
-import { getCurrentSegment, MINUTE, toSegment } from "./shared";
-import { RECOVERY_PERIOD_SEGMENTS } from "./loop";
+import { internal } from "./_generated/api.js";
+import { internalMutation } from "./_generated/server.js";
+import { getCurrentSegment, MINUTE, toSegment } from "./shared.js";
+import { RECOVERY_PERIOD_SEGMENTS } from "./loop.js";
 
 const crons = cronJobs();
 

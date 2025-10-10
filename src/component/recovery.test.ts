@@ -1,19 +1,19 @@
 import { convexTest } from "convex-test";
+import type { WithoutSystemFields } from "convex/server";
 import {
+  afterEach,
+  assert,
+  beforeEach,
   describe,
   expect,
   it,
-  beforeEach,
-  afterEach,
   vi,
-  assert,
 } from "vitest";
-import schema from "./schema";
-import { internal } from "./_generated/api";
-import { Id, Doc } from "./_generated/dataModel";
-import { MutationCtx } from "./_generated/server";
-import { WithoutSystemFields } from "convex/server";
-import { recoveryHandler } from "./recovery";
+import { internal } from "./_generated/api.js";
+import type { Doc, Id } from "./_generated/dataModel.js";
+import type { MutationCtx } from "./_generated/server.js";
+import { recoveryHandler } from "./recovery.js";
+import schema from "./schema.js";
 
 const modules = import.meta.glob("./**/*.ts");
 

@@ -8,18 +8,18 @@ import {
   test,
   vi,
 } from "vitest";
-import { internal } from "./_generated/api";
+import { internal } from "./_generated/api.js";
 import { kickMainLoop } from "./kick.js";
 import { DEFAULT_LOG_LEVEL } from "./logging.js";
 import schema from "./schema.js";
 import { modules } from "./setup.test.js";
 import {
+  DEFAULT_MAX_PARALLELISM,
   fromSegment,
   getCurrentSegment,
   getNextSegment,
   toSegment,
-} from "./shared";
-import { DEFAULT_MAX_PARALLELISM } from "./shared.js";
+} from "./shared.js";
 
 describe("kickMainLoop", () => {
   beforeEach(() => {
