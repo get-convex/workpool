@@ -45,7 +45,12 @@ export default defineSchema({
   // Safe to read from kickLoop, since it should update infrequently.
   runStatus: defineTable({
     state: v.union(
-      v.object({ kind: v.literal("running") }),
+      v.object({
+        kind: v.literal("running"),
+
+        // TODO: find a way to detect that it needs to be saved
+      }),
+      // Delete this one: always start if it's idle
       v.object({
         kind: v.literal("scheduled"),
         segment,
@@ -73,9 +78,7 @@ export default defineSchema({
   pendingStart: defineTable({
     workId: v.id("work"),
     segment,
-  })
-    .index("workId", ["workId"])
-    .index("segment", ["segment"]),
+  }).index("workId", ["workId"]),
 
   // Written by complete, read & deleted by `main`.
   pendingCompletion: defineTable({
@@ -83,15 +86,11 @@ export default defineSchema({
     runResult: vResultValidator,
     workId: v.id("work"),
     retry: v.boolean(),
-  })
-    .index("workId", ["workId"])
-    .index("segment", ["segment"]),
+  }).index("workId", ["workId"]),
 
   // Written on cancelation, read & deleted by `main`.
   pendingCancelation: defineTable({
     segment,
     workId: v.id("work"),
-  })
-    .index("workId", ["workId"])
-    .index("segment", ["segment"]),
+  }).index("workId", ["workId"]),
 });
