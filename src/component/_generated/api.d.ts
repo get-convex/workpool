@@ -8,66 +8,18 @@
  * @module
  */
 
-import type * as complete from "../complete.js";
-import type * as crons from "../crons.js";
-import type * as danger from "../danger.js";
-import type * as kick from "../kick.js";
-import type * as lib from "../lib.js";
-import type * as logging from "../logging.js";
-import type * as loop from "../loop.js";
-import type * as recovery from "../recovery.js";
-import type * as shared from "../shared.js";
-import type * as stats from "../stats.js";
-import type * as worker from "../worker.js";
-
-import type {
-  ApiFromModules,
-  FilterApi,
-  FunctionReference,
-} from "convex/server";
+import type { FunctionReference } from "convex/server";
 
 /**
- * A utility for referencing Convex functions in your app's API.
+ * A utility for referencing Convex functions in your app's public API.
  *
  * Usage:
  * ```js
  * const myFunctionReference = api.myModule.myFunction;
  * ```
  */
-declare const fullApi: ApiFromModules<{
-  complete: typeof complete;
-  crons: typeof crons;
-  danger: typeof danger;
-  kick: typeof kick;
-  lib: typeof lib;
-  logging: typeof logging;
-  loop: typeof loop;
-  recovery: typeof recovery;
-  shared: typeof shared;
-  stats: typeof stats;
-  worker: typeof worker;
-}>;
-export type Mounts = {
+export declare const api: {
   lib: {
-    cancel: FunctionReference<
-      "mutation",
-      "public",
-      {
-        id: string;
-        logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
-      },
-      any
-    >;
-    cancelAll: FunctionReference<
-      "mutation",
-      "public",
-      {
-        before?: number;
-        limit?: number;
-        logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
-      },
-      any
-    >;
     enqueue: FunctionReference<
       "mutation",
       "public",
@@ -88,7 +40,7 @@ export type Mounts = {
         };
         runAt: number;
       },
-      string
+      Id<"work">
     >;
     enqueueBatch: FunctionReference<
       "mutation",
@@ -112,12 +64,31 @@ export type Mounts = {
           runAt: number;
         }>;
       },
-      Array<string>
+      Array<Id<"work">>
+    >;
+    cancel: FunctionReference<
+      "mutation",
+      "public",
+      {
+        id: Id<"work">;
+        logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
+      },
+      any
+    >;
+    cancelAll: FunctionReference<
+      "mutation",
+      "public",
+      {
+        before?: number;
+        limit?: number;
+        logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
+      },
+      any
     >;
     status: FunctionReference<
       "query",
       "public",
-      { id: string },
+      { id: Id<"work"> },
       | { previousAttempts: number; state: "pending" }
       | { previousAttempts: number; state: "running" }
       | { state: "finished" }
@@ -125,7 +96,7 @@ export type Mounts = {
     statusBatch: FunctionReference<
       "query",
       "public",
-      { ids: Array<string> },
+      { ids: Array<Id<"work">> },
       Array<
         | { previousAttempts: number; state: "pending" }
         | { previousAttempts: number; state: "running" }
@@ -134,18 +105,132 @@ export type Mounts = {
     >;
   };
 };
-// For now fullApiWithMounts is only fullApi which provides
-// jump-to-definition in component client code.
-// Use Mounts for the same type without the inference.
-declare const fullApiWithMounts: typeof fullApi;
 
-export declare const api: FilterApi<
-  typeof fullApiWithMounts,
-  FunctionReference<any, "public">
->;
-export declare const internal: FilterApi<
-  typeof fullApiWithMounts,
-  FunctionReference<any, "internal">
->;
+/**
+ * A utility for referencing Convex functions in your app's internal API.
+ *
+ * Usage:
+ * ```js
+ * const myFunctionReference = internal.myModule.myFunction;
+ * ```
+ */
+export declare const internal: {
+  complete: {
+    complete: FunctionReference<
+      "mutation",
+      "internal",
+      {
+        jobs: Array<{
+          attempt: number;
+          runResult:
+            | { kind: "success"; returnValue: any }
+            | { error: string; kind: "failed" }
+            | { kind: "canceled" };
+          workId: Id<"work">;
+        }>;
+      },
+      any
+    >;
+  };
+  crons: {
+    recover: FunctionReference<"mutation", "internal", {}, any>;
+  };
+  danger: {
+    clearPending: FunctionReference<
+      "mutation",
+      "internal",
+      { before?: number; cursor?: string; olderThan?: number },
+      any
+    >;
+    clearOldWork: FunctionReference<
+      "mutation",
+      "internal",
+      { before?: number; cursor?: string; olderThan?: number },
+      any
+    >;
+  };
+  kick: {
+    forceKick: FunctionReference<"mutation", "internal", {}, any>;
+  };
+  loop: {
+    main: FunctionReference<
+      "mutation",
+      "internal",
+      { generation: bigint; segment: bigint },
+      any
+    >;
+    updateRunStatus: FunctionReference<
+      "mutation",
+      "internal",
+      { generation: bigint; segment: bigint },
+      any
+    >;
+  };
+  recovery: {
+    recover: FunctionReference<
+      "mutation",
+      "internal",
+      {
+        jobs: Array<{
+          attempt: number;
+          scheduledId: Id<"_scheduled_functions">;
+          started: number;
+          workId: Id<"work">;
+        }>;
+      },
+      any
+    >;
+  };
+  stats: {
+    calculateBacklogAndReport: FunctionReference<
+      "mutation",
+      "internal",
+      {
+        cursor: string;
+        endSegment: bigint;
+        logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
+        report: {
+          canceled: number;
+          completed: number;
+          failed: number;
+          lastReportTs: number;
+          retries: number;
+          succeeded: number;
+        };
+        running: number;
+        startSegment: bigint;
+      },
+      any
+    >;
+    diagnostics: FunctionReference<"query", "internal", {}, any>;
+  };
+  worker: {
+    runMutationWrapper: FunctionReference<
+      "mutation",
+      "internal",
+      {
+        attempt: number;
+        fnArgs: any;
+        fnHandle: string;
+        fnType: "query" | "mutation";
+        logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
+        workId: Id<"work">;
+      },
+      any
+    >;
+    runActionWrapper: FunctionReference<
+      "action",
+      "internal",
+      {
+        attempt: number;
+        fnArgs: any;
+        fnHandle: string;
+        logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
+        workId: Id<"work">;
+      },
+      any
+    >;
+  };
+};
 
 export declare const components: {};
