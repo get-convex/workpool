@@ -4,7 +4,7 @@ import schema from "./component/schema.js";
 const modules = import.meta.glob("./component/**/*.ts");
 function register(
   t: TestConvex<SchemaDefinition<GenericSchema, boolean>>,
-  name: string
+  name: string = "workpool"
 ) {
   t.registerComponent(name, schema, modules);
 }
