@@ -17,7 +17,7 @@ import {
   type VAny,
   type VString,
 } from "convex/values";
-import type { Mounts } from "../component/_generated/api.js";
+import type { api } from "../component/_generated/api.js";
 import { DEFAULT_LOG_LEVEL, type LogLevel } from "../component/logging.js";
 import {
   type Config,
@@ -59,7 +59,7 @@ export const DEFAULT_RETRY_BEHAVIOR: RetryBehavior = {
 };
 
 // UseApi<api> for jump to definition
-export type WorkpoolComponent = UseApi<Mounts>;
+export type WorkpoolComponent = UseApi<typeof api>;
 
 export class Workpool {
   /**
@@ -545,7 +545,7 @@ export async function enqueueBatch<
   Args extends DefaultFunctionArgs,
   ReturnType,
 >(
-  component: UseApi<Mounts>,
+  component: WorkpoolComponent,
   ctx: RunMutationCtx,
   fnType: FnType,
   fn: FunctionReference<FnType, FunctionVisibility, Args, ReturnType>,
@@ -573,7 +573,7 @@ export async function enqueue<
   Args extends DefaultFunctionArgs,
   ReturnType,
 >(
-  component: UseApi<Mounts>,
+  component: WorkpoolComponent,
   ctx: RunMutationCtx,
   fnType: FnType,
   fn: FunctionReference<FnType, FunctionVisibility, Args, ReturnType>,
