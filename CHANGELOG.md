@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.19 alpha
+## 0.2.19
 
 - Expose a /test entrypoint to make testing registration easier.
 - Update the packaging structure.
