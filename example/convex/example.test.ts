@@ -8,8 +8,8 @@ import workpool from "@convex-dev/workpool/test";
 describe("workpool", () => {
   async function setupTest() {
     const t = initConvexTest();
-    t.registerComponent("bigPool", workpool.schema, workpool.modules);
-    t.registerComponent("smallPool", workpool.schema, workpool.modules);
+    workpool.register(t, "bigPool");
+    workpool.register(t, "smallPool");
     return t;
   }
 
