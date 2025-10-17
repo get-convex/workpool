@@ -61,6 +61,12 @@ export type RetryBehavior = {
    */
   base: number;
 };
+// Attempts will run with delay [0, 250, 500, 1000, 2000] (ms)
+export const DEFAULT_RETRY_BEHAVIOR: RetryBehavior = {
+  maxAttempts: 5,
+  initialBackoffMs: 250,
+  base: 2,
+};
 // This ensures that the type satisfies the schema.
 const _ = {} as RetryBehavior satisfies Infer<typeof retryBehavior>;
 
