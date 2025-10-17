@@ -42,8 +42,7 @@
   },
   "files": [
     "dist",
-    "src",
-    "react"
+    "src"
   ],
   "exports": {
     "./package.json": "./package.json",
