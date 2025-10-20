@@ -8,118 +8,37 @@
  * @module
  */
 
-import type { FunctionReference } from "convex/server";
+import type * as crons from "../crons.js";
+import type * as example from "../example.js";
+
+import type {
+  ApiFromModules,
+  FilterApi,
+  FunctionReference,
+} from "convex/server";
 
 /**
- * A utility for referencing Convex functions in your app's public API.
+ * A utility for referencing Convex functions in your app's API.
  *
  * Usage:
  * ```js
  * const myFunctionReference = api.myModule.myFunction;
  * ```
  */
-export declare const api: {
-  example: {
-    addMutation: FunctionReference<
-      "mutation",
-      "public",
-      { data?: number },
-      any
-    >;
-    addAction: FunctionReference<"action", "public", { data?: number }, any>;
-    queryData: FunctionReference<"query", "public", { add?: number }, any>;
-    enqueueOneMutation: FunctionReference<
-      "mutation",
-      "public",
-      { data: number },
-      any
-    >;
-    enqueueOneQuery: FunctionReference<
-      "mutation",
-      "public",
-      { add?: number },
-      any
-    >;
-    cancelMutation: FunctionReference<
-      "mutation",
-      "public",
-      { id: string },
-      any
-    >;
-    status: FunctionReference<"query", "public", { id: string }, any>;
-    enqueueABunchOfMutations: FunctionReference<"action", "public", {}, any>;
-    addLowPri: FunctionReference<"mutation", "public", { data?: number }, any>;
-    enqueueLowPriMutations: FunctionReference<"action", "public", {}, any>;
-    highPriMutation: FunctionReference<
-      "mutation",
-      "public",
-      { data: number },
-      any
-    >;
-    enqueueABunchOfActions: FunctionReference<"action", "public", {}, any>;
-    enqueueAnAction: FunctionReference<"mutation", "public", {}, any>;
-    echo: FunctionReference<"query", "public", { num: number }, any>;
-  };
-};
+declare const fullApi: ApiFromModules<{
+  crons: typeof crons;
+  example: typeof example;
+}>;
+declare const fullApiWithMounts: typeof fullApi;
 
-/**
- * A utility for referencing Convex functions in your app's internal API.
- *
- * Usage:
- * ```js
- * const myFunctionReference = internal.myModule.myFunction;
- * ```
- */
-export declare const internal: {
-  example: {
-    backgroundWork: FunctionReference<"action", "internal", {}, any>;
-    startBackgroundWork: FunctionReference<"action", "internal", {}, any>;
-    foregroundWork: FunctionReference<
-      "action",
-      "internal",
-      { ms?: number },
-      any
-    >;
-    startForegroundWork: FunctionReference<"action", "internal", {}, any>;
-    enqueueABatchOfActions: FunctionReference<"action", "internal", {}, any>;
-    myAction: FunctionReference<
-      "action",
-      "internal",
-      { fate: "succeed" | "fail randomly" | "fail always"; ms?: number },
-      any
-    >;
-    onComplete: FunctionReference<
-      "mutation",
-      "internal",
-      {
-        context: number;
-        result:
-          | { kind: "success"; returnValue: any }
-          | { error: string; kind: "failed" }
-          | { kind: "canceled" };
-        workId: string;
-      },
-      any
-    >;
-    noop: FunctionReference<"mutation", "internal", { started: number }, any>;
-    complete: FunctionReference<
-      "mutation",
-      "internal",
-      {
-        context: number;
-        result:
-          | { kind: "success"; returnValue: any }
-          | { error: string; kind: "failed" }
-          | { kind: "canceled" };
-        workId: string;
-      },
-      any
-    >;
-    singleLatency: FunctionReference<"mutation", "internal", {}, any>;
-    runPaced: FunctionReference<"action", "internal", { n?: number }, any>;
-    cancel: FunctionReference<"action", "internal", { id?: string }, any>;
-  };
-};
+export declare const api: FilterApi<
+  typeof fullApiWithMounts,
+  FunctionReference<any, "public">
+>;
+export declare const internal: FilterApi<
+  typeof fullApiWithMounts,
+  FunctionReference<any, "internal">
+>;
 
 export declare const components: {
   smallPool: {
