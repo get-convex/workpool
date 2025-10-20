@@ -6,7 +6,7 @@ export default [
   { files: ["src/**/*.{js,mjs,cjs,ts,tsx}"] },
   {
     ignores: [
-      "dist/**",
+      "dist",
       "eslint.config.js",
       "**/_generated/",
       "node10stubs.mjs",
@@ -20,7 +20,7 @@ export default [
 
       parserOptions: {
         project: true,
-        tsconfigRootDir: ".",
+        tsconfigRootDir: import.meta.dirname,
       },
     },
   },
