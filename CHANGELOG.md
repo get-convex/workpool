@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.20 alpha
+
+- Move definition of retry default next to retry type.
+
 ## 0.2.19
 
 - Expose a /test entrypoint to make testing registration easier.
