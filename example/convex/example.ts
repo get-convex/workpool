@@ -8,7 +8,7 @@ import {
 import { api, components, internal } from "./_generated/api";
 import {
   WorkId,
-  vWorkIdValidator,
+  vWorkId,
   Workpool,
   vOnCompleteArgs,
 } from "@convex-dev/workpool";
@@ -87,14 +87,14 @@ export const enqueueOneQuery = mutation({
 });
 
 export const cancelMutation = mutation({
-  args: { id: vWorkIdValidator },
+  args: { id: vWorkId },
   handler: async (ctx, { id }) => {
     await smallPool.cancel(ctx, id);
   },
 });
 
 export const status = query({
-  args: { id: vWorkIdValidator },
+  args: { id: vWorkId },
   handler: async (ctx, { id }) => {
     return await smallPool.status(ctx, id);
   },
@@ -335,7 +335,7 @@ export const runPaced = internalAction({
 
 export const cancel = internalAction({
   args: {
-    id: v.optional(vWorkIdValidator),
+    id: v.optional(vWorkId),
   },
   handler: async (ctx, args) => {
     console.debug("Canceling", args.id);
