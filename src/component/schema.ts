@@ -5,7 +5,7 @@ import {
   config,
   onComplete,
   retryBehavior,
-  vResultValidator,
+  vResult,
 } from "./shared.js";
 
 // Represents a slice of time to process work.
@@ -80,7 +80,7 @@ export default defineSchema({
   // Written by complete, read & deleted by `main`.
   pendingCompletion: defineTable({
     segment,
-    runResult: vResultValidator,
+    runResult: vResult,
     workId: v.id("work"),
     retry: v.boolean(),
   })

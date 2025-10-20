@@ -4,11 +4,7 @@ import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, type MutationCtx } from "./_generated/server.js";
 import { kickMainLoop } from "./kick.js";
 import { createLogger } from "./logging.js";
-import {
-  type OnCompleteArgs,
-  type RunResult,
-  vResultValidator,
-} from "./shared.js";
+import { type OnCompleteArgs, type RunResult, vResult } from "./shared.js";
 import { recordCompleted } from "./stats.js";
 
 export type CompleteJob = Infer<typeof completeArgs.fields.jobs.element>;
@@ -16,7 +12,7 @@ export type CompleteJob = Infer<typeof completeArgs.fields.jobs.element>;
 export const completeArgs = v.object({
   jobs: v.array(
     v.object({
-      runResult: vResultValidator,
+      runResult: vResult,
       workId: v.id("work"),
       attempt: v.number(),
     }),
