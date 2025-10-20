@@ -28,7 +28,7 @@ import {
   type RunResult,
   type OnCompleteArgs as SharedOnCompleteArgs,
   type Status,
-  vResultValidator,
+  vResult,
 } from "../component/shared.js";
 import {
   type RunMutationCtx,
@@ -37,16 +37,21 @@ import {
 } from "./utils.js";
 export { logLevel as vLogLevel, type LogLevel } from "../component/logging.js";
 export { retryBehavior as vRetryBehavior } from "../component/shared.js";
-export { vResultValidator, type RetryBehavior, type RunResult };
 
 export type WorkId = string & { __isWorkId: true };
-export const vWorkIdValidator = v.string() as VString<WorkId>;
+export const vWorkId = v.string() as VString<WorkId>;
 export {
+  vResult,
   DEFAULT_RETRY_BEHAVIOR,
-  /** @deprecated Use `vResultValidator` instead. */
-  vResultValidator as resultValidator,
-  /** @deprecated Use `vWorkIdValidator` instead. */
-  vWorkIdValidator as workIdValidator,
+  /** @deprecated Use `vResult` instead. */
+  vResult as resultValidator,
+  /** @deprecated Use `vWorkId` instead. */
+  vWorkId as workIdValidator,
+  // Older name, not deprecated yet
+  vWorkId as vWorkIdValidator,
+  vResult as vResultValidator,
+  type RetryBehavior,
+  type RunResult,
 };
 /** Equivalent to `vOnCompleteArgs(<your-context-validator>)`. */
 export const vOnComplete = vOnCompleteArgs(v.any());
@@ -337,9 +342,9 @@ export function vOnCompleteArgs<
   V extends Validator<any, "required", any> = VAny,
 >(context?: V) {
   return v.object({
-    workId: vWorkIdValidator,
+    workId: vWorkId,
     context: (context ?? v.optional(v.any())) as V,
-    result: vResultValidator,
+    result: vResult,
   });
 }
 

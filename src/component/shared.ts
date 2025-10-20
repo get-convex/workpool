@@ -70,7 +70,7 @@ export const DEFAULT_RETRY_BEHAVIOR: RetryBehavior = {
 // This ensures that the type satisfies the schema.
 const _ = {} as RetryBehavior satisfies Infer<typeof retryBehavior>;
 
-export const vResultValidator = v.union(
+export const vResult = v.union(
   v.object({
     kind: v.literal("success"),
     returnValue: v.any(),
@@ -83,7 +83,7 @@ export const vResultValidator = v.union(
     kind: v.literal("canceled"),
   }),
 );
-export type RunResult = Infer<typeof vResultValidator>;
+export type RunResult = Infer<typeof vResult>;
 
 export const onComplete = v.object({
   fnHandle: v.string(), // mutation
