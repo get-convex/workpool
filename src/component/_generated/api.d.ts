@@ -26,14 +26,6 @@ import type {
   FunctionReference,
 } from "convex/server";
 
-/**
- * A utility for referencing Convex functions in your app's API.
- *
- * Usage:
- * ```js
- * const myFunctionReference = api.myModule.myFunction;
- * ```
- */
 declare const fullApi: ApiFromModules<{
   complete: typeof complete;
   crons: typeof crons;
@@ -47,104 +39,30 @@ declare const fullApi: ApiFromModules<{
   stats: typeof stats;
   worker: typeof worker;
 }>;
-export type Mounts = {
-  lib: {
-    cancel: FunctionReference<
-      "mutation",
-      "public",
-      {
-        id: string;
-        logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
-      },
-      any
-    >;
-    cancelAll: FunctionReference<
-      "mutation",
-      "public",
-      {
-        before?: number;
-        limit?: number;
-        logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
-      },
-      any
-    >;
-    enqueue: FunctionReference<
-      "mutation",
-      "public",
-      {
-        config: {
-          logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
-          maxParallelism: number;
-        };
-        fnArgs: any;
-        fnHandle: string;
-        fnName: string;
-        fnType: "action" | "mutation" | "query";
-        onComplete?: { context?: any; fnHandle: string };
-        retryBehavior?: {
-          base: number;
-          initialBackoffMs: number;
-          maxAttempts: number;
-        };
-        runAt: number;
-      },
-      string
-    >;
-    enqueueBatch: FunctionReference<
-      "mutation",
-      "public",
-      {
-        config: {
-          logLevel: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
-          maxParallelism: number;
-        };
-        items: Array<{
-          fnArgs: any;
-          fnHandle: string;
-          fnName: string;
-          fnType: "action" | "mutation" | "query";
-          onComplete?: { context?: any; fnHandle: string };
-          retryBehavior?: {
-            base: number;
-            initialBackoffMs: number;
-            maxAttempts: number;
-          };
-          runAt: number;
-        }>;
-      },
-      Array<string>
-    >;
-    status: FunctionReference<
-      "query",
-      "public",
-      { id: string },
-      | { previousAttempts: number; state: "pending" }
-      | { previousAttempts: number; state: "running" }
-      | { state: "finished" }
-    >;
-    statusBatch: FunctionReference<
-      "query",
-      "public",
-      { ids: Array<string> },
-      Array<
-        | { previousAttempts: number; state: "pending" }
-        | { previousAttempts: number; state: "running" }
-        | { state: "finished" }
-      >
-    >;
-  };
-};
-// For now fullApiWithMounts is only fullApi which provides
-// jump-to-definition in component client code.
-// Use Mounts for the same type without the inference.
-declare const fullApiWithMounts: typeof fullApi;
 
+/**
+ * A utility for referencing Convex functions in your app's public API.
+ *
+ * Usage:
+ * ```js
+ * const myFunctionReference = api.myModule.myFunction;
+ * ```
+ */
 export declare const api: FilterApi<
-  typeof fullApiWithMounts,
+  typeof fullApi,
   FunctionReference<any, "public">
 >;
+
+/**
+ * A utility for referencing Convex functions in your app's internal API.
+ *
+ * Usage:
+ * ```js
+ * const myFunctionReference = internal.myModule.myFunction;
+ * ```
+ */
 export declare const internal: FilterApi<
-  typeof fullApiWithMounts,
+  typeof fullApi,
   FunctionReference<any, "internal">
 >;
 

@@ -17,7 +17,7 @@ import {
   type VAny,
   type VString,
 } from "convex/values";
-import type { api } from "../component/_generated/api.js";
+import type { ComponentApi } from "../component/_generated/component.js";
 import { DEFAULT_LOG_LEVEL, type LogLevel } from "../component/logging.js";
 import {
   type Config,
@@ -34,11 +34,11 @@ import {
   type RunMutationCtx,
   type RunQueryCtx,
   safeFunctionName,
-  type UseApi,
 } from "./utils.js";
 export { logLevel as vLogLevel, type LogLevel } from "../component/logging.js";
 export { retryBehavior as vRetryBehavior } from "../component/shared.js";
 export { vResultValidator, type RetryBehavior, type RunResult };
+
 export type WorkId = string & { __isWorkId: true };
 export const vWorkIdValidator = v.string() as VString<WorkId>;
 export {
@@ -53,8 +53,7 @@ export const vOnComplete = vOnCompleteArgs(v.any());
 /** @deprecated Use `vOnCompleteArgs()` instead. */
 export const vOnCompleteValidator = vOnCompleteArgs;
 
-// UseApi<api> for jump to definition
-export type WorkpoolComponent = UseApi<typeof api>;
+export type WorkpoolComponent = ComponentApi;
 
 export class Workpool {
   /**
