@@ -26,7 +26,7 @@ export function recordEnqueued(
     workId: Id<"work">;
     fnName: string;
     runAt: number;
-  }
+  },
 ) {
   console.event("enqueued", {
     ...data,
@@ -37,7 +37,7 @@ export function recordEnqueued(
 export function recordStarted(
   console: Logger,
   work: Doc<"work">,
-  lagMs: number
+  lagMs: number,
 ) {
   console.event("started", {
     workId: work._id,
@@ -51,7 +51,7 @@ export function recordStarted(
 export function recordCompleted(
   console: Logger,
   work: Doc<"work">,
-  status: "success" | "failed" | "canceled" | "retrying"
+  status: "success" | "failed" | "canceled" | "retrying",
 ) {
   console.event("completed", {
     workId: work._id,
@@ -66,7 +66,7 @@ export async function generateReport(
   ctx: MutationCtx,
   console: Logger,
   state: Doc<"internalState">,
-  { maxParallelism, logLevel }: Config
+  { maxParallelism, logLevel }: Config,
 ) {
   if (!shouldLog(logLevel, "REPORT")) {
     // Don't waste time if we're not going to log.
@@ -78,7 +78,7 @@ export async function generateReport(
     .withIndex("segment", (q) =>
       q
         .gte("segment", state.segmentCursors.incoming)
-        .lt("segment", currentSegment)
+        .lt("segment", currentSegment),
     )
     .paginate({
       numItems: maxParallelism,
@@ -125,7 +125,7 @@ export const calculateBacklogAndReport = internalMutation({
 
 function recordReport(
   console: Logger,
-  report: Doc<"internalState">["report"] & { running: number; backlog: number }
+  report: Doc<"internalState">["report"] & { running: number; backlog: number },
 ) {
   const { completed, failed, retries } = report;
   const withoutRetries = completed - retries;

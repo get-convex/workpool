@@ -20,7 +20,7 @@ import {
 export async function kickMainLoop(
   ctx: MutationCtx,
   source: "enqueue" | "cancel" | "complete" | "kick",
-  config?: Partial<Config>
+  config?: Partial<Config>,
 ): Promise<bigint> {
   const globals = await getOrUpdateGlobals(ctx, config);
   const console = createLogger(globals.logLevel);
@@ -30,7 +30,7 @@ export async function kickMainLoop(
   // Only kick to run now if we're scheduled or idle.
   if (runStatus.state.kind === "running") {
     console.debug(
-      `[${source}] main is actively running, so we don't need to kick it`
+      `[${source}] main is actively running, so we don't need to kick it`,
     );
     return next;
   }
@@ -38,25 +38,25 @@ export async function kickMainLoop(
   if (runStatus.state.kind === "scheduled") {
     if (source === "enqueue" && runStatus.state.saturated) {
       console.debug(
-        `[${source}] main is saturated, so we don't need to kick it`
+        `[${source}] main is saturated, so we don't need to kick it`,
       );
       return next;
     }
     if (runStatus.state.segment <= toSegment(Date.now() + SECOND)) {
       console.debug(
-        `[${source}] main is scheduled to run soon enough, so we don't need to kick it`
+        `[${source}] main is scheduled to run soon enough, so we don't need to kick it`,
       );
       return next;
     }
     console.debug(
-      `[${source}] main is scheduled to run later, so reschedule it to run now`
+      `[${source}] main is scheduled to run later, so reschedule it to run now`,
     );
     const scheduled = await ctx.db.system.get(runStatus.state.scheduledId);
     if (scheduled && scheduled.state.kind === "pending") {
       await ctx.scheduler.cancel(runStatus.state.scheduledId);
     } else {
       console.warn(
-        `[${source}] main is marked as scheduled, but it's status is ${scheduled?.state.kind}`
+        `[${source}] main is marked as scheduled, but it's status is ${scheduled?.state.kind}`,
       );
     }
   } else if (runStatus.state.kind === "idle") {

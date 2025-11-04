@@ -107,7 +107,7 @@ describe("kickMainLoop", () => {
         {
           generation: 0n,
           segment: futureSegment,
-        }
+        },
       );
       await ctx.db.patch(runStatus._id, {
         state: {
@@ -149,7 +149,7 @@ describe("kickMainLoop", () => {
         {
           generation: 0n,
           segment: nearFutureSegment,
-        }
+        },
       );
       await ctx.db.patch(runStatus._id, {
         state: {
@@ -221,8 +221,8 @@ describe("kickMainLoop", () => {
         t.run(async (ctx) => {
           const segment = await kickMainLoop(ctx, "enqueue");
           return segment;
-        })
-      )
+        }),
+      ),
     );
     expect(segments.filter((s) => s === getCurrentSegment())).toHaveLength(1);
 
@@ -278,7 +278,7 @@ describe("kickMainLoop", () => {
       const scheduledId = await ctx.scheduler.runAfter(
         10_000,
         internal.loop.main,
-        { generation: 0n, segment }
+        { generation: 0n, segment },
       );
       await ctx.db.patch(runStatus._id, {
         state: {

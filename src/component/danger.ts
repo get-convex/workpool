@@ -29,7 +29,7 @@ export const clearPending = internalMutation({
         if (work) {
           await ctx.db.delete(work._id);
         }
-      })
+      }),
     );
     if (!entries.isDone) {
       await ctx.scheduler.runAfter(0, internal.danger.clearPending, {
@@ -87,10 +87,10 @@ export const clearOldWork = internalMutation({
           })
             .filter(([_, v]) => v !== null)
             .map(([name]) => name)
-            .join(", ")})`
+            .join(", ")})`,
         );
         await ctx.db.delete(entry._id);
-      })
+      }),
     );
     if (!entries.isDone) {
       await ctx.scheduler.runAfter(0, internal.danger.clearOldWork, {

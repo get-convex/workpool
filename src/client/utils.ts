@@ -15,18 +15,18 @@ import type { GenericId, Value } from "convex/values";
 export type RunQueryCtx = {
   runQuery: <Query extends FunctionReference<"query", "internal">>(
     query: Query,
-    args: FunctionArgs<Query>
+    args: FunctionArgs<Query>,
   ) => Promise<FunctionReturnType<Query>>;
 };
 export type RunMutationCtx = RunQueryCtx & {
   runMutation: <Mutation extends FunctionReference<"mutation", "internal">>(
     mutation: Mutation,
-    args: FunctionArgs<Mutation>
+    args: FunctionArgs<Mutation>,
   ) => Promise<FunctionReturnType<Mutation>>;
 };
 
 export function safeFunctionName(
-  f: FunctionReference<FunctionType, FunctionVisibility>
+  f: FunctionReference<FunctionType, FunctionVisibility>,
 ) {
   const address = getFunctionAddress(f);
   return (

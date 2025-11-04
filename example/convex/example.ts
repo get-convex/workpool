@@ -81,7 +81,7 @@ export const enqueueOneQuery = mutation({
       {
         onComplete: internal.example.complete,
         context: Date.now(),
-      }
+      },
     );
   },
 });
@@ -105,8 +105,8 @@ export const enqueueABunchOfMutations = action({
   handler: async (ctx, _args) => {
     await Promise.all(
       Array.from({ length: 30 }, () =>
-        smallPool.enqueueMutation(ctx, api.example.addMutation, {})
-      )
+        smallPool.enqueueMutation(ctx, api.example.addMutation, {}),
+      ),
     );
   },
 });
@@ -125,8 +125,8 @@ export const enqueueLowPriMutations = action({
   handler: async (ctx, _args) => {
     await Promise.all(
       Array.from({ length: 30 }, () =>
-        serializedPool.enqueueMutation(ctx, api.example.addLowPri, {})
-      )
+        serializedPool.enqueueMutation(ctx, api.example.addLowPri, {}),
+      ),
     );
   },
 });
@@ -143,8 +143,8 @@ export const enqueueABunchOfActions = action({
   handler: async (ctx, _args) => {
     await Promise.all(
       Array.from({ length: 30 }, () =>
-        bigPool.enqueueAction(ctx, api.example.addAction, {})
-      )
+        bigPool.enqueueAction(ctx, api.example.addAction, {}),
+      ),
     );
   },
 });
@@ -181,8 +181,8 @@ export const startBackgroundWork = internalAction({
   handler: async (ctx, _args) => {
     await Promise.all(
       Array.from({ length: 20 }, () =>
-        serializedPool.enqueueAction(ctx, internal.example.backgroundWork, {})
-      )
+        serializedPool.enqueueAction(ctx, internal.example.backgroundWork, {}),
+      ),
     );
   },
 });
@@ -205,8 +205,8 @@ export const startForegroundWork = internalAction({
       Array.from(
         { length: 100 },
         async () =>
-          await bigPool.enqueueAction(ctx, internal.example.foregroundWork, {})
-      )
+          await bigPool.enqueueAction(ctx, internal.example.foregroundWork, {}),
+      ),
     );
   },
 });
@@ -220,7 +220,7 @@ export const enqueueABatchOfActions = internalAction({
       Array.from({ length: 10 }, () => ({
         fate: "succeed",
         ms: 1000,
-      }))
+      })),
     );
   },
 });
@@ -228,7 +228,7 @@ export const enqueueABatchOfActions = internalAction({
 const fate = v.union(
   v.literal("succeed"),
   v.literal("fail randomly"),
-  v.literal("fail always")
+  v.literal("fail always"),
 );
 
 export const myAction = internalAction({
@@ -298,7 +298,7 @@ export const singleLatency = internalMutation({
       {
         context: started,
         onComplete: internal.example.complete,
-      }
+      },
     );
   },
 });
@@ -321,7 +321,7 @@ export const runPaced = internalAction({
         ctx,
         internal.example.myAction,
         args,
-        { onComplete: internal.example.onComplete, context: start }
+        { onComplete: internal.example.onComplete, context: start },
       );
       console.debug("enqueued", Date.now());
       ids.push(id);

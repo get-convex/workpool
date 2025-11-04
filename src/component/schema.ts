@@ -37,7 +37,7 @@ export default defineSchema({
         workId: v.id("work"),
         scheduledId: v.id("_scheduled_functions"),
         started: v.number(),
-      })
+      }),
     ),
   }),
 
@@ -53,7 +53,7 @@ export default defineSchema({
         saturated: v.boolean(),
         generation: v.int64(),
       }),
-      v.object({ kind: v.literal("idle"), generation: v.int64() })
+      v.object({ kind: v.literal("idle"), generation: v.int64() }),
     ),
   }),
 

@@ -6,7 +6,7 @@ import { type Logger, logLevel } from "./logging.js";
 export const fnType = v.union(
   v.literal("action"),
   v.literal("mutation"),
-  v.literal("query")
+  v.literal("query"),
 );
 
 export const DEFAULT_MAX_PARALLELISM = 10;
@@ -81,7 +81,7 @@ export const vResultValidator = v.union(
   }),
   v.object({
     kind: v.literal("canceled"),
-  })
+  }),
 );
 export type RunResult = Infer<typeof vResultValidator>;
 
@@ -119,8 +119,8 @@ export const status = v.union(
     }),
     v.object({
       state: v.literal("finished"),
-    })
-  )
+    }),
+  ),
 );
 export type Status = Infer<typeof status>;
 
@@ -132,7 +132,7 @@ export function boundScheduledTime(ms: number, console: Logger): number {
   if (ms > Date.now() + 4 * YEAR) {
     console.error(
       "scheduled time is too far in the future, defaulting to 1 year from now",
-      ms
+      ms,
     );
     return Date.now() + YEAR;
   }

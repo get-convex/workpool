@@ -49,7 +49,7 @@ describe("loop", () => {
 
   async function makeDummyWork(
     ctx: MutationCtx,
-    overrides: Partial<WithoutSystemFields<Doc<"work">>> = {}
+    overrides: Partial<WithoutSystemFields<Doc<"work">>> = {},
   ) {
     return ctx.db.insert("work", {
       fnType: "action",
@@ -63,7 +63,7 @@ describe("loop", () => {
 
   async function makeDummyScheduledFunction(
     ctx: MutationCtx,
-    workId: Id<"work">
+    workId: Id<"work">,
   ) {
     return ctx.scheduler.runAfter(0, internal.worker.runActionWrapper, {
       workId,
@@ -76,7 +76,7 @@ describe("loop", () => {
 
   async function insertInternalState(
     ctx: MutationCtx,
-    overrides: Partial<WithoutSystemFields<Doc<"internalState">>> = {}
+    overrides: Partial<WithoutSystemFields<Doc<"internalState">>> = {},
   ) {
     await ctx.db.insert("internalState", {
       generation: 1n,
@@ -450,7 +450,7 @@ describe("loop", () => {
         const scheduledId = await ctx.scheduler.runAfter(
           1000,
           internal.loop.main,
-          { generation: 1n, segment: getNextSegment() + 10n }
+          { generation: 1n, segment: getNextSegment() + 10n },
         );
 
         // Create scheduled runStatus
@@ -553,7 +553,7 @@ describe("loop", () => {
         const scheduledId = await ctx.scheduler.runAfter(
           1000,
           internal.loop.main,
-          { generation: 1n, segment }
+          { generation: 1n, segment },
         );
 
         await ctx.db.insert("runStatus", {
@@ -588,7 +588,7 @@ describe("loop", () => {
 
       // Call main with mismatched generation
       await expect(
-        t.mutation(internal.loop.main, { generation: 1n, segment: 1n })
+        t.mutation(internal.loop.main, { generation: 1n, segment: 1n }),
       ).rejects.toThrow("generation mismatch");
     });
 
@@ -707,7 +707,7 @@ describe("loop", () => {
         // Schedule a function and get its ID
         const scheduledId = await makeDummyScheduledFunction(
           ctx,
-          runningWorkId
+          runningWorkId,
         );
 
         // Create internal state
@@ -848,7 +848,7 @@ describe("loop", () => {
         t.mutation(internal.loop.updateRunStatus, {
           generation: 1n,
           segment: 1n,
-        })
+        }),
       ).rejects.toThrow("generation mismatch");
     });
 
@@ -935,7 +935,7 @@ describe("loop", () => {
               const scheduledId = await makeDummyScheduledFunction(ctx, workId);
 
               return { workId, scheduledId, started: Date.now() };
-            })
+            }),
         );
 
         // Create internal state with max running jobs

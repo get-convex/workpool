@@ -283,7 +283,7 @@ describe("complete", () => {
             workId,
             context: { someContext: "value" },
             result: { kind: "success", returnValue: "test result" },
-          })
+          }),
         );
       });
     });

@@ -69,7 +69,7 @@ export class Workpool {
    */
   constructor(
     public component: WorkpoolComponent,
-    public options: WorkpoolOptions
+    public options: WorkpoolOptions,
   ) {}
 
   /**
@@ -86,12 +86,12 @@ export class Workpool {
     ctx: RunMutationCtx,
     fn: FunctionReference<"action", FunctionVisibility, Args, ReturnType>,
     fnArgs: Args,
-    options?: RetryOption & EnqueueOptions
+    options?: RetryOption & EnqueueOptions,
   ): Promise<WorkId> {
     const retryBehavior = getRetryBehavior(
       this.options.defaultRetryBehavior,
       this.options.retryActionsByDefault,
-      options?.retry
+      options?.retry,
     );
     return enqueue(this.component, ctx, "action", fn, fnArgs, {
       retryBehavior,
@@ -116,12 +116,12 @@ export class Workpool {
     ctx: RunMutationCtx,
     fn: FunctionReference<"action", FunctionVisibility, Args, ReturnType>,
     argsArray: Array<Args>,
-    options?: RetryOption & EnqueueOptions
+    options?: RetryOption & EnqueueOptions,
   ): Promise<WorkId[]> {
     const retryBehavior = getRetryBehavior(
       this.options.defaultRetryBehavior,
       this.options.retryActionsByDefault,
-      options?.retry
+      options?.retry,
     );
     return enqueueBatch(this.component, ctx, "action", fn, argsArray, {
       retryBehavior,
@@ -147,7 +147,7 @@ export class Workpool {
     ctx: RunMutationCtx,
     fn: FunctionReference<"mutation", FunctionVisibility, Args, ReturnType>,
     fnArgs: Args,
-    options?: EnqueueOptions
+    options?: EnqueueOptions,
   ): Promise<WorkId> {
     return enqueue(this.component, ctx, "mutation", fn, fnArgs, {
       ...this.options,
@@ -169,7 +169,7 @@ export class Workpool {
     ctx: RunMutationCtx,
     fn: FunctionReference<"mutation", FunctionVisibility, Args, ReturnType>,
     argsArray: Array<Args>,
-    options?: EnqueueOptions
+    options?: EnqueueOptions,
   ): Promise<WorkId[]> {
     return enqueueBatch(this.component, ctx, "mutation", fn, argsArray, {
       ...this.options,
@@ -193,7 +193,7 @@ export class Workpool {
     ctx: RunMutationCtx,
     fn: FunctionReference<"query", FunctionVisibility, Args, ReturnType>,
     fnArgs: Args,
-    options?: EnqueueOptions
+    options?: EnqueueOptions,
   ): Promise<WorkId> {
     return enqueue(this.component, ctx, "query", fn, fnArgs, {
       ...this.options,
@@ -216,7 +216,7 @@ export class Workpool {
     ctx: RunMutationCtx,
     fn: FunctionReference<"query", FunctionVisibility, Args, ReturnType>,
     argsArray: Array<Args>,
-    options?: EnqueueOptions
+    options?: EnqueueOptions,
   ): Promise<WorkId[]> {
     return enqueueBatch(this.component, ctx, "query", fn, argsArray, {
       ...this.options,
@@ -244,7 +244,7 @@ export class Workpool {
    */
   async cancelAll(
     ctx: RunMutationCtx,
-    options?: { limit?: number }
+    options?: { limit?: number },
   ): Promise<void> {
     await ctx.runMutation(this.component.lib.cancelAll, {
       logLevel: this.options.logLevel ?? DEFAULT_LOG_LEVEL,
@@ -309,7 +309,7 @@ export class Workpool {
         workId: WorkId;
         context: Infer<V>;
         result: RunResult;
-      }
+      },
     ) => Promise<void>;
   }): RegisteredMutation<"internal", OnCompleteArgs, null> {
     return internalMutationGeneric({
@@ -470,7 +470,7 @@ const _ = {} as OnCompleteArgs satisfies SharedOnCompleteArgs;
 function getRetryBehavior(
   defaultRetryBehavior: RetryBehavior | undefined,
   retryActionsByDefault: boolean | undefined,
-  retryOverride: boolean | RetryBehavior | undefined
+  retryOverride: boolean | RetryBehavior | undefined,
 ): RetryBehavior | undefined {
   const defaultRetry = defaultRetryBehavior ?? DEFAULT_RETRY_BEHAVIOR;
   const retryByDefault = retryActionsByDefault ?? false;
@@ -489,7 +489,7 @@ async function enqueueArgs(
     | FunctionHandle<FunctionType, DefaultFunctionArgs>,
   opts:
     | (EnqueueOptions & Partial<Config> & { retryBehavior?: RetryBehavior })
-    | undefined
+    | undefined,
 ) {
   const [fnHandle, fnName] =
     typeof fn === "string" && fn.startsWith("function://")
@@ -520,7 +520,7 @@ function getRunAt(
         runAt?: number;
         runAfter?: number;
       }
-    | undefined
+    | undefined,
 ): number {
   if (!options) {
     return Date.now();
@@ -548,7 +548,7 @@ export async function enqueueBatch<
     retryBehavior?: RetryBehavior;
     maxParallelism?: number;
     logLevel?: LogLevel;
-  }
+  },
 ): Promise<WorkId[]> {
   const { config, ...defaults } = await enqueueArgs(fn, options);
   const ids = await ctx.runMutation(component.lib.enqueueBatch, {
@@ -576,7 +576,7 @@ export async function enqueue<
     retryBehavior?: RetryBehavior;
     maxParallelism?: number;
     logLevel?: LogLevel;
-  }
+  },
 ): Promise<WorkId> {
   const id = await ctx.runMutation(component.lib.enqueue, {
     ...(await enqueueArgs(fn, options)),

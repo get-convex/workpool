@@ -240,7 +240,7 @@ describe("stats", () => {
 
         // Check that one of the scheduled functions is calculateBacklogAndReport
         const calculateBacklogScheduled = scheduledFunctions.find(
-          (sf) => sf.name === "stats:calculateBacklogAndReport"
+          (sf) => sf.name === "stats:calculateBacklogAndReport",
         );
         expect(calculateBacklogScheduled).toBeDefined();
         assert(calculateBacklogScheduled);
@@ -306,7 +306,7 @@ describe("stats", () => {
         return await paginator(ctx.db, schema)
           .query("pendingStart")
           .withIndex("segment", (q) =>
-            q.gte("segment", 0n).lt("segment", currentSegment)
+            q.gte("segment", 0n).lt("segment", currentSegment),
           )
           .paginate({
             numItems: 1,
@@ -336,7 +336,7 @@ describe("stats", () => {
 
         // Since our backlog is small, no additional scheduled functions should be created
         const calculateBacklogScheduled = scheduledFunctions.find(
-          (sf) => sf.name === "stats:calculateBacklogAndReport"
+          (sf) => sf.name === "stats:calculateBacklogAndReport",
         );
         expect(calculateBacklogScheduled).toBeUndefined();
       });

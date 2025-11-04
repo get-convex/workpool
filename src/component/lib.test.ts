@@ -65,7 +65,7 @@ describe("lib", () => {
             maxParallelism: 101, // More than MAX_POSSIBLE_PARALLELISM
             logLevel: "WARN",
           },
-        })
+        }),
       ).rejects.toThrow("maxParallelism must be <= 50");
     });
 
@@ -81,7 +81,7 @@ describe("lib", () => {
             maxParallelism: 0, // Less than minimum
             logLevel: "WARN",
           },
-        })
+        }),
       ).rejects.toThrow("maxParallelism must be >= 1");
     });
   });
@@ -249,7 +249,7 @@ describe("lib", () => {
         expect(scheduledFunctions.length).toBeGreaterThan(0);
         // check that one of the scheduled functions is cancelAll
         const cancelAllScheduledFunction = scheduledFunctions.find(
-          (sf) => sf.name === "lib:cancelAll"
+          (sf) => sf.name === "lib:cancelAll",
         );
         expect(cancelAllScheduledFunction).toBeDefined();
         assert(cancelAllScheduledFunction);

@@ -4,10 +4,10 @@ Concepts:
 
 - `segment`: A slice of time to process work. All work is bucketed into one.
   This enables us to batch work and avoid database conflicts.
-- `generation`: A monotonically increasing counter to ensure the loop is
-  only running one instance. If two loops start with the same generation,
-  one will successfully increase it, the other will retry and find that the
-  generation has changed and fail out.
+- `generation`: A monotonically increasing counter to ensure the loop is only
+  running one instance. If two loops start with the same generation, one will
+  successfully increase it, the other will retry and find that the generation
+  has changed and fail out.
 - "Retention" is used to refer to situations where a query might have to read
   over a lot of "tombstones" - deleted data that hasn't been vacuumed from the
   underlying database yet. If there are frequent deletions, scanning across them
@@ -65,8 +65,8 @@ flowchart TD
 - Producers (Client, Worker, Recovery) write to a future "segment".
 - Consumers (main) read the current segment.
   - On conflicts, producers will write to progressively higher segments, while
-    the main loop will continue to read the segment originally called with.
-    This means conflicts are less likely on each retry.
+    the main loop will continue to read the segment originally called with. This
+    means conflicts are less likely on each retry.
 - Patch singletons to avoid tombstones.
 - Use segements & cursors to bound reads to latest data.
   - Do scans outside of the critical path (during load).

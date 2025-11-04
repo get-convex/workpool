@@ -28,7 +28,7 @@ describe("recovery", () => {
   // Helper function to create a work item
   async function makeDummyWork(
     ctx: MutationCtx,
-    overrides: Partial<WithoutSystemFields<Doc<"work">>> = {}
+    overrides: Partial<WithoutSystemFields<Doc<"work">>> = {},
   ) {
     return ctx.db.insert("work", {
       fnType: "action",
@@ -43,7 +43,7 @@ describe("recovery", () => {
   // Helper function to create a scheduled function
   async function makeDummyScheduledFunction(
     ctx: MutationCtx,
-    workId: Id<"work">
+    workId: Id<"work">,
   ) {
     return ctx.scheduler.runAfter(0, internal.worker.runActionWrapper, {
       workId,
@@ -226,7 +226,7 @@ describe("recovery", () => {
         expect(pendingCompletions[0].runResult.kind).toBe("failed");
         assert(pendingCompletions[0].runResult.kind === "failed");
         expect(pendingCompletions[0].runResult.error).toContain(
-          "Scheduled job not found"
+          "Scheduled job not found",
         );
       });
     });
@@ -292,7 +292,7 @@ describe("recovery", () => {
         expect(pendingCompletions[0].runResult.kind).toBe("failed");
         assert(pendingCompletions[0].runResult.kind === "failed");
         expect(pendingCompletions[0].runResult.error).toBe(
-          "Function execution failed"
+          "Function execution failed",
         );
       });
     });
@@ -357,7 +357,7 @@ describe("recovery", () => {
         expect(pendingCompletions[0].runResult.kind).toBe("failed");
         assert(pendingCompletions[0].runResult.kind === "failed");
         expect(pendingCompletions[0].runResult.error).toBe(
-          "Canceled via scheduler"
+          "Canceled via scheduler",
         );
       });
     });
@@ -451,10 +451,10 @@ describe("recovery", () => {
 
         // Find completions for each work ID
         const completion1 = pendingCompletions.find(
-          (pc) => pc.workId === workId1
+          (pc) => pc.workId === workId1,
         );
         const completion2 = pendingCompletions.find(
-          (pc) => pc.workId === workId2
+          (pc) => pc.workId === workId2,
         );
 
         expect(completion1).toBeDefined();

@@ -10,7 +10,7 @@ const recoveryArgs = v.object({
       workId: v.id("work"),
       attempt: v.number(),
       started: v.number(),
-    })
+    }),
   ),
 });
 
@@ -37,7 +37,7 @@ export const recover = internalMutation({
 // only exported for testing
 export async function recoveryHandler(
   ctx: MutationCtx,
-  { jobs }: Infer<typeof recoveryArgs>
+  { jobs }: Infer<typeof recoveryArgs>,
 ) {
   const globals = await ctx.db.query("globals").unique();
   const console = createLogger(globals?.logLevel);

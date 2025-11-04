@@ -58,7 +58,7 @@ async function enqueueHandler(
   ctx: MutationCtx,
   console: Logger,
   kickSegment: bigint,
-  { runAt, ...workArgs }: ObjectType<typeof itemArgs>
+  { runAt, ...workArgs }: ObjectType<typeof itemArgs>,
 ) {
   runAt = boundScheduledTime(runAt, console);
   const workId = await ctx.db.insert("work", {
@@ -79,7 +79,7 @@ function validateConfig(config: Config) {
     throw new Error(`maxParallelism must be <= ${MAX_PARALLELISM_SOFT_LIMIT}`);
   } else if (config.maxParallelism > MAX_PARALLELISM_SOFT_LIMIT) {
     createLogger(config.logLevel).warn(
-      `maxParallelism should be <= ${MAX_PARALLELISM_SOFT_LIMIT}, but is set to ${config.maxParallelism}. This will be an error in a future version.`
+      `maxParallelism should be <= ${MAX_PARALLELISM_SOFT_LIMIT}, but is set to ${config.maxParallelism}. This will be an error in a future version.`,
     );
   } else if (config.maxParallelism < 1) {
     throw new Error("maxParallelism must be >= 1");
@@ -97,7 +97,7 @@ export const enqueueBatch = mutation({
     const console = createLogger(config.logLevel);
     const kickSegment = await kickMainLoop(ctx, "enqueue", config);
     return Promise.all(
-      items.map((item) => enqueueHandler(ctx, console, kickSegment, item))
+      items.map((item) => enqueueHandler(ctx, console, kickSegment, item)),
     );
   },
 });
@@ -136,8 +136,8 @@ export const cancelAll = mutation({
       .take(pageSize);
     const shouldCancel = await Promise.all(
       pageOfWork.map(async ({ _id }) =>
-        shouldCancelWorkItem(ctx, _id, logLevel)
-      )
+        shouldCancelWorkItem(ctx, _id, logLevel),
+      ),
     );
     let segment = getNextSegment();
     if (shouldCancel.some((c) => c)) {
@@ -151,7 +151,7 @@ export const cancelAll = mutation({
             segment,
           });
         }
-      })
+      }),
     );
     if (pageOfWork.length === pageSize) {
       await ctx.scheduler.runAfter(0, api.lib.cancelAll, {
@@ -196,7 +196,7 @@ export const statusBatch = query({
   returns: v.array(statusValidator),
   handler: async (ctx, { ids }) => {
     return await Promise.all(
-      ids.map(async (id) => await statusHandler(ctx, { id }))
+      ids.map(async (id) => await statusHandler(ctx, { id })),
     );
   },
 });
@@ -204,7 +204,7 @@ export const statusBatch = query({
 async function shouldCancelWorkItem(
   ctx: MutationCtx,
   workId: Id<"work">,
-  logLevel: LogLevel
+  logLevel: LogLevel,
 ) {
   const console = createLogger(logLevel);
   // No-op if the work doesn't exist or has completed.

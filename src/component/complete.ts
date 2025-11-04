@@ -19,12 +19,12 @@ export const completeArgs = v.object({
       runResult: vResultValidator,
       workId: v.id("work"),
       attempt: v.number(),
-    })
+    }),
   ),
 });
 export async function completeHandler(
   ctx: MutationCtx,
-  args: Infer<typeof completeArgs>
+  args: Infer<typeof completeArgs>,
 ) {
   const globals = await ctx.db.query("globals").unique();
   const console = createLogger(globals?.logLevel);
@@ -76,7 +76,7 @@ export async function completeHandler(
           } catch (e) {
             console.error(
               `[complete] error running onComplete for ${job.workId}`,
-              e
+              e,
             );
             // TODO: store failures in a table for later debugging
           }
@@ -92,7 +92,7 @@ export async function completeHandler(
           retry,
         });
       }
-    })
+    }),
   );
   if (pendingCompletions.length > 0) {
     const segment = await kickMainLoop(ctx, "complete");
@@ -101,8 +101,8 @@ export async function completeHandler(
         ctx.db.insert("pendingCompletion", {
           ...completion,
           segment,
-        })
-      )
+        }),
+      ),
     );
   }
 }

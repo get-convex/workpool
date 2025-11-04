@@ -52,7 +52,7 @@ export const main = internalMutation({
     const state = await getOrCreateState(ctx);
     if (generation !== state.generation) {
       throw new Error(
-        `generation mismatch: ${generation} !== ${state.generation}`
+        `generation mismatch: ${generation} !== ${state.generation}`,
       );
     }
     state.generation++;
@@ -129,7 +129,7 @@ export const updateRunStatus = internalMutation({
     const state = await getOrCreateState(ctx);
     if (generation !== state.generation) {
       throw new Error(
-        `generation mismatch: ${generation} !== ${state.generation}`
+        `generation mismatch: ${generation} !== ${state.generation}`,
       );
     }
 
@@ -154,7 +154,7 @@ export const updateRunStatus = internalMutation({
       ctx,
       state,
       maxParallelism,
-      nextSegment
+      nextSegment,
     );
     console.timeEnd("[updateRunStatus] nextSegmentIsActionable");
 
@@ -165,7 +165,7 @@ export const updateRunStatus = internalMutation({
         {
           generation,
           segment: nextSegment,
-        }
+        },
       );
       return;
     }
@@ -174,7 +174,7 @@ export const updateRunStatus = internalMutation({
     const [oldIsActionable, cursors] = await oldSegmentIsActionable(
       ctx,
       state,
-      maxParallelism
+      maxParallelism,
     );
     console.timeEnd("[updateRunStatus] oldSegmentIsActionable");
 
@@ -204,8 +204,8 @@ export const updateRunStatus = internalMutation({
     }
     const docs = await Promise.all(
       actionableTables.map(async (tableName) =>
-        getNextUp(ctx, tableName, { start: nextSegment })
-      )
+        getNextUp(ctx, tableName, { start: nextSegment }),
+      ),
     );
     console.timeEnd("[updateRunStatus] findNextSegment");
     let targetSegment = docs.map((d) => d?.segment).sort()[0];
@@ -221,7 +221,7 @@ export const updateRunStatus = internalMutation({
       const scheduledId = await ctx.scheduler.runAt(
         boundScheduledTime(fromSegment(targetSegment), console),
         internal.loop.main,
-        { generation, segment: targetSegment }
+        { generation, segment: targetSegment },
       );
       if (targetSegment > getNextSegment()) {
         await ctx.db.patch(runStatus._id, {
@@ -235,7 +235,7 @@ export const updateRunStatus = internalMutation({
         });
       } else {
         console.debug(
-          `[updateRunStatus] staying running because it's the next segment`
+          `[updateRunStatus] staying running because it's the next segment`,
         );
       }
       return;
@@ -251,7 +251,7 @@ async function nextSegmentIsActionable(
   ctx: MutationCtx,
   state: Doc<"internalState">,
   maxParallelism: number,
-  end: bigint
+  end: bigint,
 ): Promise<boolean> {
   // First, try with our cursor range, up to end.
   if (
@@ -286,7 +286,7 @@ async function nextSegmentIsActionable(
 async function oldSegmentIsActionable(
   ctx: MutationCtx,
   state: Doc<"internalState">,
-  maxParallelism: number
+  maxParallelism: number,
 ): Promise<
   [boolean, { completion?: bigint; cancelation?: bigint; incoming?: bigint }]
 > {
@@ -318,7 +318,7 @@ async function oldSegmentIsActionable(
 async function getNextUp(
   ctx: MutationCtx,
   table: "pendingCompletion" | "pendingCancelation" | "pendingStart",
-  range: { start?: bigint; end?: bigint }
+  range: { start?: bigint; end?: bigint },
 ) {
   return ctx.db
     .query(table)
@@ -331,7 +331,7 @@ async function getNextUp(
           : q.gt("segment", range.start - CURSOR_BUFFER_SEGMENTS)
         : range.end !== undefined
           ? q.lt("segment", range.end)
-          : q
+          : q,
     )
     .first();
 }
@@ -344,7 +344,7 @@ async function handleCompletions(
   ctx: MutationCtx,
   state: Doc<"internalState">,
   segment: bigint,
-  console: Logger
+  console: Logger,
 ) {
   const startSegment = state.segmentCursors.completion - CURSOR_BUFFER_SEGMENTS;
   // This won't be too many because the jobs all correspond to being scheduled
@@ -352,7 +352,7 @@ async function handleCompletions(
   const completed = await ctx.db
     .query("pendingCompletion")
     .withIndex("segment", (q) =>
-      q.gte("segment", startSegment).lte("segment", segment)
+      q.gte("segment", startSegment).lte("segment", segment),
     )
     .collect();
   state.segmentCursors.completion = segment;
@@ -365,7 +365,7 @@ async function handleCompletions(
       const running = state.running.find((r) => r.workId === c.workId);
       if (!running) {
         console.error(
-          `[main] completing ${c.workId} but it's not in "running"`
+          `[main] completing ${c.workId} but it's not in "running"`,
         );
         return;
       }
@@ -396,12 +396,12 @@ async function handleCompletions(
           state.report.failed++;
         }
       }
-    })
+    }),
   );
   // We do this after so the stats above know if it was in progress.
   const before = state.running.length;
   state.running = state.running.filter(
-    (r) => !completed.some((c) => c.workId === r.workId)
+    (r) => !completed.some((c) => c.workId === r.workId),
   );
   const numCompleted = before - state.running.length;
   state.report.completed += numCompleted;
@@ -414,13 +414,13 @@ async function handleCancelation(
   state: Doc<"internalState">,
   segment: bigint,
   console: Logger,
-  toCancel: CompleteJob[]
+  toCancel: CompleteJob[],
 ) {
   const start = state.segmentCursors.cancelation - CURSOR_BUFFER_SEGMENTS;
   const canceled = await ctx.db
     .query("pendingCancelation")
     .withIndex("segment", (q) =>
-      q.gte("segment", start).lte("segment", segment)
+      q.gte("segment", start).lte("segment", segment),
     )
     .take(CANCELLATION_BATCH_SIZE);
   state.segmentCursors.cancelation = canceled.at(-1)?.segment ?? segment;
@@ -458,9 +458,9 @@ async function handleCancelation(
             return { workId, runResult, attempt: work.attempts };
           }
           return null;
-        })
+        }),
       )
-    ).flatMap((r) => (r ? [r] : []))
+    ).flatMap((r) => (r ? [r] : [])),
   );
   if (jobs.length) {
     await ctx.scheduler.runAfter(0, internal.complete.complete, { jobs });
@@ -470,7 +470,7 @@ async function handleCancelation(
 async function handleRecovery(
   ctx: MutationCtx,
   state: Doc<"internalState">,
-  console: Logger
+  console: Logger,
 ) {
   const missing = new Set<Id<"work">>();
   const oldEnoughToConsider = Date.now() - RECOVERY_THRESHOLD_MS;
@@ -487,7 +487,7 @@ async function handleRecovery(
           return null;
         }
         return { ...r, attempt: work.attempts };
-      })
+      }),
     )
   ).flatMap((r) => (r ? [r] : []));
   state.running = state.running.filter((r) => !missing.has(r.workId));
@@ -501,7 +501,7 @@ async function handleStart(
   state: Doc<"internalState">,
   segment: bigint,
   console: Logger,
-  { maxParallelism, logLevel }: Config
+  { maxParallelism, logLevel }: Config,
 ) {
   // Schedule as many as needed to reach maxParallelism.
   const toSchedule = maxParallelism - state.running.length;
@@ -514,9 +514,9 @@ async function handleStart(
             q
               .gte(
                 "segment",
-                state.segmentCursors.incoming - CURSOR_BUFFER_SEGMENTS
+                state.segmentCursors.incoming - CURSOR_BUFFER_SEGMENTS,
               )
-              .lte("segment", segment)
+              .lte("segment", segment),
           )
           .take(toSchedule)
       : [];
@@ -543,9 +543,9 @@ async function handleStart(
           const scheduledId = await beginWork(ctx, workId, logLevel, lagMs);
           await ctx.db.delete(_id);
           return { scheduledId, workId, started: Date.now() };
-        })
+        }),
       )
-    ).flatMap((r) => (r ? [r] : []))
+    ).flatMap((r) => (r ? [r] : [])),
   );
 }
 
@@ -553,7 +553,7 @@ async function beginWork(
   ctx: MutationCtx,
   workId: Id<"work">,
   logLevel: LogLevel,
-  lagMs: number
+  lagMs: number,
 ): Promise<Id<"_scheduled_functions">> {
   const console = createLogger(logLevel);
   const work = await ctx.db.get(workId);
@@ -583,7 +583,7 @@ async function beginWork(
 async function rescheduleJob(
   ctx: MutationCtx,
   work: Doc<"work">,
-  console: Logger
+  console: Logger,
 ): Promise<boolean> {
   const pendingCancelation = await ctx.db
     .query("pendingCancelation")
@@ -645,7 +645,7 @@ async function getOrCreateState(ctx: MutationCtx) {
   const console = createLogger(globals.logLevel);
   console.error("No internalState in running loop! Re-creating empty one...");
   return (await ctx.db.get(
-    await ctx.db.insert("internalState", INITIAL_STATE)
+    await ctx.db.insert("internalState", INITIAL_STATE),
   ))!;
 }
 
@@ -656,7 +656,7 @@ async function getOrCreateRunningStatus(ctx: MutationCtx) {
   const console = createLogger(globals.logLevel);
   console.error("No runStatus in running loop! Re-creating one...");
   return (await ctx.db.get(
-    await ctx.db.insert("runStatus", { state: { kind: "running" } })
+    await ctx.db.insert("runStatus", { state: { kind: "running" } }),
   ))!;
 }
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
