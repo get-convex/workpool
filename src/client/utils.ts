@@ -1,5 +1,4 @@
 import {
-  type Expand,
   type FunctionArgs,
   type FunctionReference,
   type FunctionReturnType,
@@ -8,7 +7,6 @@ import {
   getFunctionAddress,
   getFunctionName,
 } from "convex/server";
-import type { GenericId, Value } from "convex/values";
 
 /* Type utils follow */
 
