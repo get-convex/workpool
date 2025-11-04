@@ -8,7 +8,7 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      "@convex-dev/workpool": path.resolve(__dirname, "../src")
-    }
-  }
+      "@convex-dev/workpool": path.resolve(__dirname, "../src"),
+    },
+  },
 });
