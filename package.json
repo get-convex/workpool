@@ -22,14 +22,13 @@
     "dev": "run-p -r 'dev:*'",
     "dev:backend": "convex dev --typecheck-components",
     "dev:frontend": "cd example && vite --clearScreen false",
-    "dev:build": "npx chokidar 'tsconfig*.json' 'src/**/*.ts' -i '**/*.test.ts' -c 'convex codegen --component ./src/component && npm run build' --initial",
+    "dev:build": "npx chokidar 'tsconfig*.json' 'src/**/*.ts' -i '**/*.test.ts' -c 'npx convex codegen --component ./src/component && npm run build' --initial",
     "predev": "npm run dev:backend -- --until-success",
-    "clean": "rm -rf dist tsconfig.build.tsbuildinfo",
-    "build": "tsc --project ./tsconfig.build.json && npm run copy:dts",
-    "copy:dts": "rsync -a --include='*/' --include='*.d.ts' --exclude='*' src/ dist/ || cpy 'src/**/*.d.ts' 'dist/' --parents",
-    "typecheck": "tsc --noEmit && tsc -p example/convex",
-    "lint": "eslint src && eslint example/convex",
-    "all": "run-p -r 'dev:backend' 'dev:frontend' 'build:watch' 'test:watch'",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "build": "tsc --project ./tsconfig.build.json",
+    "typecheck": "tsc --noEmit && tsc -p example && tsc -p example/convex",
+    "lint": "eslint src && eslint example",
+    "all": "run-p -r 'dev:*' 'test:watch'",
     "test": "vitest run --typecheck",
     "test:watch": "vitest --typecheck --clearScreen false",
     "test:debug": "vitest --inspect-brk --no-file-parallelism",
@@ -50,6 +49,10 @@
       "types": "./dist/client/index.d.ts",
       "default": "./dist/client/index.js"
     },
+    "./react": {
+      "types": "./dist/react/index.d.ts",
+      "default": "./dist/react/index.js"
+    },
     "./test": "./src/test.ts",
     "./_generated/component.js": {
       "types": "./dist/component/_generated/component.d.ts"
@@ -60,7 +63,7 @@
     }
   },
   "peerDependencies": {
-    "convex": ">=1.25.0 <1.35.0",
+    "convex": "^1.24.8",
     "convex-helpers": "^0.1.94"
   },
   "devDependencies": {
@@ -68,7 +71,7 @@
     "@edge-runtime/vm": "5.0.0",
     "@eslint/eslintrc": "3.3.1",
     "@eslint/js": "9.39.1",
-    "@types/node": "22.19.0",
+    "@types/node": "20.19.24",
     "@types/react": "19.2.2",
     "@types/react-dom": "19.2.2",
     "@vitejs/plugin-react": "5.1.0",
@@ -92,7 +95,6 @@
     "vite": "7.1.12",
     "vitest": "3.2.4"
   },
-  "main": "./dist/commonjs/client/index.js",
-  "types": "./dist/commonjs/client/index.d.ts",
-  "module": "./dist/esm/client/index.js"
+  "types": "./dist/client/index.d.ts",
+  "module": "./dist/client/index.js"
 }
