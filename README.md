@@ -269,7 +269,7 @@ npm install @convex-dev/workpool
 ```ts
 // convex/convex.config.ts
 import { defineApp } from "convex/server";
-import workpool from "@convex-dev/workpool/convex.config";
+import workpool from "@convex-dev/workpool/convex.config.js";
 
 const app = defineApp();
 app.use(workpool, { name: "emailWorkpool" });
