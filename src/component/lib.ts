@@ -27,8 +27,8 @@ import {
 } from "./shared.js";
 import { recordEnqueued } from "./stats.js";
 
-const MAX_POSSIBLE_PARALLELISM = 100;
-const MAX_PARALLELISM_SOFT_LIMIT = 50;
+const MAX_POSSIBLE_PARALLELISM = 200;
+const MAX_PARALLELISM_SOFT_LIMIT = 100;
 
 const itemArgs = {
   fnHandle: v.string(),

@@ -62,11 +62,11 @@ describe("lib", () => {
           fnType: "mutation",
           runAt: Date.now(),
           config: {
-            maxParallelism: 101, // More than MAX_POSSIBLE_PARALLELISM
+            maxParallelism: 500, // More than MAX_POSSIBLE_PARALLELISM
             logLevel: "WARN",
           },
         }),
-      ).rejects.toThrow("maxParallelism must be <= 50");
+      ).rejects.toThrow("maxParallelism must be <= 100");
     });
 
     it("should throw error if maxParallelism is too low", async () => {
