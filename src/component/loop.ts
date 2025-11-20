@@ -23,7 +23,7 @@ import {
 } from "./shared.js";
 import { generateReport, recordCompleted, recordStarted } from "./stats.js";
 
-const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
+const CANCELATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 const RECOVERY_THRESHOLD_MS = 5 * MINUTE; // attempt to recover jobs this old.
@@ -75,7 +75,7 @@ export const main = internalMutation({
 
     // Read pendingCancelation, deleting from pendingStart. If it's still running, queue to cancel.
     console.time("[main] pendingCancelation");
-    await handleCancelation(ctx, state, segment, console, toCancel);
+    await handleCancelation(ctx, state, segment, console, toCancel, globals);
     console.timeEnd("[main] pendingCancelation");
 
     if (state.running.length === 0) {
@@ -415,6 +415,7 @@ async function handleCancelation(
   segment: bigint,
   console: Logger,
   toCancel: CompleteJob[],
+  { cancelationBatchSize }: Config,
 ) {
   const start = state.segmentCursors.cancelation - CURSOR_BUFFER_SEGMENTS;
   const canceled = await ctx.db
@@ -422,7 +423,7 @@ async function handleCancelation(
     .withIndex("segment", (q) =>
       q.gte("segment", start).lte("segment", segment),
     )
-    .take(CANCELLATION_BATCH_SIZE);
+    .take(cancelationBatchSize ?? CANCELATION_BATCH_SIZE);
   state.segmentCursors.cancelation = canceled.at(-1)?.segment ?? segment;
   if (canceled.length) {
     console.debug(`[main] attempting to cancel ${canceled.length}`);

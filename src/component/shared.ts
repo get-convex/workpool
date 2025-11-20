@@ -36,6 +36,7 @@ export function fromSegment(segment: bigint): number {
 export const config = v.object({
   maxParallelism: v.number(),
   logLevel,
+  cancelationBatchSize: v.optional(v.number()),
 });
 export type Config = Infer<typeof config>;
 
