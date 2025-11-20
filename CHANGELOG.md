@@ -2,7 +2,8 @@
 
 ## 0.3.1 alpha
 
-- Only warn if the limit is set to >100
+- Only warn if the parallelism limit is set to >100
+- Allow configuring the cancelation batch size by editing the globals table
 
 ## 0.3.0
 
