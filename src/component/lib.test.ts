@@ -78,11 +78,11 @@ describe("lib", () => {
           fnType: "mutation",
           runAt: Date.now(),
           config: {
-            maxParallelism: 0, // Less than minimum
+            maxParallelism: -1, // Less than minimum
             logLevel: "WARN",
           },
         }),
-      ).rejects.toThrow("maxParallelism must be >= 1");
+      ).rejects.toThrow("maxParallelism must be >= 0");
     });
   });
 

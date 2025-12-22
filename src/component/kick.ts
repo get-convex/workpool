@@ -110,7 +110,7 @@ async function getOrUpdateGlobals(ctx: MutationCtx, config?: Partial<Config>) {
   } else if (config) {
     let updated = false;
     if (
-      config.maxParallelism &&
+      config.maxParallelism !== undefined &&
       config.maxParallelism !== globals.maxParallelism
     ) {
       globals.maxParallelism = config.maxParallelism;
