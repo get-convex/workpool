@@ -81,8 +81,8 @@ function validateConfig(config: Config) {
     createLogger(config.logLevel).warn(
       `maxParallelism should be <= ${MAX_PARALLELISM_SOFT_LIMIT}, but is set to ${config.maxParallelism}. This will be an error in a future version.`,
     );
-  } else if (config.maxParallelism < 1) {
-    throw new Error("maxParallelism must be >= 1");
+  } else if (config.maxParallelism < 0) {
+    throw new Error("maxParallelism must be >= 0");
   }
 }
 
