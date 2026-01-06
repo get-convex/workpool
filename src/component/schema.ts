@@ -3,7 +3,7 @@ import { v } from "convex/values";
 import {
   fnType,
   config,
-  onComplete,
+  vOnCompleteFnContext,
   retryBehavior,
   vResult,
 } from "./shared.js";
@@ -64,7 +64,7 @@ export default defineSchema({
     fnName: v.string(),
     fnArgs: v.any(),
     attempts: v.number(), // number of completed attempts
-    onComplete: v.optional(onComplete),
+    onComplete: v.optional(vOnCompleteFnContext),
     retryBehavior: v.optional(retryBehavior),
     canceled: v.optional(v.boolean()),
   }),

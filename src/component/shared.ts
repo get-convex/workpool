@@ -85,11 +85,10 @@ export const vResult = v.union(
 );
 export type RunResult = Infer<typeof vResult>;
 
-export const onComplete = v.object({
+export const vOnCompleteFnContext = v.object({
   fnHandle: v.string(), // mutation
   context: v.optional(v.any()),
 });
-export type OnComplete = Infer<typeof onComplete>;
 
 export type OnCompleteArgs = {
   /**

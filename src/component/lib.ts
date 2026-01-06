@@ -20,7 +20,7 @@ import {
   fnType,
   getNextSegment,
   max,
-  onComplete,
+  vOnCompleteFnContext,
   retryBehavior,
   status as statusValidator,
   toSegment,
@@ -37,7 +37,7 @@ const itemArgs = {
   fnType,
   runAt: v.number(),
   // TODO: annotation?
-  onComplete: v.optional(onComplete),
+  onComplete: v.optional(vOnCompleteFnContext),
   retryBehavior: v.optional(retryBehavior),
 };
 const enqueueArgs = {

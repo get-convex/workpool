@@ -1,6 +1,7 @@
 import {
   createFunctionHandle,
   type DefaultFunctionArgs,
+  type FunctionArgs,
   type FunctionHandle,
   type FunctionReference,
   type FunctionType,
@@ -23,7 +24,6 @@ import {
   type Config,
   DEFAULT_MAX_PARALLELISM,
   DEFAULT_RETRY_BEHAVIOR,
-  type OnComplete,
   type RetryBehavior,
   type RunResult,
   type OnCompleteArgs as SharedOnCompleteArgs,
@@ -500,23 +500,25 @@ async function enqueueArgs(
     typeof fn === "string" && fn.startsWith("function://")
       ? [fn, opts?.name ?? fn]
       : [await createFunctionHandle(fn), opts?.name ?? safeFunctionName(fn)];
-  const onComplete: OnComplete | undefined = opts?.onComplete
-    ? {
-        fnHandle: await createFunctionHandle(opts.onComplete),
-        context: opts.context,
-      }
-    : undefined;
   return {
     fnHandle,
     fnName,
-    onComplete,
+    onComplete: opts?.onComplete
+      ? {
+          fnHandle: await createFunctionHandle(opts.onComplete),
+          context: opts.context,
+        }
+      : undefined,
     runAt: getRunAt(opts),
     retryBehavior: opts?.retryBehavior,
     config: {
       logLevel: opts?.logLevel ?? DEFAULT_LOG_LEVEL,
       maxParallelism: opts?.maxParallelism ?? DEFAULT_MAX_PARALLELISM,
     },
-  };
+  } satisfies Omit<
+    FunctionArgs<ComponentApi["lib"]["enqueue"]>,
+    "fnArgs" | "fnType"
+  >;
 }
 
 function getRunAt(
