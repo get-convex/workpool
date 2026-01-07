@@ -163,6 +163,16 @@ export const cancelAll = mutation({
   },
 });
 
+export const kick = mutation({
+  args: { config },
+  returns: v.null(),
+  handler: async (ctx, { config }) => {
+    validateConfig(config);
+    await kickMainLoop(ctx, "kick", config);
+    return null;
+  },
+});
+
 export const status = query({
   args: { id: v.id("work") },
   returns: statusValidator,
