@@ -1,5 +1,12 @@
 import { convexTest } from "convex-test";
-import type { WithoutSystemFields } from "convex/server";
+import type {
+  DocumentByName,
+  GenericDatabaseReader,
+  GenericDataModel,
+  SystemDataModel,
+  SystemTableNames,
+  WithoutSystemFields,
+} from "convex/server";
 import {
   afterEach,
   assert,
@@ -196,13 +203,7 @@ describe("recovery", () => {
       // Run recovery with mocked system.get
       await t.run(async (ctx) => {
         // Mock the system.get to return null for our scheduledId
-        const originalGet = ctx.db.system.get;
-        ctx.db.system.get = async (id) => {
-          if (id === scheduledId) {
-            return null;
-          }
-          return await originalGet(id);
-        };
+        ctx.db.system.get = patchedSystemGet(ctx.db, { [scheduledId]: null });
 
         await recoveryHandler(ctx, {
           jobs: [
@@ -244,31 +245,27 @@ describe("recovery", () => {
       // Run recovery with mocked failed state
       await t.run(async (ctx) => {
         // Mock the system.get to return a failed state
-        const originalGet = ctx.db.system.get;
-        ctx.db.system.get = async (id) => {
-          if (id === scheduledId) {
-            return {
-              _id: scheduledId,
-              _creationTime: Date.now(),
-              name: "internal/worker.runActionWrapper",
-              args: [
-                {
-                  workId,
-                  fnHandle: "test_handle",
-                  fnArgs: {},
-                  logLevel: "WARN",
-                  attempt: 0,
-                },
-              ],
-              scheduledTime: Date.now(),
-              state: {
-                kind: "failed",
-                error: "Function execution failed",
+        ctx.db.system.get = patchedSystemGet(ctx.db, {
+          [scheduledId]: {
+            _id: scheduledId,
+            _creationTime: Date.now(),
+            name: "internal/worker.runActionWrapper",
+            args: [
+              {
+                workId,
+                fnHandle: "test_handle",
+                fnArgs: {},
+                logLevel: "WARN",
+                attempt: 0,
               },
-            };
-          }
-          return await originalGet(id);
-        };
+            ],
+            scheduledTime: Date.now(),
+            state: {
+              kind: "failed",
+              error: "Function execution failed",
+            },
+          },
+        });
 
         await recoveryHandler(ctx, {
           jobs: [
@@ -310,30 +307,26 @@ describe("recovery", () => {
       // Run recovery with mocked system.get
       await t.run(async (ctx) => {
         // Mock the system.get to return a canceled state
-        const originalGet = ctx.db.system.get;
-        ctx.db.system.get = async (id) => {
-          if (id === scheduledId) {
-            return {
-              _id: scheduledId,
-              _creationTime: Date.now(),
-              name: "internal/worker.runActionWrapper",
-              args: [
-                {
-                  workId,
-                  fnHandle: "test_handle",
-                  fnArgs: {},
-                  logLevel: "WARN",
-                  attempt: 0,
-                },
-              ],
-              scheduledTime: Date.now(),
-              state: {
-                kind: "canceled",
+        ctx.db.system.get = patchedSystemGet(ctx.db, {
+          [scheduledId]: {
+            _id: scheduledId,
+            _creationTime: Date.now(),
+            name: "internal/worker.runActionWrapper",
+            args: [
+              {
+                workId,
+                fnHandle: "test_handle",
+                fnArgs: {},
+                logLevel: "WARN",
+                attempt: 0,
               },
-            };
-          }
-          return await originalGet(id);
-        };
+            ],
+            scheduledTime: Date.now(),
+            state: {
+              kind: "canceled",
+            },
+          },
+        });
 
         await recoveryHandler(ctx, {
           jobs: [
@@ -379,50 +372,45 @@ describe("recovery", () => {
       // Run recovery with mocked system.get
       await t.run(async (ctx) => {
         // Mock the system.get to return different states for each scheduled function
-        const originalGet = ctx.db.system.get;
-        ctx.db.system.get = async (id) => {
-          if (id === scheduledId1) {
-            return {
-              _id: scheduledId1,
-              _creationTime: Date.now(),
-              name: "internal/worker.runActionWrapper",
-              args: [
-                {
-                  workId: workId1,
-                  fnHandle: "test_handle",
-                  fnArgs: { test: 1 },
-                  logLevel: "WARN",
-                  attempt: 0,
-                },
-              ],
-              scheduledTime: Date.now(),
-              state: {
-                kind: "failed",
-                error: "Function 1 failed",
+        ctx.db.system.get = patchedSystemGet(ctx.db, {
+          [scheduledId1]: {
+            _id: scheduledId1,
+            _creationTime: Date.now(),
+            name: "internal/worker.runActionWrapper",
+            args: [
+              {
+                workId: workId1,
+                fnHandle: "test_handle",
+                fnArgs: { test: 1 },
+                logLevel: "WARN",
+                attempt: 0,
               },
-            };
-          } else if (id === scheduledId2) {
-            return {
-              _id: scheduledId2,
-              _creationTime: Date.now(),
-              name: "internal/worker.runActionWrapper",
-              args: [
-                {
-                  workId: workId2,
-                  fnHandle: "test_handle",
-                  fnArgs: { test: 2 },
-                  logLevel: "WARN",
-                  attempt: 0,
-                },
-              ],
-              scheduledTime: Date.now(),
-              state: {
-                kind: "canceled",
+            ],
+            scheduledTime: Date.now(),
+            state: {
+              kind: "failed",
+              error: "Function 1 failed",
+            },
+          },
+          [scheduledId2]: {
+            _id: scheduledId2,
+            _creationTime: Date.now(),
+            name: "internal/worker.runActionWrapper",
+            args: [
+              {
+                workId: workId2,
+                fnHandle: "test_handle",
+                fnArgs: { test: 2 },
+                logLevel: "WARN",
+                attempt: 0,
               },
-            };
-          }
-          return await originalGet(id);
-        };
+            ],
+            scheduledTime: Date.now(),
+            state: {
+              kind: "canceled",
+            },
+          },
+        });
 
         await recoveryHandler(ctx, {
           jobs: [
@@ -486,30 +474,26 @@ describe("recovery", () => {
       // Run recovery with mocked system.get
       await t.run(async (ctx) => {
         // Mock the system.get to return a pending state
-        const originalGet = ctx.db.system.get;
-        ctx.db.system.get = async (id) => {
-          if (id === scheduledId) {
-            return {
-              _id: scheduledId,
-              _creationTime: Date.now(),
-              name: "internal/worker.runActionWrapper",
-              args: [
-                {
-                  workId,
-                  fnHandle: "test_handle",
-                  fnArgs: {},
-                  logLevel: "WARN",
-                  attempt: 0,
-                },
-              ],
-              scheduledTime: Date.now(),
-              state: {
-                kind: "pending",
+        ctx.db.system.get = patchedSystemGet(ctx.db, {
+          [scheduledId]: {
+            _id: scheduledId,
+            _creationTime: Date.now(),
+            name: "internal/worker.runActionWrapper",
+            args: [
+              {
+                workId,
+                fnHandle: "test_handle",
+                fnArgs: {},
+                logLevel: "WARN",
+                attempt: 0,
               },
-            };
-          }
-          return await originalGet(id);
-        };
+            ],
+            scheduledTime: Date.now(),
+            state: {
+              kind: "pending",
+            },
+          },
+        });
 
         await recoveryHandler(ctx, {
           jobs: [
@@ -534,3 +518,20 @@ describe("recovery", () => {
     });
   });
 });
+
+function patchedSystemGet(
+  db: GenericDatabaseReader<GenericDataModel>,
+  overrides: Record<
+    string,
+    DocumentByName<SystemDataModel, "_scheduled_functions"> | null
+  >,
+) {
+  const originalGet = db.system.get;
+  return async (
+    tableOrId: SystemTableNames | Id<SystemTableNames>,
+    maybeId?: Id<SystemTableNames>,
+  ) => {
+    const id = (maybeId ?? tableOrId) as Id<"_scheduled_functions">;
+    return id in overrides ? overrides[id] : await originalGet(id);
+  };
+}
