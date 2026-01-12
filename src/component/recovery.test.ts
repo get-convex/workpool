@@ -21,8 +21,7 @@ import type { Doc, Id } from "./_generated/dataModel.js";
 import type { MutationCtx } from "./_generated/server.js";
 import { recoveryHandler } from "./recovery.js";
 import schema from "./schema.js";
-
-const modules = import.meta.glob("./**/*.ts");
+import { modules } from "./setup.test.js";
 
 describe("recovery", () => {
   async function setupTest() {

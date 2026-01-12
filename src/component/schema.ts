@@ -2,7 +2,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import {
   fnType,
-  config,
+  vConfig,
   vOnCompleteFnContext,
   retryBehavior,
   vResult,
@@ -13,7 +13,7 @@ const segment = v.int64();
 
 export default defineSchema({
   // Written from kickLoop, read everywhere.
-  globals: defineTable(config),
+  globals: defineTable(vConfig),
   // Singleton, only read & written by `main`.
   internalState: defineTable({
     // Ensure that only one main is running at a time.

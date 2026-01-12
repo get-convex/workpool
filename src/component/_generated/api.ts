@@ -9,6 +9,7 @@
  */
 
 import type * as complete from "../complete.js";
+import type * as config from "../config.js";
 import type * as crons from "../crons.js";
 import type * as danger from "../danger.js";
 import type * as kick from "../kick.js";
@@ -29,6 +30,7 @@ import { anyApi, componentsGeneric } from "convex/server";
 
 const fullApi: ApiFromModules<{
   complete: typeof complete;
+  config: typeof config;
   crons: typeof crons;
   danger: typeof danger;
   kick: typeof kick;

@@ -1,4 +1,4 @@
-import { type Infer, type ObjectType, v } from "convex/values";
+import { type ObjectType, v } from "convex/values";
 import { api } from "./_generated/api.js";
 import type { Id } from "./_generated/dataModel.js";
 import {
@@ -16,7 +16,7 @@ import {
 } from "./logging.js";
 import {
   boundScheduledTime,
-  config,
+  vConfig,
   fnType,
   getNextSegment,
   max,
@@ -26,9 +26,7 @@ import {
   toSegment,
 } from "./shared.js";
 import { recordEnqueued } from "./stats.js";
-
-const MAX_POSSIBLE_PARALLELISM = 200;
-const MAX_PARALLELISM_SOFT_LIMIT = 100;
+import { getOrUpdateGlobals } from "./config.js";
 
 const itemArgs = {
   fnHandle: v.string(),
@@ -42,15 +40,15 @@ const itemArgs = {
 };
 const enqueueArgs = {
   ...itemArgs,
-  config,
+  config: vConfig.partial(),
 };
 export const enqueue = mutation({
   args: enqueueArgs,
   returns: v.id("work"),
   handler: async (ctx, { config, ...itemArgs }) => {
-    validateConfig(config);
-    const console = createLogger(config.logLevel);
-    const kickSegment = await kickMainLoop(ctx, "enqueue", config);
+    const globals = await getOrUpdateGlobals(ctx, config);
+    const console = createLogger(globals.logLevel);
+    const kickSegment = await kickMainLoop(ctx, "enqueue", globals);
     return await enqueueHandler(ctx, console, kickSegment, itemArgs);
   },
 });
@@ -73,29 +71,16 @@ async function enqueueHandler(
   return workId;
 }
 
-type Config = Infer<typeof config>;
-function validateConfig(config: Config) {
-  if (config.maxParallelism > MAX_POSSIBLE_PARALLELISM) {
-    throw new Error(`maxParallelism must be <= ${MAX_PARALLELISM_SOFT_LIMIT}`);
-  } else if (config.maxParallelism > MAX_PARALLELISM_SOFT_LIMIT) {
-    createLogger(config.logLevel).warn(
-      `maxParallelism should be <= ${MAX_PARALLELISM_SOFT_LIMIT}, but is set to ${config.maxParallelism}. This will be an error in a future version.`,
-    );
-  } else if (config.maxParallelism < 0) {
-    throw new Error("maxParallelism must be >= 0");
-  }
-}
-
 export const enqueueBatch = mutation({
   args: {
     items: v.array(v.object(itemArgs)),
-    config,
+    config: vConfig.partial(),
   },
   returns: v.array(v.id("work")),
   handler: async (ctx, { config, items }) => {
-    validateConfig(config);
-    const console = createLogger(config.logLevel);
-    const kickSegment = await kickMainLoop(ctx, "enqueue", config);
+    const globals = await getOrUpdateGlobals(ctx, config);
+    const console = createLogger(globals.logLevel);
+    const kickSegment = await kickMainLoop(ctx, "enqueue", globals);
     return Promise.all(
       items.map((item) => enqueueHandler(ctx, console, kickSegment, item)),
     );
@@ -105,12 +90,13 @@ export const enqueueBatch = mutation({
 export const cancel = mutation({
   args: {
     id: v.id("work"),
-    logLevel,
+    logLevel: v.optional(logLevel),
   },
   handler: async (ctx, { id, logLevel }) => {
-    const shouldCancel = await shouldCancelWorkItem(ctx, id, logLevel);
+    const globals = await getOrUpdateGlobals(ctx, { logLevel });
+    const shouldCancel = await shouldCancelWorkItem(ctx, id, globals.logLevel);
     if (shouldCancel) {
-      const segment = await kickMainLoop(ctx, "cancel", { logLevel });
+      const segment = await kickMainLoop(ctx, "cancel", globals);
       await ctx.db.insert("pendingCancelation", {
         workId: id,
         segment,
@@ -122,7 +108,7 @@ export const cancel = mutation({
 const PAGE_SIZE = 64;
 export const cancelAll = mutation({
   args: {
-    logLevel,
+    logLevel: v.optional(logLevel),
     before: v.optional(v.number()),
     limit: v.optional(v.number()),
   },
@@ -134,14 +120,15 @@ export const cancelAll = mutation({
       .withIndex("by_creation_time", (q) => q.lte("_creationTime", beforeTime))
       .order("desc")
       .take(pageSize);
+    const globals = await getOrUpdateGlobals(ctx, { logLevel });
     const shouldCancel = await Promise.all(
       pageOfWork.map(async ({ _id }) =>
-        shouldCancelWorkItem(ctx, _id, logLevel),
+        shouldCancelWorkItem(ctx, _id, globals.logLevel),
       ),
     );
     let segment = getNextSegment();
     if (shouldCancel.some((c) => c)) {
-      segment = await kickMainLoop(ctx, "cancel", { logLevel });
+      segment = await kickMainLoop(ctx, "cancel", globals);
     }
     await Promise.all(
       pageOfWork.map(({ _id }, index) => {
@@ -160,16 +147,6 @@ export const cancelAll = mutation({
         limit: pageSize,
       });
     }
-  },
-});
-
-export const kick = mutation({
-  args: { config },
-  returns: v.null(),
-  handler: async (ctx, { config }) => {
-    validateConfig(config);
-    await kickMainLoop(ctx, "kick", config);
-    return null;
   },
 });
 

@@ -20,6 +20,7 @@ import {
   getNextSegment,
   toSegment,
 } from "./shared.js";
+import { getOrUpdateGlobals } from "./config.js";
 
 describe("kickMainLoop", () => {
   beforeEach(() => {
@@ -44,27 +45,6 @@ describe("kickMainLoop", () => {
       expect(internalState).not.toBeNull();
       assert(internalState);
       expect(internalState.generation).toBe(0n);
-    });
-  });
-
-  test("it updates the globals when they change", async () => {
-    const t = convexTest(schema, modules);
-    await t.run(async (ctx) => {
-      await kickMainLoop(ctx, "enqueue");
-      const globals = await ctx.db.query("globals").unique();
-      expect(globals).not.toBeNull();
-      assert(globals);
-      expect(globals.maxParallelism).toBe(DEFAULT_MAX_PARALLELISM);
-      expect(globals.logLevel).toBe(DEFAULT_LOG_LEVEL);
-      await kickMainLoop(ctx, "enqueue", {
-        maxParallelism: DEFAULT_MAX_PARALLELISM + 1,
-        logLevel: "ERROR",
-      });
-      const after = await ctx.db.query("globals").unique();
-      expect(after).not.toBeNull();
-      assert(after);
-      expect(after.maxParallelism).toBe(DEFAULT_MAX_PARALLELISM + 1);
-      expect(after.logLevel).toBe("ERROR");
     });
   });
 
@@ -250,7 +230,7 @@ describe("kickMainLoop", () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
       // Initial kick with custom config
-      await kickMainLoop(ctx, "enqueue", {
+      await getOrUpdateGlobals(ctx, {
         maxParallelism: 5,
         logLevel: "ERROR",
       });

@@ -33,11 +33,11 @@ export function fromSegment(segment: bigint): number {
   return Number(segment) * SEGMENT_MS;
 }
 
-export const config = v.object({
+export const vConfig = v.object({
   maxParallelism: v.number(),
   logLevel,
 });
-export type Config = Infer<typeof config>;
+export type Config = Infer<typeof vConfig>;
 
 export const retryBehavior = v.object({
   maxAttempts: v.number(),

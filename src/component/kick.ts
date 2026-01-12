@@ -1,11 +1,11 @@
 import { internal } from "./_generated/api.js";
 import { internalMutation, type MutationCtx } from "./_generated/server.js";
-import { createLogger, DEFAULT_LOG_LEVEL } from "./logging.js";
+import { getOrUpdateGlobals } from "./config.js";
+import { createLogger } from "./logging.js";
 import { INITIAL_STATE } from "./loop.js";
 import {
   boundScheduledTime,
   type Config,
-  DEFAULT_MAX_PARALLELISM,
   fromSegment,
   getCurrentSegment,
   getNextSegment,
@@ -20,9 +20,9 @@ import {
 export async function kickMainLoop(
   ctx: MutationCtx,
   source: "enqueue" | "cancel" | "complete" | "kick",
-  config?: Partial<Config>,
+  config?: Config,
 ): Promise<bigint> {
-  const globals = await getOrUpdateGlobals(ctx, config);
+  const globals = config ?? (await getOrUpdateGlobals(ctx, config));
   const console = createLogger(globals.logLevel);
   const runStatus = await getOrCreateRunStatus(ctx);
   const next = getNextSegment();
@@ -97,32 +97,4 @@ async function getOrCreateRunStatus(ctx: MutationCtx) {
     }
   }
   return runStatus;
-}
-
-async function getOrUpdateGlobals(ctx: MutationCtx, config?: Partial<Config>) {
-  const globals = await ctx.db.query("globals").unique();
-  if (!globals) {
-    const id = await ctx.db.insert("globals", {
-      maxParallelism: config?.maxParallelism ?? DEFAULT_MAX_PARALLELISM,
-      logLevel: config?.logLevel ?? DEFAULT_LOG_LEVEL,
-    });
-    return (await ctx.db.get(id))!;
-  } else if (config) {
-    let updated = false;
-    if (
-      config.maxParallelism !== undefined &&
-      config.maxParallelism !== globals.maxParallelism
-    ) {
-      globals.maxParallelism = config.maxParallelism;
-      updated = true;
-    }
-    if (config.logLevel && config.logLevel !== globals.logLevel) {
-      globals.logLevel = config.logLevel;
-      updated = true;
-    }
-    if (updated) {
-      await ctx.db.replace(globals._id, globals);
-    }
-  }
-  return globals;
 }
