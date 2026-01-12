@@ -291,6 +291,12 @@ Check out the [docstrings](./src/client/index.ts), but notable options include:
 
 You can override the retry behavior per-call with the `retry` option.
 
+If you don't specify a `maxParallelism` as a Class-level option, you can specify
+it at runtime by calling
+`ctx.runMutation(components.myWorkpool.config.update, { maxParallelism: 20 })`.
+This can be useful for dynamic scaling of the workpool, and also setting it to 0
+to pause work.
+
 ### Options for enqueueing work
 
 See the [docstrings](./src/client/index.ts) for more details, but notable
