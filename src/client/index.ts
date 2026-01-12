@@ -22,7 +22,6 @@ import type { ComponentApi } from "../component/_generated/component.js";
 import { DEFAULT_LOG_LEVEL, type LogLevel } from "../component/logging.js";
 import {
   type Config,
-  DEFAULT_MAX_PARALLELISM,
   DEFAULT_RETRY_BEHAVIOR,
   type RetryBehavior,
   type RunResult,
@@ -514,8 +513,8 @@ async function enqueueArgs(
     runAt: getRunAt(opts),
     retryBehavior: opts?.retryBehavior,
     config: {
-      logLevel: opts?.logLevel ?? DEFAULT_LOG_LEVEL,
-      maxParallelism: opts?.maxParallelism ?? DEFAULT_MAX_PARALLELISM,
+      logLevel: opts?.logLevel,
+      maxParallelism: opts?.maxParallelism,
     },
   } satisfies Omit<
     FunctionArgs<ComponentApi["lib"]["enqueue"]>,

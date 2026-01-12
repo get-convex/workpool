@@ -1,25 +1,9 @@
 import { convexTest } from "convex-test";
-import {
-  afterEach,
-  assert,
-  beforeEach,
-  describe,
-  expect,
-  test,
-  vi,
-} from "vitest";
-import { internal } from "./_generated/api.js";
-import { kickMainLoop } from "./kick.js";
+import { assert, expect, test } from "vitest";
 import { DEFAULT_LOG_LEVEL } from "./logging.js";
 import schema from "./schema.js";
 import { modules } from "./setup.test.js";
-import {
-  DEFAULT_MAX_PARALLELISM,
-  fromSegment,
-  getCurrentSegment,
-  getNextSegment,
-  toSegment,
-} from "./shared.js";
+import { DEFAULT_MAX_PARALLELISM } from "./shared.js";
 import { getOrUpdateGlobals } from "./config.js";
 
 test("it updates the globals when they change", async () => {
