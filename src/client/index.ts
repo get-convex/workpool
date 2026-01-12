@@ -256,6 +256,22 @@ export class Workpool {
       ...options,
     });
   }
+
+  /**
+   * Kicks the workpool to wake it up and sync config (e.g. maxParallelism).
+   * Useful for resuming after pausing (setting maxParallelism to 0).
+   *
+   * @param ctx - The mutation or action context that can call ctx.runMutation.
+   */
+  async kick(ctx: RunMutationCtx): Promise<void> {
+    await ctx.runMutation(this.component.lib.kick, {
+      config: {
+        logLevel: this.options.logLevel ?? DEFAULT_LOG_LEVEL,
+        maxParallelism: this.options.maxParallelism ?? DEFAULT_MAX_PARALLELISM,
+      },
+    });
+  }
+
   /**
    * Gets the status of a work item.
    *
@@ -360,7 +376,7 @@ export type RetryOption = {
 
 export type WorkpoolOptions = {
   /** How many actions/mutations can be running at once within this pool.
-   * Min 1, Suggested max: 100 on Pro, 20 on the free plan.
+   * Min 0 (no new work starts), Suggested max: 100 on Pro, 20 on free plan.
    */
   maxParallelism?: number;
   /** How much to log. This is updated on each call to `enqueue*`,
