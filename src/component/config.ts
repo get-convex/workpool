@@ -1,6 +1,7 @@
 import { mutation, type MutationCtx } from "./_generated/server.js";
 import { vConfig, DEFAULT_MAX_PARALLELISM, type Config } from "./shared.js";
 import { createLogger, DEFAULT_LOG_LEVEL } from "./logging.js";
+import { kickMainLoop } from "./kick.js";
 
 export const MAX_POSSIBLE_PARALLELISM = 200;
 export const MAX_PARALLELISM_SOFT_LIMIT = 100;
@@ -8,7 +9,10 @@ export const MAX_PARALLELISM_SOFT_LIMIT = 100;
 export const update = mutation({
   args: vConfig.partial(),
   handler: async (ctx, args) => {
-    await getOrUpdateGlobals(ctx, args);
+    const { globals, wasZero } = await _getOrUpdateGlobals(ctx, args);
+    if (wasZero && args.maxParallelism !== 0) {
+      await kickMainLoop(ctx, "kick", globals);
+    }
   },
 });
 
@@ -31,16 +35,24 @@ export async function getOrUpdateGlobals(
   ctx: MutationCtx,
   config?: Partial<Config>,
 ) {
+  const { globals } = await _getOrUpdateGlobals(ctx, config);
+  return globals;
+}
+export async function _getOrUpdateGlobals(
+  ctx: MutationCtx,
+  config?: Partial<Config>,
+) {
   if (config) {
     validateConfig(config);
   }
   const globals = await ctx.db.query("globals").unique();
+  const wasZero = globals?.maxParallelism === 0;
   if (!globals) {
     const id = await ctx.db.insert("globals", {
       maxParallelism: config?.maxParallelism ?? DEFAULT_MAX_PARALLELISM,
       logLevel: config?.logLevel ?? DEFAULT_LOG_LEVEL,
     });
-    return (await ctx.db.get(id))!;
+    return { globals: (await ctx.db.get(id))!, wasZero };
   } else if (config) {
     let updated = false;
     if (
@@ -58,5 +70,5 @@ export async function getOrUpdateGlobals(
       await ctx.db.replace(globals._id, globals);
     }
   }
-  return globals;
+  return { globals, wasZero };
 }
