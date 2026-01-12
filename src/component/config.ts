@@ -19,9 +19,7 @@ export const update = mutation({
 export function validateConfig(config: Partial<Config>) {
   if (config.maxParallelism !== undefined) {
     if (config.maxParallelism > MAX_POSSIBLE_PARALLELISM) {
-      throw new Error(
-        `maxParallelism must be <= ${MAX_PARALLELISM_SOFT_LIMIT}`,
-      );
+      throw new Error(`maxParallelism must be <= ${MAX_POSSIBLE_PARALLELISM}`);
     } else if (config.maxParallelism > MAX_PARALLELISM_SOFT_LIMIT) {
       createLogger(config.logLevel ?? DEFAULT_LOG_LEVEL).warn(
         `maxParallelism should be <= ${MAX_PARALLELISM_SOFT_LIMIT}, but is set to ${config.maxParallelism}. This will be an error in a future version.`,
