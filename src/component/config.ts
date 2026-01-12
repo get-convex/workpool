@@ -6,11 +6,9 @@ export const MAX_POSSIBLE_PARALLELISM = 200;
 export const MAX_PARALLELISM_SOFT_LIMIT = 100;
 
 export const update = mutation({
-  args: {
-    config: vConfig.partial(),
-  },
+  args: vConfig.partial(),
   handler: async (ctx, args) => {
-    await getOrUpdateGlobals(ctx, args.config);
+    await getOrUpdateGlobals(ctx, args);
   },
 });
 
