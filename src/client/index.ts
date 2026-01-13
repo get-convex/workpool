@@ -19,7 +19,7 @@ import {
   type VString,
 } from "convex/values";
 import type { ComponentApi } from "../component/_generated/component.js";
-import { DEFAULT_LOG_LEVEL, type LogLevel } from "../component/logging.js";
+import { type LogLevel } from "../component/logging.js";
 import {
   type Config,
   DEFAULT_RETRY_BEHAVIOR,
@@ -238,7 +238,7 @@ export class Workpool {
   async cancel(ctx: RunMutationCtx, id: WorkId): Promise<void> {
     await ctx.runMutation(this.component.lib.cancel, {
       id,
-      logLevel: this.options.logLevel ?? DEFAULT_LOG_LEVEL,
+      logLevel: this.options.logLevel,
     });
   }
   /**
@@ -251,7 +251,7 @@ export class Workpool {
     options?: { limit?: number },
   ): Promise<void> {
     await ctx.runMutation(this.component.lib.cancelAll, {
-      logLevel: this.options.logLevel ?? DEFAULT_LOG_LEVEL,
+      logLevel: this.options.logLevel,
       ...options,
     });
   }
