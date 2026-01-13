@@ -3,6 +3,11 @@
 ## 0.3.1 alpha
 
 - Only warn if the limit is set to >100
+- Allow setting maxParallelism to 0 to pause the workpool
+- Allow updating configs like maxParallelism directly via function calls, and
+  allow enqueueing without specifying maxParallelism, to inherit the current
+  config. For best results, either specify maxParallelism directly in the
+  config, or only via config.update calls, but not both.
 
 ## 0.3.0
 
