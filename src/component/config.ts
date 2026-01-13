@@ -36,7 +36,7 @@ export async function getOrUpdateGlobals(
   const { globals } = await _getOrUpdateGlobals(ctx, config);
   return globals;
 }
-export async function _getOrUpdateGlobals(
+async function _getOrUpdateGlobals(
   ctx: MutationCtx,
   config?: Partial<Config>,
 ) {
