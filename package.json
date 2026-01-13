@@ -35,7 +35,7 @@
     "test:coverage": "vitest run --coverage --coverage.reporter=text",
     "prepare": "npm run build",
     "alpha": "npm run clean && npm ci && run-p test lint typecheck && npm version prerelease --preid alpha && npm publish --tag alpha && git push --tags",
-    "release": "npm run clean && npm ci && run-p test lint typecheck && npm version patch && npm publish && git push --tags",
+    "release": "(npm whoami || npm login) && npm run clean && npm ci && run-p test lint typecheck && npm version patch && npm publish && git push --tags",
     "version": "pbcopy <<<$npm_package_version; vim CHANGELOG.md && prettier -w CHANGELOG.md && git add CHANGELOG.md"
   },
   "files": [
