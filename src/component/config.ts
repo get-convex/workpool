@@ -9,8 +9,8 @@ export const MAX_PARALLELISM_SOFT_LIMIT = 100;
 export const update = mutation({
   args: vConfig.partial(),
   handler: async (ctx, args) => {
-    const { globals, wasZero } = await _getOrUpdateGlobals(ctx, args);
-    if (wasZero && args.maxParallelism) {
+    const { globals, previousValue } = await _getOrUpdateGlobals(ctx, args);
+    if (args.maxParallelism && args.maxParallelism > previousValue) {
       await kickMainLoop(ctx, "kick", globals);
     }
   },
@@ -44,13 +44,13 @@ export async function _getOrUpdateGlobals(
     validateConfig(config);
   }
   const globals = await ctx.db.query("globals").unique();
-  const wasZero = globals?.maxParallelism === 0;
+  const previousValue = globals?.maxParallelism ?? DEFAULT_MAX_PARALLELISM;
   if (!globals) {
     const id = await ctx.db.insert("globals", {
       maxParallelism: config?.maxParallelism ?? DEFAULT_MAX_PARALLELISM,
       logLevel: config?.logLevel ?? DEFAULT_LOG_LEVEL,
     });
-    return { globals: (await ctx.db.get(id))!, wasZero };
+    return { globals: (await ctx.db.get(id))!, previousValue };
   } else if (config) {
     let updated = false;
     if (
@@ -68,5 +68,5 @@ export async function _getOrUpdateGlobals(
       await ctx.db.replace(globals._id, globals);
     }
   }
-  return { globals, wasZero };
+  return { globals, previousValue };
 }
