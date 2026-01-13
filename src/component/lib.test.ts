@@ -66,7 +66,7 @@ describe("lib", () => {
             logLevel: "WARN",
           },
         }),
-      ).rejects.toThrow("maxParallelism must be <= 100");
+      ).rejects.toThrow("maxParallelism must be <= 200");
     });
 
     it("should throw error if maxParallelism is too low", async () => {
