@@ -10,7 +10,7 @@ export const update = mutation({
   args: vConfig.partial(),
   handler: async (ctx, args) => {
     const { globals, wasZero } = await _getOrUpdateGlobals(ctx, args);
-    if (wasZero && args.maxParallelism !== 0) {
+    if (wasZero && args.maxParallelism) {
       await kickMainLoop(ctx, "kick", globals);
     }
   },
