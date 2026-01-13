@@ -65,7 +65,7 @@ async function _getOrUpdateGlobals(
       updated = true;
     }
     if (updated) {
-      await ctx.db.replace(globals._id, globals);
+      await ctx.db.replace("globals", globals._id, globals);
     }
   }
   return { globals, previousValue };
