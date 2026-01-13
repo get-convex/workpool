@@ -229,7 +229,6 @@ describe("kickMainLoop", () => {
   test("preserves state between kicks with different sources", async () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
-      // Initial kick with custom config
       await getOrUpdateGlobals(ctx, {
         maxParallelism: 5,
         logLevel: "ERROR",
