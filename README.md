@@ -295,7 +295,9 @@ If you don't specify a `maxParallelism` as a Class-level option, you can specify
 it at runtime via the dashboard or in code by calling
 `ctx.runMutation(components.myWorkpool.config.update, { maxParallelism: 20 })`.
 This can be useful for dynamic scaling of the workpool, and also setting it to 0
-to pause work.
+to pause work. If specified on the Workpool class, it will update on each call
+to enqueue or cancel. Tip: you can create the Workpool class at runtime based on
+a dynamic value, such as an environment variable.
 
 ### Options for enqueueing work
 
