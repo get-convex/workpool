@@ -50,7 +50,7 @@ async function _getOrUpdateGlobals(
       maxParallelism: config?.maxParallelism ?? DEFAULT_MAX_PARALLELISM,
       logLevel: config?.logLevel ?? DEFAULT_LOG_LEVEL,
     });
-    return { globals: (await ctx.db.get(id))!, previousValue };
+    return { globals: (await ctx.db.get("globals", id))!, previousValue };
   } else if (config) {
     let updated = false;
     if (
