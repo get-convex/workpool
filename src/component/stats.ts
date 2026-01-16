@@ -81,7 +81,7 @@ export async function generateReport(
         .lt("segment", currentSegment),
     )
     .paginate({
-      numItems: maxParallelism,
+      numItems: Math.max(maxParallelism, 10),
       cursor: null,
     });
   if (pendingStart.isDone) {
