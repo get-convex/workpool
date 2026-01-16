@@ -245,11 +245,11 @@ export const myAction = internalAction({
         if (Math.random() < 0.8) {
           throw new Error("action failed.");
         }
-        if (Math.random() < 0.01) {
-          // Incur a timeout.
-          console.debug("I'm a baaaad timeout job.");
-          await new Promise((resolve) => setTimeout(resolve, 15 * 60 * 1000));
-        }
+        // if (Math.random() < 0.01) {
+        //   // Incur a timeout.
+        //   console.debug("I'm a baaaad timeout job.");
+        //   await new Promise((resolve) => setTimeout(resolve, 15 * 60 * 1000));
+        // }
         console.debug("action succeded.");
         break;
       case "fail always":
