@@ -6,7 +6,7 @@ import { RECOVERY_PERIOD_SEGMENTS } from "./loop.js";
 
 const crons = cronJobs();
 
-export const recover = internalMutation({
+export const healthcheck = internalMutation({
   args: {},
   handler: async (ctx) => {
     const internalState = await ctx.db.query("internalState").first();
@@ -61,6 +61,6 @@ export const recover = internalMutation({
   },
 });
 
-crons.interval("recover", { minutes: 30 }, internal.crons.recover);
+crons.interval("healthcheck", { minutes: 30 }, internal.crons.healthcheck);
 
 export default crons;
