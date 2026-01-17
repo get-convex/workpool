@@ -190,7 +190,7 @@ describe("stats", () => {
       });
 
       // Create more pending start items than maxParallelism
-      const maxParallelism = 5;
+      const maxParallelism = 50;
 
       // Create maxParallelism + 1 work items to trigger pagination
       for (let i = 0; i < maxParallelism + 1; i++) {
