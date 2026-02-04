@@ -55,10 +55,10 @@ export const addAction = action({
 });
 
 export const queryData = query({
-  args: { add: v.optional(v.number()) },
-  handler: async (ctx, { add }) => {
+  args: {},
+  handler: async (ctx) => {
     const dataDocs = await ctx.db.query("data").collect();
-    return dataDocs.map((doc) => doc.data + (add ?? 0));
+    return dataDocs.map((doc) => doc.data ?? 0);
   },
 });
 
@@ -72,12 +72,12 @@ export const enqueueOneMutation = mutation({
 });
 
 export const enqueueOneQuery = mutation({
-  args: { add: v.optional(v.number()) },
-  handler: async (ctx, { add }): Promise<WorkId> => {
+  args: {},
+  handler: async (ctx): Promise<WorkId> => {
     return await smallPool.enqueueQuery(
       ctx,
       api.example.queryData,
-      { add },
+      {},
       {
         onComplete: internal.example.complete,
         context: Date.now(),
