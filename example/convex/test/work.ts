@@ -18,8 +18,7 @@ function generateData(len: number): string {
 // Configurable mutation that simulates database operations
 export const configurableMutation = internalMutation({
   args: {
-    readBytes: v.number(), // How many bytes to simulate reading
-    writeBytes: v.number(), // How many bytes to write to DB
+    readWriteData: v.optional(v.number()), // If specified, write then delete this many bytes
     returnBytes: v.number(), // Size of return value
     payload: v.any(), // Separate payload argument
     taskNum: v.number(), // Task number for tracking
@@ -45,19 +44,12 @@ export const configurableMutation = internalMutation({
       });
     }
 
-    // Simulate reading data (could query actual data if needed)
-    if (args.readBytes > 0) {
-      // In a real scenario, you might query data from the DB
-      // For now, we just simulate the operation
-      const docs = await ctx.db
-        .query("data")
-        .take(Math.min(100, args.readBytes / 100));
-    }
-
-    // Simulate writing data
-    if (args.writeBytes > 0) {
-      const dataToWrite = generateData(Math.min(args.writeBytes, 10000)); // Cap individual writes
-      await ctx.db.insert("data", { data: dataToWrite.length });
+    // If readWriteData is specified, write then delete
+    if (args.readWriteData && args.readWriteData > 0) {
+      const dataToWrite = generateData(args.readWriteData);
+      const docId = await ctx.db.insert("data", { misc: dataToWrite });
+      // Delete immediately - this will read then write
+      await ctx.db.delete(docId);
     }
 
     // If no onComplete handler, mark task as done

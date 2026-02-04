@@ -67,7 +67,6 @@ export default internalMutation({
       startTime: Date.now(),
       scenario: args.scenario,
       parameters: args.parameters,
-      status: "running",
     });
 
     return runId;
@@ -112,7 +111,6 @@ export const status = internalQuery({
         parameters: latestRun.parameters,
         startTime: latestRun.startTime,
         endTime: latestRun.endTime,
-        status: latestRun.status,
       },
       status,
     };

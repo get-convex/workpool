@@ -11,11 +11,6 @@ export default defineSchema({
     startTime: v.number(),
     scenario: v.string(),
     parameters: v.any(),
-    status: v.union(
-      v.literal("running"),
-      v.literal("completed"),
-      v.literal("failed"),
-    ),
     endTime: v.optional(v.number()),
   }),
   tasks: defineTable({
