@@ -33,7 +33,7 @@ duration, and database pressure.
 
 ## Test Scenarios
 
-### 1. Big Arguments (`scenarios/bigArguments.ts`)
+### 1. Big Arguments (`scenarios/bigArgs.ts`)
 
 **Purpose**: Test the system's ability to handle large payloads in function
 arguments
