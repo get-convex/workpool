@@ -274,6 +274,9 @@ export async function _runExecutorLoop(
             completionBuffer.unshift(...batches[i]);
           } else {
             console.error(`[batch] completeBatch failed for ${batches[i].length} items:`, r.reason);
+            // Release claims so tasks return to pending instead of staying claimed forever
+            const taskIds = batches[i].map((item) => item.taskId);
+            deps.releaseClaims(taskIds).catch(() => {});
           }
         }
       }
@@ -293,6 +296,9 @@ export async function _runExecutorLoop(
             failureBuffer.unshift(...batches[i]);
           } else {
             console.error(`[batch] failBatch failed for ${batches[i].length} items:`, r.reason);
+            // Release claims so tasks return to pending instead of staying claimed forever
+            const taskIds = batches[i].map((item) => item.taskId);
+            deps.releaseClaims(taskIds).catch(() => {});
           }
         }
       }
@@ -457,7 +463,7 @@ export class BatchWorkpool {
   private cachedBatchConfig:
     | { executorHandle: string; maxWorkers: number; claimTimeoutMs: number }
     | undefined;
-  private configSentThisTx = false;
+  private configSentForCtx = new WeakSet<object>();
 
   constructor(component: ComponentApi, options?: BatchWorkpoolOptions) {
     this.component = component;
@@ -576,7 +582,7 @@ export class BatchWorkpool {
   ): Promise<BatchTaskId> {
     // Only pass batchConfig on first enqueue per mutation to avoid
     // OCC contention on the batchConfig singleton.
-    const batchConfig = this.configSentThisTx
+    const batchConfig = this.configSentForCtx.has(ctx)
       ? undefined
       : await this.getBatchConfig();
     const onComplete = options?.onComplete
@@ -596,7 +602,7 @@ export class BatchWorkpool {
       retryBehavior,
       batchConfig,
     });
-    if (batchConfig) this.configSentThisTx = true;
+    if (batchConfig) this.configSentForCtx.add(ctx);
     return id as unknown as BatchTaskId;
   }
 
@@ -611,7 +617,7 @@ export class BatchWorkpool {
       options?: BatchEnqueueOptions;
     }>,
   ): Promise<BatchTaskId[]> {
-    const batchConfig = this.configSentThisTx
+    const batchConfig = this.configSentForCtx.has(ctx)
       ? undefined
       : await this.getBatchConfig();
     const maxWorkers = this.options.maxWorkers ?? 10;
@@ -633,7 +639,7 @@ export class BatchWorkpool {
       tasks: resolvedTasks,
       batchConfig,
     });
-    if (batchConfig) this.configSentThisTx = true;
+    if (batchConfig) this.configSentForCtx.add(ctx);
     return ids as unknown as BatchTaskId[];
   }
 
@@ -699,7 +705,7 @@ export class BatchWorkpool {
       retry?: boolean | RetryBehavior;
     },
   ): Promise<BatchTaskId> {
-    const batchConfig = this.configSentThisTx
+    const batchConfig = this.configSentForCtx.has(ctx)
       ? undefined
       : await this.getBatchConfig();
     const retryBehavior = this.getRetryBehavior(options?.retry);
@@ -713,7 +719,7 @@ export class BatchWorkpool {
       retryBehavior,
       batchConfig,
     });
-    if (batchConfig) this.configSentThisTx = true;
+    if (batchConfig) this.configSentForCtx.add(ctx);
     return id as unknown as BatchTaskId;
   }
 

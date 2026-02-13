@@ -555,17 +555,11 @@ export const executorDone = mutation({
     const newSlots = config.activeSlots.filter((s) => s !== slot);
 
     if (startMore) {
-      // Start executors for ALL missing slots, not just this one.
-      // This handles the case where tasks were enqueued into a slot
-      // whose executor already exited.
-      const activeSet = new Set(newSlots);
+      // Only restart the exiting slot — the watchdog reconciles others.
+      // This avoids duplicate scheduling when many executors exit concurrently.
       const handle = config.executorHandle as FunctionHandle<"action">;
-      for (let s = 0; s < config.maxWorkers; s++) {
-        if (!activeSet.has(s)) {
-          newSlots.push(s);
-          await ctx.scheduler.runAfter(0, handle, { slot: s });
-        }
-      }
+      newSlots.push(slot);
+      await ctx.scheduler.runAfter(0, handle, { slot });
     }
 
     await ctx.db.patch(config._id, { activeSlots: newSlots });

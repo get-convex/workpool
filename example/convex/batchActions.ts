@@ -4,7 +4,9 @@ import { batch } from "./setup";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 
-async function callHaiku(prompt: string): Promise<string> {
+// ─── API helper ──────────────────────────────────────────────────────────────
+
+async function callSonnet(prompt: string): Promise<string> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
   const maxRetries = 8;
@@ -30,10 +32,13 @@ async function callHaiku(prompt: string): Promise<string> {
     }
     const body = await resp.text();
     if (resp.status === 429 || resp.status === 529 || resp.status >= 500) {
-      console.warn(`[callSonnet] attempt ${attempt}/${maxRetries} got ${resp.status}: ${body.slice(0, 200)}`);
       if (attempt < maxRetries) {
-        const delay = Math.min(1000 * Math.pow(2, attempt), 30000) + Math.random() * 1000;
-        await new Promise((r) => setTimeout(r, delay));
+        // Respect Retry-After header if present, otherwise exponential backoff
+        const retryAfter = resp.headers.get("retry-after");
+        const delay = retryAfter
+          ? parseFloat(retryAfter) * 1000
+          : Math.min(1000 * Math.pow(2, attempt), 30000);
+        await new Promise((r) => setTimeout(r, delay + Math.random() * 500));
         continue;
       }
     }
@@ -43,10 +48,12 @@ async function callHaiku(prompt: string): Promise<string> {
   throw new Error("unreachable");
 }
 
+// ─── Batch actions ───────────────────────────────────────────────────────────
+
 export const translateToSpanish = batch.action("translateToSpanish", {
   args: { sentence: v.string() },
   handler: async (_ctx, { sentence }: { sentence: string }) => {
-    return await callHaiku(
+    return await callSonnet(
       `Translate this sentence to Spanish. Reply with ONLY the translation, nothing else:\n${sentence}`,
     );
   },
@@ -55,7 +62,7 @@ export const translateToSpanish = batch.action("translateToSpanish", {
 export const translateToEnglish = batch.action("translateToEnglish", {
   args: { sentence: v.string() },
   handler: async (_ctx, { sentence }: { sentence: string }) => {
-    return await callHaiku(
+    return await callSonnet(
       `Translate this sentence to English. Reply with ONLY the translation, nothing else:\n${sentence}`,
     );
   },
