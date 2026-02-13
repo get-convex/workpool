@@ -201,8 +201,8 @@ export async function _runExecutorLoop(
   // Each handler does ~2-3 DB ops, so 50 items = ~125 ops (well under 16K limit).
   // Kept moderate to avoid tying up Convex mutation workers too long.
   const ONCOMPLETE_BATCH_SIZE = 50;
-  // Max concurrent batch mutations per executor: 3 × 20 workers = ~60 total
-  const ONCOMPLETE_CONCURRENCY = 3;
+  // Max concurrent batch mutations per executor: 5 × 20 workers = ~100 total
+  const ONCOMPLETE_CONCURRENCY = 5;
 
   async function drainOnComplete() {
     if (onCompleteDrainerRunning) return;
@@ -412,8 +412,13 @@ export async function _runExecutorLoop(
     }
   }
 
-  // Check if there's remaining work
-  const remaining = await deps.countPending();
+  // Check if there's remaining work — treat failures as "yes" to be safe
+  let remaining: number;
+  try {
+    remaining = await deps.countPending();
+  } catch {
+    remaining = 1;
+  }
 
   // Notify component that this executor is done — retry on transient errors
   // since all executors write to the same batchConfig singleton.
