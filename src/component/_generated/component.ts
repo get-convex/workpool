@@ -137,8 +137,22 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       claimBatch: FunctionReference<
         "mutation",
         "internal",
-        { slot: number; limit: number; maxWorkers: number },
+        { slot: number; limit: number },
         Array<{ _id: string; args: any; attempt: number; name: string }>,
+        Name
+      >;
+      claimByIds: FunctionReference<
+        "mutation",
+        "internal",
+        { taskIds: Array<string> },
+        Array<{ _id: string; args: any; attempt: number; name: string }>,
+        Name
+      >;
+      listPending: FunctionReference<
+        "query",
+        "internal",
+        { slot: number; limit: number },
+        Array<string>,
         Name
       >;
       complete: FunctionReference<
@@ -146,6 +160,21 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         { result: any; taskId: string },
         any,
+        Name
+      >;
+      completeBatch: FunctionReference<
+        "mutation",
+        "internal",
+        { items: Array<{ result: any; taskId: string }> },
+        Array<{
+          fnHandle: string;
+          workId: string;
+          context?: any;
+          result:
+            | { kind: "success"; returnValue: any }
+            | { kind: "failed"; error: string }
+            | { kind: "canceled" };
+        }>,
         Name
       >;
       configure: FunctionReference<
@@ -216,6 +245,21 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         any,
         Name
       >;
+      failBatch: FunctionReference<
+        "mutation",
+        "internal",
+        { items: Array<{ error: string; taskId: string }> },
+        Array<{
+          fnHandle: string;
+          workId: string;
+          context?: any;
+          result:
+            | { kind: "success"; returnValue: any }
+            | { kind: "failed"; error: string }
+            | { kind: "canceled" };
+        }>,
+        Name
+      >;
       releaseClaims: FunctionReference<
         "mutation",
         "internal",
@@ -237,6 +281,37 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         {},
         number,
+        Name
+      >;
+      dispatchOnCompleteBatch: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          items: Array<{
+            fnHandle: string;
+            workId: string;
+            context?: any;
+            result:
+              | { kind: "success"; returnValue: any }
+              | { kind: "failed"; error: string }
+              | { kind: "canceled" };
+          }>;
+        },
+        any,
+        Name
+      >;
+      resetConfig: FunctionReference<
+        "mutation",
+        "internal",
+        {},
+        any,
+        Name
+      >;
+      resetTasks: FunctionReference<
+        "mutation",
+        "internal",
+        {},
+        { deleted: number; more: boolean },
         Name
       >;
     };

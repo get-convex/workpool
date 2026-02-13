@@ -21,17 +21,27 @@ function deferred<T = void>() {
   return { promise, resolve, reject };
 }
 
+type ClaimedTask = { _id: string; name: string; args: any; attempt: number };
+type OnCompleteItem = {
+  fnHandle: string;
+  workId: string;
+  context?: unknown;
+  result: unknown;
+};
+
 /** Track completed/failed/released task IDs for assertions. */
 function createTracker() {
   const completed: string[] = [];
   const failed: Array<{ id: string; error: string }> = [];
   const released: string[] = [];
+  const onCompleteDispatched: OnCompleteItem[] = [];
   let executorDoneCalled = false;
   let executorDoneStartMore = false;
   return {
     completed,
     failed,
     released,
+    onCompleteDispatched,
     markDone(startMore: boolean) {
       executorDoneCalled = true;
       executorDoneStartMore = startMore;
@@ -45,11 +55,33 @@ function createTracker() {
   };
 }
 
+/**
+ * Helper: creates listPending + claimByIds mocks from a vi.fn() mock
+ * that returns ClaimedTask[] (same pattern as the old claimBatch mock).
+ */
+function claimMocks(mock: ReturnType<typeof vi.fn>) {
+  let pendingResult: ClaimedTask[] = [];
+  return {
+    listPending: vi.fn().mockImplementation(async (limit: number) => {
+      const batch: ClaimedTask[] = await mock(limit);
+      pendingResult = batch;
+      return batch.map((t) => t._id);
+    }),
+    claimByIds: vi.fn().mockImplementation(async () => {
+      const result = pendingResult;
+      pendingResult = [];
+      return result;
+    }),
+  };
+}
+
 function makeDeps(overrides: Partial<_ExecutorDeps> = {}): _ExecutorDeps {
   return {
-    claimBatch: vi.fn().mockResolvedValue([]),
-    complete: vi.fn().mockResolvedValue(undefined),
-    fail: vi.fn().mockResolvedValue(undefined),
+    listPending: vi.fn().mockResolvedValue([]),
+    claimByIds: vi.fn().mockResolvedValue([]),
+    completeBatch: vi.fn().mockResolvedValue([]),
+    failBatch: vi.fn().mockResolvedValue([]),
+    dispatchOnCompleteBatch: vi.fn().mockResolvedValue(undefined),
     countPending: vi.fn().mockResolvedValue(0),
     releaseClaims: vi.fn().mockResolvedValue(undefined),
     executorDone: vi.fn().mockResolvedValue(undefined),
@@ -57,6 +89,24 @@ function makeDeps(overrides: Partial<_ExecutorDeps> = {}): _ExecutorDeps {
     getHeapUsedBytes: () => 0,
     isNode: true,
     ...overrides,
+  };
+}
+
+/** Helper: create completeBatch/failBatch mocks that feed into a tracker */
+function batchMocks(tracker: ReturnType<typeof createTracker>) {
+  return {
+    completeBatch: vi.fn().mockImplementation(
+      async (items: { taskId: string; result: unknown }[]) => {
+        for (const item of items) tracker.completed.push(item.taskId);
+        return []; // no onComplete items
+      },
+    ),
+    failBatch: vi.fn().mockImplementation(
+      async (items: { taskId: string; error: string }[]) => {
+        for (const item of items) tracker.failed.push({ id: item.taskId, error: item.error });
+        return []; // no onComplete items
+      },
+    ),
   };
 }
 
@@ -94,12 +144,14 @@ describe("_runExecutorLoop", () => {
       const tracker = createTracker();
 
       const deps = makeDeps({
-        claimBatch: vi.fn()
-          .mockResolvedValueOnce([
-            { _id: "slow-1", name: "slow", args: {}, attempt: 0 },
-            { _id: "slow-2", name: "slow", args: {}, attempt: 0 },
-          ])
-          .mockResolvedValue([]),
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "slow-1", name: "slow", args: {}, attempt: 0 },
+              { _id: "slow-2", name: "slow", args: {}, attempt: 0 },
+            ])
+            .mockResolvedValue([]),
+        ),
         getHandler: () => () => slow.promise,
         releaseClaims: vi.fn().mockImplementation(async (ids: string[]) => {
           tracker.released.push(...ids);
@@ -113,7 +165,6 @@ describe("_runExecutorLoop", () => {
       await vi.advanceTimersByTimeAsync(2_000);
       await loopDone;
 
-      // Both slow tasks must be released — not left as orphans
       expect(tracker.released.sort()).toEqual(["slow-1", "slow-2"]);
       expect(tracker.done).toBe(true);
 
@@ -125,20 +176,20 @@ describe("_runExecutorLoop", () => {
       const tracker = createTracker();
 
       const deps = makeDeps({
-        claimBatch: vi.fn()
-          .mockResolvedValueOnce([
-            { _id: "fast-1", name: "fast", args: {}, attempt: 0 },
-            { _id: "slow-1", name: "slow", args: {}, attempt: 0 },
-          ])
-          .mockResolvedValue([]),
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "fast-1", name: "fast", args: {}, attempt: 0 },
+              { _id: "slow-1", name: "slow", args: {}, attempt: 0 },
+            ])
+            .mockResolvedValue([]),
+        ),
         getHandler: (name: string) => {
           if (name === "fast") return async () => "done";
           if (name === "slow") return () => slow.promise;
           return undefined;
         },
-        complete: vi.fn().mockImplementation(async (taskId: string) => {
-          tracker.completed.push(taskId);
-        }),
+        ...batchMocks(tracker),
         releaseClaims: vi.fn().mockImplementation(async (ids: string[]) => {
           tracker.released.push(...ids);
         }),
@@ -166,33 +217,29 @@ describe("_runExecutorLoop", () => {
       let claimCallCount = 0;
 
       const deps = makeDeps({
-        claimBatch: vi.fn().mockImplementation(async () => {
+        ...claimMocks(vi.fn().mockImplementation(async () => {
           claimCallCount++;
           if (claimCallCount === 1) {
             return [{ _id: "t1", name: "handler", args: {}, attempt: 0 }];
           }
           return [];
-        }),
+        })),
         getHandler: () => () => taskDeferred.promise,
-        complete: vi.fn().mockImplementation(async (taskId: string) => {
-          tracker.completed.push(taskId);
-        }),
+        ...batchMocks(tracker),
         executorDone: vi.fn().mockResolvedValue(undefined),
       });
 
       const loopDone = _runExecutorLoop(deps, {
         ...SHORT_OPTIONS,
-        claimDeadlineMs: 200,
-        softDeadlineMs: 595_000, // 5s soft deadline — plenty of drain time
+        claimDeadlineMs: 400,
+        softDeadlineMs: 595_000, // 5s soft deadline
       });
 
-      // Advance past claim deadline
-      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(500);
       const callsBefore = claimCallCount;
 
-      // Resolve the in-flight task — it should complete even past claim deadline
       taskDeferred.resolve("result");
-      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(200);
       await loopDone;
 
       expect(tracker.completed).toEqual(["t1"]);
@@ -204,12 +251,12 @@ describe("_runExecutorLoop", () => {
 
   describe("memory pressure", () => {
     it("pauses claiming under memory pressure, resumes when memory drops", async () => {
-      let heapMB = 50; // Under 100 MB limit
+      let heapMB = 50;
       const tracker = createTracker();
       let claimCallCount = 0;
 
       const deps = makeDeps({
-        claimBatch: vi.fn().mockImplementation(async () => {
+        ...claimMocks(vi.fn().mockImplementation(async () => {
           claimCallCount++;
           if (claimCallCount === 1) {
             return [{ _id: "t1", name: "spike", args: {}, attempt: 0 }];
@@ -218,11 +265,11 @@ describe("_runExecutorLoop", () => {
             return [{ _id: "t2", name: "normal", args: {}, attempt: 0 }];
           }
           return [];
-        }),
+        })),
         getHandler: (name: string) => {
           if (name === "spike") {
             return async () => {
-              heapMB = 200; // Over limit during execution
+              heapMB = 200;
               return "spiked";
             };
           }
@@ -230,10 +277,15 @@ describe("_runExecutorLoop", () => {
         },
         getHeapUsedBytes: () => heapMB * 1024 * 1024,
         isNode: true,
-        complete: vi.fn().mockImplementation(async (taskId: string) => {
-          tracker.completed.push(taskId);
-          if (taskId === "t1") heapMB = 30; // Memory drops after t1 completes
-        }),
+        completeBatch: vi.fn().mockImplementation(
+          async (items: { taskId: string; result: unknown }[]) => {
+            for (const item of items) {
+              tracker.completed.push(item.taskId);
+              if (item.taskId === "t1") heapMB = 30;
+            }
+            return [];
+          },
+        ),
         countPending: vi.fn().mockImplementation(async () => {
           return tracker.completed.length < 2 ? 1 : 0;
         }),
@@ -242,16 +294,12 @@ describe("_runExecutorLoop", () => {
 
       const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
 
-      // First claim + handler run
-      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(500);
       expect(tracker.completed).toContain("t1");
 
-      // Memory was high, then dropped via complete callback.
-      // Advance enough for the loop to poll and re-claim.
-      await vi.advanceTimersByTimeAsync(1_200);
+      await vi.advanceTimersByTimeAsync(1_500);
       await loopDone;
 
-      // t2 claimed and completed after memory dropped back under limit
       expect(tracker.completed).toContain("t2");
     });
 
@@ -259,17 +307,17 @@ describe("_runExecutorLoop", () => {
       const tracker = createTracker();
 
       const deps = makeDeps({
-        claimBatch: vi.fn()
-          .mockResolvedValueOnce([
-            { _id: "t1", name: "handler", args: {}, attempt: 0 },
-          ])
-          .mockResolvedValue([]),
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+            ])
+            .mockResolvedValue([]),
+        ),
         getHandler: () => async () => "result",
-        getHeapUsedBytes: () => 999 * 1024 * 1024, // absurdly high — should be ignored
+        getHeapUsedBytes: () => 999 * 1024 * 1024,
         isNode: false,
-        complete: vi.fn().mockImplementation(async (taskId: string) => {
-          tracker.completed.push(taskId);
-        }),
+        ...batchMocks(tracker),
         executorDone: vi.fn().mockResolvedValue(undefined),
       });
 
@@ -284,17 +332,17 @@ describe("_runExecutorLoop", () => {
       const tracker = createTracker();
 
       const deps = makeDeps({
-        claimBatch: vi.fn()
-          .mockResolvedValueOnce([
-            { _id: "t1", name: "handler", args: {}, attempt: 0 },
-          ])
-          .mockResolvedValue([]),
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+            ])
+            .mockResolvedValue([]),
+        ),
         getHandler: () => async () => "result",
         getHeapUsedBytes: () => 999 * 1024 * 1024,
-        isNode: true, // Node but maxHeapMB=0 disables it
-        complete: vi.fn().mockImplementation(async (taskId: string) => {
-          tracker.completed.push(taskId);
-        }),
+        isNode: true,
+        ...batchMocks(tracker),
         executorDone: vi.fn().mockResolvedValue(undefined),
       });
 
@@ -313,22 +361,19 @@ describe("_runExecutorLoop", () => {
       const tracker = createTracker();
 
       const deps = makeDeps({
-        claimBatch: vi.fn()
-          .mockResolvedValueOnce([
-            { _id: "unknown-1", name: "doesNotExist", args: {}, attempt: 0 },
-            { _id: "known-1", name: "myHandler", args: {}, attempt: 0 },
-          ])
-          .mockResolvedValue([]),
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "unknown-1", name: "doesNotExist", args: {}, attempt: 0 },
+              { _id: "known-1", name: "myHandler", args: {}, attempt: 0 },
+            ])
+            .mockResolvedValue([]),
+        ),
         getHandler: (name: string) => {
           if (name === "myHandler") return async () => "ok";
           return undefined;
         },
-        fail: vi.fn().mockImplementation(async (taskId: string, error: string) => {
-          tracker.failed.push({ id: taskId, error });
-        }),
-        complete: vi.fn().mockImplementation(async (taskId: string) => {
-          tracker.completed.push(taskId);
-        }),
+        ...batchMocks(tracker),
         executorDone: vi.fn().mockResolvedValue(undefined),
       });
 
@@ -346,17 +391,17 @@ describe("_runExecutorLoop", () => {
       const tracker = createTracker();
 
       const deps = makeDeps({
-        claimBatch: vi.fn()
-          .mockResolvedValueOnce([
-            { _id: "crash-1", name: "crasher", args: {}, attempt: 0 },
-          ])
-          .mockResolvedValue([]),
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "crash-1", name: "crasher", args: {}, attempt: 0 },
+            ])
+            .mockResolvedValue([]),
+        ),
         getHandler: () => async () => {
           throw new Error("handler exploded");
         },
-        fail: vi.fn().mockImplementation(async (taskId: string, error: string) => {
-          tracker.failed.push({ id: taskId, error });
-        }),
+        ...batchMocks(tracker),
         executorDone: vi.fn().mockResolvedValue(undefined),
       });
 
@@ -369,28 +414,31 @@ describe("_runExecutorLoop", () => {
       ]);
     });
 
-    it("survives double failure (handler throws + fail() throws)", async () => {
-      // Handler crashes, then fail() mutation also throws (task was deleted).
-      // The executor must NOT crash — other tasks must still complete.
+    it("survives double failure (handler throws + failBatch throws)", async () => {
       const tracker = createTracker();
 
       const deps = makeDeps({
-        claimBatch: vi.fn()
-          .mockResolvedValueOnce([
-            { _id: "double-fail", name: "crasher", args: {}, attempt: 0 },
-            { _id: "healthy", name: "ok", args: {}, attempt: 0 },
-          ])
-          .mockResolvedValue([]),
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "double-fail", name: "crasher", args: {}, attempt: 0 },
+              { _id: "healthy", name: "ok", args: {}, attempt: 0 },
+            ])
+            .mockResolvedValue([]),
+        ),
         getHandler: (name: string) => {
           if (name === "crasher") return async () => { throw new Error("boom"); };
           return async () => "fine";
         },
-        fail: vi.fn().mockImplementation(async (taskId: string) => {
-          if (taskId === "double-fail") throw new Error("fail mutation crashed");
+        failBatch: vi.fn().mockImplementation(async () => {
+          throw new Error("failBatch mutation crashed");
         }),
-        complete: vi.fn().mockImplementation(async (taskId: string) => {
-          tracker.completed.push(taskId);
-        }),
+        completeBatch: vi.fn().mockImplementation(
+          async (items: { taskId: string; result: unknown }[]) => {
+            for (const item of items) tracker.completed.push(item.taskId);
+            return [];
+          },
+        ),
         executorDone: vi.fn().mockResolvedValue(undefined),
       });
 
@@ -398,44 +446,45 @@ describe("_runExecutorLoop", () => {
       await vi.advanceTimersByTimeAsync(2_000);
       await loopDone;
 
-      // Healthy task must still complete
       expect(tracker.completed).toContain("healthy");
       expect(console.error).toHaveBeenCalled();
     });
 
     it("finally block releases in-flight claims even when loop crashes", async () => {
-      // First claim returns [fast, slow]. Fast completes immediately,
-      // triggering another iteration. Second claimBatch throws.
-      // The finally block must release the slow task.
       const slow = deferred();
       const tracker = createTracker();
+      let listCallCount = 0;
 
       const deps = makeDeps({
-        claimBatch: vi.fn()
-          .mockResolvedValueOnce([
-            { _id: "fast-1", name: "fast", args: {}, attempt: 0 },
-            { _id: "slow-1", name: "slow", args: {}, attempt: 0 },
-          ])
-          .mockImplementation(async () => { throw new Error("db crash"); }),
+        listPending: vi.fn().mockImplementation(async () => {
+          listCallCount++;
+          if (listCallCount === 1) return ["fast-1", "slow-1"];
+          throw new Error("db crash");
+        }),
+        claimByIds: vi.fn().mockImplementation(async (ids: string[]) => {
+          if (ids.includes("fast-1")) {
+            return [
+              { _id: "fast-1", name: "fast", args: {}, attempt: 0 },
+              { _id: "slow-1", name: "slow", args: {}, attempt: 0 },
+            ];
+          }
+          return [];
+        }),
         getHandler: (name: string) => {
           if (name === "fast") return async () => "done";
           return () => slow.promise;
         },
-        complete: vi.fn().mockResolvedValue(undefined),
         releaseClaims: vi.fn().mockImplementation(async (ids: string[]) => {
           tracker.released.push(...ids);
         }),
         executorDone: vi.fn(),
       });
 
-      // Attach catch immediately to prevent unhandled rejection warning.
-      // The error still propagates — we inspect it below.
       const loopPromise = _runExecutorLoop(deps, SHORT_OPTIONS)
         .then(() => null)
         .catch((e: unknown) => e);
 
-      // Flush microtasks: fast-1 completes, loop tries second claim → crash
-      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(500);
 
       const result = await loopPromise;
 
@@ -445,6 +494,134 @@ describe("_runExecutorLoop", () => {
 
       slow.resolve();
     });
+
+    it("retries completeBatch on transient errors", async () => {
+      const tracker = createTracker();
+      let completeBatchCalls = 0;
+
+      const deps = makeDeps({
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+            ])
+            .mockResolvedValue([]),
+        ),
+        getHandler: () => async () => "result",
+        completeBatch: vi.fn().mockImplementation(async (items: { taskId: string; result: unknown }[]) => {
+          completeBatchCalls++;
+          if (completeBatchCalls === 1) {
+            throw new Error("Too many concurrent commits in a short period of time.");
+          }
+          for (const item of items) tracker.completed.push(item.taskId);
+          return [];
+        }),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      expect(completeBatchCalls).toBeGreaterThanOrEqual(2);
+      expect(tracker.completed).toEqual(["t1"]);
+    });
+
+    it("retries executorDone on transient errors", async () => {
+      let executorDoneCalls = 0;
+
+      const deps = makeDeps({
+        ...claimMocks(vi.fn().mockResolvedValue([])),
+        countPending: vi.fn().mockResolvedValue(0),
+        executorDone: vi.fn().mockImplementation(async () => {
+          executorDoneCalls++;
+          if (executorDoneCalls <= 2) {
+            throw new Error("Documents read from or written to the \"batchConfig\" table changed while this mutation was being run");
+          }
+        }),
+      });
+
+      const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      expect(executorDoneCalls).toBe(3);
+    });
+  });
+
+  // ─── OnComplete dispatch ──────────────────────────────────────────────
+
+  describe("onComplete dispatch", () => {
+    it("dispatches onComplete items returned from completeBatch", async () => {
+      const tracker = createTracker();
+      const onCompleteItem = {
+        fnHandle: "function:pipeline/afterStep1",
+        workId: "t1",
+        context: { jobId: "j1" },
+        result: { kind: "success", returnValue: "hello" },
+      };
+
+      const deps = makeDeps({
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+            ])
+            .mockResolvedValue([]),
+        ),
+        getHandler: () => async () => "hello",
+        completeBatch: vi.fn().mockImplementation(async () => {
+          tracker.completed.push("t1");
+          return [onCompleteItem];
+        }),
+        dispatchOnCompleteBatch: vi.fn().mockImplementation(async (items) => {
+          tracker.onCompleteDispatched.push(...items);
+        }),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      expect(tracker.completed).toEqual(["t1"]);
+      expect(tracker.onCompleteDispatched).toEqual([onCompleteItem]);
+    });
+
+    it("dispatches onComplete items returned from failBatch", async () => {
+      const tracker = createTracker();
+      const onCompleteItem = {
+        fnHandle: "function:pipeline/afterFail",
+        workId: "t1",
+        context: { jobId: "j1" },
+        result: { kind: "failed", error: "boom" },
+      };
+
+      const deps = makeDeps({
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+            ])
+            .mockResolvedValue([]),
+        ),
+        getHandler: () => async () => { throw new Error("boom"); },
+        failBatch: vi.fn().mockImplementation(async () => {
+          tracker.failed.push({ id: "t1", error: "boom" });
+          return [onCompleteItem];
+        }),
+        dispatchOnCompleteBatch: vi.fn().mockImplementation(async (items) => {
+          tracker.onCompleteDispatched.push(...items);
+        }),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      expect(tracker.onCompleteDispatched).toEqual([onCompleteItem]);
+    });
   });
 
   // ─── Concurrency ───────────────────────────────────────────────────────
@@ -452,22 +629,22 @@ describe("_runExecutorLoop", () => {
   describe("concurrency", () => {
     it("respects maxConcurrencyPerWorker limit", async () => {
       const tracker = createTracker();
+      const claimImpl = vi.fn()
+        .mockResolvedValueOnce(
+          Array.from({ length: 5 }, (_, i) => ({
+            _id: `t${i}`, name: "handler", args: {}, attempt: 0,
+          })),
+        )
+        .mockResolvedValue([]);
+      const mocks = claimMocks(claimImpl);
 
       const deps = makeDeps({
-        claimBatch: vi.fn()
-          .mockResolvedValueOnce(
-            Array.from({ length: 5 }, (_, i) => ({
-              _id: `t${i}`, name: "handler", args: {}, attempt: 0,
-            })),
-          )
-          .mockResolvedValue([]),
+        ...mocks,
         getHandler: () => async () => {
           await new Promise((r) => setTimeout(r, 50));
           return "done";
         },
-        complete: vi.fn().mockImplementation(async (taskId: string) => {
-          tracker.completed.push(taskId);
-        }),
+        ...batchMocks(tracker),
         executorDone: vi.fn().mockResolvedValue(undefined),
       });
 
@@ -480,8 +657,7 @@ describe("_runExecutorLoop", () => {
       await loopDone;
 
       expect(tracker.completed.length).toBe(5);
-      // First claim was capped at 3 (not 5)
-      expect(deps.claimBatch).toHaveBeenCalledWith(3);
+      expect(mocks.listPending).toHaveBeenCalledWith(3);
     });
   });
 
@@ -489,36 +665,27 @@ describe("_runExecutorLoop", () => {
 
   describe("retry scenarios", () => {
     it("re-claims a task that was retried (failed then re-queued by component)", async () => {
-      // Simulates: task fails on attempt 0, component re-queues it with
-      // attempt=1, executor claims it again and it succeeds.
       const tracker = createTracker();
       let claimCount = 0;
       let handlerCallCount = 0;
 
       const deps = makeDeps({
-        claimBatch: vi.fn().mockImplementation(async () => {
+        ...claimMocks(vi.fn().mockImplementation(async () => {
           claimCount++;
           if (claimCount === 1) {
             return [{ _id: "retry-task", name: "flaky", args: {}, attempt: 0 }];
           }
           if (claimCount === 2) {
-            // Same task ID re-appears after component re-queued it
             return [{ _id: "retry-task", name: "flaky", args: {}, attempt: 1 }];
           }
           return [];
-        }),
-        // Shared counter across handler invocations
+        })),
         getHandler: () => async () => {
           handlerCallCount++;
           if (handlerCallCount === 1) throw new Error("transient failure");
           return "success on retry";
         },
-        fail: vi.fn().mockImplementation(async (taskId: string, error: string) => {
-          tracker.failed.push({ id: taskId, error });
-        }),
-        complete: vi.fn().mockImplementation(async (taskId: string) => {
-          tracker.completed.push(taskId);
-        }),
+        ...batchMocks(tracker),
         countPending: vi.fn().mockImplementation(async () => {
           return tracker.completed.length === 0 ? 1 : 0;
         }),
@@ -529,25 +696,28 @@ describe("_runExecutorLoop", () => {
       await vi.advanceTimersByTimeAsync(2_000);
       await loopDone;
 
-      // First attempt failed, second succeeded
       expect(tracker.failed).toHaveLength(1);
       expect(tracker.completed).toContain("retry-task");
     });
 
     it("handler returning undefined becomes null (Convex serialization)", async () => {
-      // Convex can't serialize undefined — the executor must coerce to null.
-      const completedWith: Array<{ id: string; result: unknown }> = [];
+      const completedWith: Array<{ taskId: string; result: unknown }> = [];
 
       const deps = makeDeps({
-        claimBatch: vi.fn()
-          .mockResolvedValueOnce([
-            { _id: "t1", name: "void-handler", args: {}, attempt: 0 },
-          ])
-          .mockResolvedValue([]),
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "t1", name: "void-handler", args: {}, attempt: 0 },
+            ])
+            .mockResolvedValue([]),
+        ),
         getHandler: () => async () => undefined,
-        complete: vi.fn().mockImplementation(async (taskId: string, result: unknown) => {
-          completedWith.push({ id: taskId, result });
-        }),
+        completeBatch: vi.fn().mockImplementation(
+          async (items: { taskId: string; result: unknown }[]) => {
+            completedWith.push(...items);
+            return [];
+          },
+        ),
         executorDone: vi.fn().mockResolvedValue(undefined),
       });
 
@@ -555,7 +725,7 @@ describe("_runExecutorLoop", () => {
       await vi.advanceTimersByTimeAsync(2_000);
       await loopDone;
 
-      expect(completedWith).toEqual([{ id: "t1", result: null }]);
+      expect(completedWith).toEqual([{ taskId: "t1", result: null }]);
     });
   });
 
@@ -564,13 +734,13 @@ describe("_runExecutorLoop", () => {
   describe("exit conditions", () => {
     it("exits immediately when no pending work and nothing in flight", async () => {
       const deps = makeDeps({
-        claimBatch: vi.fn().mockResolvedValue([]),
+        ...claimMocks(vi.fn().mockResolvedValue([])),
         countPending: vi.fn().mockResolvedValue(0),
         executorDone: vi.fn().mockResolvedValue(undefined),
       });
 
       const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
-      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(500);
       await loopDone;
 
       expect(deps.executorDone).toHaveBeenCalledWith(false);
@@ -578,33 +748,29 @@ describe("_runExecutorLoop", () => {
 
     it("signals startMore=true when pending work remains at exit", async () => {
       const deps = makeDeps({
-        claimBatch: vi.fn().mockResolvedValue([]),
-        countPending: vi.fn().mockResolvedValue(5), // always 5 pending with future readyAt
+        ...claimMocks(vi.fn().mockResolvedValue([])),
+        countPending: vi.fn().mockResolvedValue(5),
         executorDone: vi.fn().mockResolvedValue(undefined),
       });
 
       const loopDone = _runExecutorLoop(deps, {
         ...SHORT_OPTIONS,
-        claimDeadlineMs: 100,
-        softDeadlineMs: 599_500, // soft deadline at 500ms
+        claimDeadlineMs: 300,
+        softDeadlineMs: 599_500,
       });
 
       await vi.advanceTimersByTimeAsync(1_000);
       await loopDone;
 
-      // Executor couldn't claim anything, but there's still pending work
       expect(deps.executorDone).toHaveBeenCalledWith(true);
     });
 
     it("polls at pollIntervalMs when tasks exist with future readyAt", async () => {
-      // claimBatch returns nothing (all tasks have future readyAt),
-      // but countPending returns >0. The executor should poll, not exit.
       let pollCount = 0;
       const deps = makeDeps({
-        claimBatch: vi.fn().mockResolvedValue([]),
+        ...claimMocks(vi.fn().mockResolvedValue([])),
         countPending: vi.fn().mockImplementation(async () => {
           pollCount++;
-          // After 3 polls, no more pending
           return pollCount <= 3 ? 1 : 0;
         }),
         executorDone: vi.fn().mockResolvedValue(undefined),
@@ -618,7 +784,6 @@ describe("_runExecutorLoop", () => {
       await vi.advanceTimersByTimeAsync(2_000);
       await loopDone;
 
-      // Should have polled at least 3 times before exiting
       expect(pollCount).toBeGreaterThanOrEqual(3);
       expect(deps.executorDone).toHaveBeenCalledWith(false);
     });

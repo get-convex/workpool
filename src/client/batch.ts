@@ -125,17 +125,44 @@ type HandlerFn = (ctx: GenericActionCtx<any>, args: any) => Promise<any>;
 
 type ClaimedTask = { _id: string; name: string; args: any; attempt: number };
 
+type OnCompleteItem = {
+  fnHandle: string;
+  workId: string;
+  context?: unknown;
+  result:
+    | { kind: "success"; returnValue: unknown }
+    | { kind: "failed"; error: string }
+    | { kind: "canceled" };
+};
+
 /** @internal Dependencies injected into the executor loop. Exported for testing. */
 export interface _ExecutorDeps {
-  claimBatch(limit: number): Promise<ClaimedTask[]>;
-  complete(taskId: string, result: unknown): Promise<void>;
-  fail(taskId: string, error: string): Promise<void>;
+  listPending(limit: number): Promise<string[]>;
+  claimByIds(taskIds: string[]): Promise<ClaimedTask[]>;
+  completeBatch(
+    items: { taskId: string; result: unknown }[],
+  ): Promise<OnCompleteItem[]>;
+  failBatch(
+    items: { taskId: string; error: string }[],
+  ): Promise<OnCompleteItem[]>;
+  /** Dispatch multiple onComplete handlers in a single mutation transaction. */
+  dispatchOnCompleteBatch(items: OnCompleteItem[]): Promise<void>;
   countPending(): Promise<number>;
   releaseClaims(taskIds: string[]): Promise<void>;
   executorDone(startMore: boolean): Promise<void>;
   getHandler(name: string): ((args: any) => Promise<any>) | undefined;
   getHeapUsedBytes(): number;
   isNode: boolean;
+}
+
+const FLUSH_BATCH_SIZE = 100;
+
+function isTransientError(err: unknown): boolean {
+  const msg = String(err);
+  return (
+    msg.includes("changed while this mutation was being run") ||
+    msg.includes("Too many concurrent commits")
+  );
 }
 
 /** @internal Core executor loop. Exported for testing. */
@@ -157,9 +184,126 @@ export async function _runExecutorLoop(
   const maxHeapBytes = maxHeapMB * 1024 * 1024;
   const inFlight = new Map<string, Promise<void>>();
 
+  // Completion/failure buffers — flushed as batch mutations to reduce
+  // total mutation count from O(N) to O(N/batchSize).
+  const completionBuffer: { taskId: string; result: unknown }[] = [];
+  const failureBuffer: { taskId: string; error: string }[] = [];
+  // OnComplete items returned from completeBatch/failBatch, dispatched
+  // directly from the action for much higher throughput than scheduling.
+  const onCompleteBuffer: OnCompleteItem[] = [];
+  let onCompleteInflight = 0;
+  let onCompleteDrainerRunning = false;
+
+  // Dispatch onComplete items in batches of this size (single mutation each)
+  const ONCOMPLETE_BATCH_SIZE = 50;
+  // Max concurrent batch mutations per executor: 3 × 20 workers = ~60 total
+  const ONCOMPLETE_CONCURRENCY = 3;
+
+  async function drainOnComplete() {
+    if (onCompleteDrainerRunning) return;
+    onCompleteDrainerRunning = true;
+    let backoff = 50;
+    try {
+      while (onCompleteBuffer.length > 0) {
+        const available = ONCOMPLETE_CONCURRENCY - onCompleteInflight;
+        if (available <= 0) {
+          await new Promise((r) => setTimeout(r, 20));
+          continue;
+        }
+        // Launch up to `available` batch mutations in parallel
+        const promises: Promise<void>[] = [];
+        for (let i = 0; i < available && onCompleteBuffer.length > 0; i++) {
+          const chunk = onCompleteBuffer.splice(0, ONCOMPLETE_BATCH_SIZE);
+          onCompleteInflight++;
+          promises.push(
+            deps
+              .dispatchOnCompleteBatch(chunk)
+              .then(() => {
+                backoff = 50;
+              })
+              .catch((err: unknown) => {
+                if (isTransientError(err)) {
+                  onCompleteBuffer.push(...chunk);
+                } else {
+                  console.error(`[batch] onComplete dispatch failed:`, err);
+                }
+              })
+              .finally(() => {
+                onCompleteInflight--;
+              }),
+          );
+        }
+        await Promise.race([
+          Promise.all(promises),
+          new Promise((r) => setTimeout(r, 100)),
+        ]);
+        if (onCompleteBuffer.length > 0 && backoff > 50) {
+          await new Promise((r) =>
+            setTimeout(r, backoff + Math.random() * backoff),
+          );
+        }
+        if (onCompleteBuffer.length > 0 && promises.length === 0) {
+          backoff = Math.min(backoff * 1.5, 2000);
+        }
+      }
+    } finally {
+      onCompleteDrainerRunning = false;
+    }
+  }
+
+  /** Wait until all onComplete items have been dispatched. */
+  async function awaitOnCompleteDrain() {
+    while (onCompleteBuffer.length > 0 || onCompleteInflight > 0) {
+      if (!onCompleteDrainerRunning && onCompleteBuffer.length > 0) {
+        void drainOnComplete();
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+
+  async function flushBuffers() {
+    while (completionBuffer.length > 0) {
+      const batch = completionBuffer.splice(0, FLUSH_BATCH_SIZE);
+      try {
+        const onComplete = await deps.completeBatch(batch);
+        onCompleteBuffer.push(...onComplete);
+      } catch (err: unknown) {
+        if (isTransientError(err)) {
+          // Put items back and bail — will retry next flush cycle
+          completionBuffer.unshift(...batch);
+          await new Promise((r) => setTimeout(r, 100 + Math.random() * 200));
+          return;
+        }
+        console.error(`[batch] completeBatch failed for ${batch.length} items:`, err);
+      }
+    }
+    while (failureBuffer.length > 0) {
+      const batch = failureBuffer.splice(0, FLUSH_BATCH_SIZE);
+      try {
+        const onComplete = await deps.failBatch(batch);
+        onCompleteBuffer.push(...onComplete);
+      } catch (err: unknown) {
+        if (isTransientError(err)) {
+          failureBuffer.unshift(...batch);
+          await new Promise((r) => setTimeout(r, 100 + Math.random() * 200));
+          return;
+        }
+        console.error(`[batch] failBatch failed for ${batch.length} items:`, err);
+      }
+    }
+    // Kick off background drain (non-blocking)
+    void drainOnComplete();
+  }
+
+  // Stagger executor start to reduce burst contention across executors
+  await new Promise((r) => setTimeout(r, Math.random() * 200));
+
   try {
     while (Date.now() < softDeadline) {
       const canClaim = Date.now() < claimDeadline;
+
+      // Flush buffered completions/failures before claiming more work
+      await flushBuffers();
 
       // Check memory pressure — skip claiming if heap is too large
       let memoryOk = true;
@@ -182,43 +326,32 @@ export async function _runExecutorLoop(
           maxClaimBatch,
         );
         if (available > 0) {
-          const batch = await deps.claimBatch(available);
+          let batch: ClaimedTask[];
+          try {
+            // Two-step claim: query for IDs (no OCC), then claim by point reads
+            const ids = await deps.listPending(available);
+            batch = ids.length > 0 ? await deps.claimByIds(ids) : [];
+          } catch (err: unknown) {
+            if (isTransientError(err)) {
+              await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
+              continue;
+            }
+            throw err;
+          }
 
           for (const task of batch) {
             const handler = deps.getHandler(task.name);
             if (!handler) {
-              await deps.fail(task._id, `Unknown handler: ${task.name}`);
+              failureBuffer.push({ taskId: task._id, error: `Unknown handler: ${task.name}` });
               continue;
             }
 
             const p = handler(task.args)
-              .then(async (result) => {
-                try {
-                  await deps.complete(task._id, result ?? null);
-                } catch (completeErr: unknown) {
-                  // OCC conflict on complete: task may have been swept or
-                  // canceled concurrently. Log and move on.
-                  const msg = String(completeErr);
-                  if (
-                    msg.includes("changed while this mutation was being run")
-                  ) {
-                    console.warn(
-                      `[batch] OCC conflict completing ${task._id}, skipping`,
-                    );
-                  } else {
-                    throw completeErr;
-                  }
-                }
+              .then((result) => {
+                completionBuffer.push({ taskId: task._id, result: result ?? null });
               })
-              .catch(async (err: unknown) => {
-                try {
-                  await deps.fail(task._id, String(err));
-                } catch (failErr) {
-                  console.error(
-                    `[batch] failed to report failure for ${task._id}:`,
-                    failErr,
-                  );
-                }
+              .catch((err: unknown) => {
+                failureBuffer.push({ taskId: task._id, error: String(err) });
               })
               .finally(() => inFlight.delete(task._id));
 
@@ -227,8 +360,14 @@ export async function _runExecutorLoop(
         }
       }
 
-      // Nothing in flight — check if we should exit
-      if (inFlight.size === 0) {
+      // Nothing in flight and all buffers empty — check if we should exit
+      if (
+        inFlight.size === 0 &&
+        completionBuffer.length === 0 &&
+        failureBuffer.length === 0 &&
+        onCompleteBuffer.length === 0 &&
+        onCompleteInflight === 0
+      ) {
         // Past claim deadline with nothing in flight: we're done draining
         if (!canClaim) break;
         const pending = await deps.countPending();
@@ -237,17 +376,24 @@ export async function _runExecutorLoop(
         continue;
       }
 
-      // Wait for at least one task to finish or soft deadline, whichever comes first
+      // Wait for at least one task to finish, a flush interval, or soft deadline
       const timeToDeadline = softDeadline - Date.now();
       if (timeToDeadline <= 0) break;
       const deadlineTimer = new Promise<void>((r) =>
-        setTimeout(r, timeToDeadline),
+        setTimeout(r, Math.min(timeToDeadline, 200)),
       );
-      await Promise.race([...inFlight.values(), deadlineTimer]);
+      if (inFlight.size > 0) {
+        await Promise.race([...inFlight.values(), deadlineTimer]);
+      } else {
+        await deadlineTimer;
+      }
     }
   } finally {
-    // Guarantee claim release even if the executor crashes.
-    // Released tasks return to "pending" for another executor to pick up.
+    // Final flush of any remaining buffered results
+    await flushBuffers();
+    // Wait for all onComplete dispatches to finish
+    await awaitOnCompleteDrain();
+    // Release any tasks still in "claimed" state
     const unfinished = [...inFlight.keys()];
     if (unfinished.length > 0) {
       try {
@@ -261,10 +407,17 @@ export async function _runExecutorLoop(
   // Check if there's remaining work
   const remaining = await deps.countPending();
 
-  // Notify component that this executor is done.
-  // If there's remaining work, executorDone schedules a replacement
-  // for the same slot — no self-scheduling needed.
-  await deps.executorDone(remaining > 0);
+  // Notify component that this executor is done — retry on transient errors
+  // since all executors write to the same batchConfig singleton.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      await deps.executorDone(remaining > 0);
+      break;
+    } catch (err: unknown) {
+      if (attempt === 4 || !isTransientError(err)) throw err;
+      await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
+    }
+  }
 }
 
 // ─── Class ──────────────────────────────────────────────────────────────────
@@ -340,14 +493,19 @@ export class BatchWorkpool {
         const isNode =
           typeof process !== "undefined" &&
           typeof process.memoryUsage === "function";
-        const maxWorkers = options.maxWorkers ?? 10;
         const deps: _ExecutorDeps = {
-          claimBatch: (limit) =>
-            ctx.runMutation(component.batch.claimBatch, { slot, limit, maxWorkers }),
-          complete: (taskId, result) =>
-            ctx.runMutation(component.batch.complete, { taskId, result }),
-          fail: (taskId, error) =>
-            ctx.runMutation(component.batch.fail, { taskId, error }),
+          listPending: (limit) =>
+            ctx.runQuery(component.batch.listPending, { slot, limit }),
+          claimByIds: (taskIds) =>
+            ctx.runMutation(component.batch.claimByIds, { taskIds }),
+          completeBatch: (items) =>
+            ctx.runMutation(component.batch.completeBatch, { items }),
+          failBatch: (items) =>
+            ctx.runMutation(component.batch.failBatch, { items }),
+          dispatchOnCompleteBatch: (items) =>
+            ctx.runMutation(component.batch.dispatchOnCompleteBatch, {
+              items,
+            }),
           countPending: () =>
             ctx.runQuery(component.batch.countPending, { slot }),
           releaseClaims: (taskIds) =>

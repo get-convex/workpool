@@ -1,10 +1,12 @@
-import { mutation, query } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { internalMutation, mutation, query } from "./_generated/server";
+import { components, internal } from "./_generated/api";
 import { v } from "convex/values";
 import { standard, batch } from "./setup";
 // Import batchActions so that batch.action() registrations and
 // batch.setExecutorRef() run before any enqueue() calls.
 import "./batchActions";
+
+const CHUNK_SIZE = 2000;
 
 const SENTENCES = [
   "The quick brown fox jumps over the lazy dog",
@@ -56,15 +58,14 @@ export const runStandard = mutation({
   },
 });
 
-// Kick off N jobs in batch mode (many tasks per action)
+// Kick off N jobs in batch mode, chunked to stay under 16K write limit
 export const runBatch = mutation({
   args: { count: v.number() },
   handler: async (ctx, { count }) => {
     const startedAt = Date.now();
-    // Insert all jobs first, then batch-enqueue tasks in one component call
-    // to avoid per-enqueue OCC on the component's singleton config table.
+    const chunk = Math.min(count, CHUNK_SIZE);
     const tasks = [];
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < chunk; i++) {
       const sentence = SENTENCES[i % SENTENCES.length];
       const jobId = await ctx.db.insert("jobs", {
         sentence,
@@ -82,7 +83,47 @@ export const runBatch = mutation({
       });
     }
     await batch.enqueueBatch(ctx, tasks);
+    const remaining = count - chunk;
+    if (remaining > 0) {
+      await ctx.scheduler.runAfter(0, internal.test._runBatchChunk, {
+        remaining,
+        startedAt,
+      });
+    }
     return { started: count, mode: "batch" };
+  },
+});
+
+export const _runBatchChunk = internalMutation({
+  args: { remaining: v.number(), startedAt: v.number() },
+  handler: async (ctx, { remaining, startedAt }) => {
+    const chunk = Math.min(remaining, CHUNK_SIZE);
+    const tasks = [];
+    for (let i = 0; i < chunk; i++) {
+      const sentence = SENTENCES[i % SENTENCES.length];
+      const jobId = await ctx.db.insert("jobs", {
+        sentence,
+        mode: "batch",
+        status: "pending",
+        startedAt,
+      });
+      tasks.push({
+        name: "translateToSpanish",
+        args: { sentence },
+        options: {
+          onComplete: internal.pipeline.batchAfterSpanish,
+          context: { jobId },
+        },
+      });
+    }
+    await batch.enqueueBatch(ctx, tasks);
+    const left = remaining - chunk;
+    if (left > 0) {
+      await ctx.scheduler.runAfter(0, internal.test._runBatchChunk, {
+        remaining: left,
+        startedAt,
+      });
+    }
   },
 });
 
@@ -164,10 +205,18 @@ export const results = query({
 // Reset all jobs for a clean test (paginated to avoid read limits)
 export const reset = mutation({
   handler: async (ctx) => {
-    const batch = await ctx.db.query("jobs").take(1000);
-    for (const job of batch) {
+    const jobs = await ctx.db.query("jobs").take(1000);
+    for (const job of jobs) {
       await ctx.db.delete(job._id);
     }
-    return { deleted: batch.length, more: batch.length === 1000 };
+    // Also reset the batch component's config and tasks
+    if (jobs.length === 0) {
+      await ctx.runMutation(components.batchPool.batch.resetConfig);
+      const result = await ctx.runMutation(
+        components.batchPool.batch.resetTasks,
+      );
+      if (result.more) return { deleted: result.deleted, more: true };
+    }
+    return { deleted: jobs.length, more: jobs.length === 1000 };
   },
 });

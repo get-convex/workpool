@@ -174,7 +174,7 @@ describe("batch", () => {
       });
 
       // Claim them
-      const claimed = await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10, maxWorkers: 10 });
+      const claimed = await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10 });
       expect(claimed).toHaveLength(2);
       expect(claimed.map((c: { name: string }) => c.name).sort()).toEqual([
         "handler1",
@@ -205,7 +205,7 @@ describe("batch", () => {
       }
 
       // Claim only 2
-      const claimed = await t.mutation(api.batch.claimBatch, { slot: 0, limit: 2, maxWorkers: 10 });
+      const claimed = await t.mutation(api.batch.claimBatch, { slot: 0, limit: 2 });
       expect(claimed).toHaveLength(2);
 
       // 3 should still be pending
@@ -236,7 +236,7 @@ describe("batch", () => {
       });
 
       // Claim — should get nothing
-      const claimed = await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10, maxWorkers: 10 });
+      const claimed = await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10 });
       expect(claimed).toHaveLength(0);
     });
 
@@ -250,11 +250,11 @@ describe("batch", () => {
       });
 
       // First claim
-      const batch1 = await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10, maxWorkers: 10 });
+      const batch1 = await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10 });
       expect(batch1).toHaveLength(1);
 
       // Second claim — should get nothing
-      const batch2 = await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10, maxWorkers: 10 });
+      const batch2 = await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10 });
       expect(batch2).toHaveLength(0);
     });
 
@@ -279,7 +279,7 @@ describe("batch", () => {
       });
 
       // Claim from slot 1 — should only get the slot-1 task
-      const claimed = await t.mutation(api.batch.claimBatch, { slot: 1, limit: 10, maxWorkers: 10 });
+      const claimed = await t.mutation(api.batch.claimBatch, { slot: 1, limit: 10 });
       expect(claimed).toHaveLength(1);
       expect(claimed[0].name).toBe("slot1-task");
 
@@ -309,7 +309,7 @@ describe("batch", () => {
       });
 
       // Claim it
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1 });
 
       // Complete it
       await t.mutation(api.batch.complete, {
@@ -381,7 +381,7 @@ describe("batch", () => {
       });
 
       // Claim and fail
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1 });
       await t.mutation(api.batch.fail, {
         taskId,
         error: "Something went wrong",
@@ -409,7 +409,7 @@ describe("batch", () => {
       });
 
       // Claim and fail
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1 });
       await t.mutation(api.batch.fail, {
         taskId,
         error: "Temporary error",
@@ -443,7 +443,7 @@ describe("batch", () => {
       });
 
       // First attempt: claim and fail
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1 });
       await t.mutation(api.batch.fail, {
         taskId,
         error: "First failure",
@@ -460,7 +460,7 @@ describe("batch", () => {
       vi.advanceTimersByTime(60_000);
 
       // Second attempt: claim and fail again
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1 });
       await t.mutation(api.batch.fail, {
         taskId,
         error: "Second failure",
@@ -496,7 +496,7 @@ describe("batch", () => {
       expect(count3).toBe(1);
 
       // Claim all from slot 0
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10 });
 
       // Still pending on other slots
       const countAfter = await t.query(api.batch.countPending, {});
@@ -531,7 +531,7 @@ describe("batch", () => {
       expect(slot2Count).toBe(0);
 
       // Claim slot 0
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10 });
 
       // Slot 0 now empty, slot 1 still has pending
       const slot0After = await t.query(api.batch.countPending, { slot: 0 });
@@ -564,7 +564,7 @@ describe("batch", () => {
         args: {},
       });
 
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1 });
 
       const s = await t.query(api.batch.status, { taskId });
       expect(s).toEqual({ state: "running", attempt: 0 });
@@ -579,7 +579,7 @@ describe("batch", () => {
         args: {},
       });
 
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1 });
       await t.mutation(api.batch.complete, { taskId, result: null });
 
       const s = await t.query(api.batch.status, { taskId });
@@ -630,7 +630,7 @@ describe("batch", () => {
         args: {},
       });
 
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1 });
       await t.mutation(api.batch.cancel, { taskId });
 
       await t.run(async (ctx) => {
@@ -666,7 +666,7 @@ describe("batch", () => {
       });
 
       // Claim it
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1 });
 
       // Verify it's claimed
       await t.run(async (ctx) => {
@@ -698,7 +698,7 @@ describe("batch", () => {
         args: {},
       });
 
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1 });
 
       // Don't advance time — claim is fresh
       const swept = await t.mutation(api.batch.sweepStaleClaims, {});
@@ -758,7 +758,7 @@ describe("batch", () => {
       });
 
       // Claim both
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10 });
 
       // Verify claimed
       await t.run(async (ctx) => {
@@ -792,7 +792,7 @@ describe("batch", () => {
       });
 
       // Claim and complete
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1 });
       await t.mutation(api.batch.complete, { taskId, result: null });
 
       // Release should no-op (task is deleted)
@@ -964,7 +964,7 @@ describe("batch", () => {
       });
 
       // Attempt 0: claim and fail
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1 });
       const beforeFirstFail = Date.now();
       await t.mutation(api.batch.fail, { taskId, error: "fail-0" });
 
@@ -983,7 +983,7 @@ describe("batch", () => {
       vi.advanceTimersByTime(delay0 + 100);
 
       // Attempt 1: claim and fail again
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1 });
       const beforeSecondFail = Date.now();
       await t.mutation(api.batch.fail, { taskId, error: "fail-1" });
 
@@ -1012,7 +1012,7 @@ describe("batch", () => {
       });
 
       // Attempt 0: fail
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1 });
       await t.mutation(api.batch.fail, { taskId, error: "transient" });
 
       // Verify retried
@@ -1026,7 +1026,7 @@ describe("batch", () => {
       vi.advanceTimersByTime(60_000);
 
       // Attempt 1: succeed
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1 });
       await t.mutation(api.batch.complete, { taskId, result: "finally!" });
 
       // Task should be deleted (completed)
@@ -1051,13 +1051,13 @@ describe("batch", () => {
       });
 
       // Attempt 0
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1 });
       await t.mutation(api.batch.fail, { taskId, error: "fail-0" });
 
       vi.advanceTimersByTime(60_000);
 
       // Attempt 1 (final)
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1 });
       await t.mutation(api.batch.fail, { taskId, error: "fail-1" });
 
       // Task deleted — no more retries
@@ -1086,7 +1086,7 @@ describe("batch", () => {
       });
 
       // Claim both
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10 });
 
       // Advance past claim timeout
       vi.advanceTimersByTime(120_000);
@@ -1097,7 +1097,7 @@ describe("batch", () => {
         slot: 0,
         args: {},
       });
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10 });
 
       // Sweep
       const swept = await t.mutation(api.batch.sweepStaleClaims, {});
@@ -1123,13 +1123,13 @@ describe("batch", () => {
       });
 
       // Executor A claims it
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1 });
 
       // Executor A hits deadline, releases it
       await t.mutation(api.batch.releaseClaims, { taskIds: [taskId] });
 
       // Executor B claims it (same slot — after sweep or replacement)
-      const claimed = await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
+      const claimed = await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1 });
       expect(claimed).toHaveLength(1);
       expect(claimed[0]._id).toBe(taskId);
 
@@ -1152,7 +1152,7 @@ describe("batch", () => {
       });
 
       // Claim it (executor is "running" it)
-      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1 });
 
       // Cancel while claimed (user cancels from dashboard)
       await t.mutation(api.batch.cancel, { taskId });

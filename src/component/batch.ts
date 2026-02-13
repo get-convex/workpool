@@ -124,8 +124,35 @@ export const enqueueBatch = mutation({
 
 // ─── Claim ──────────────────────────────────────────────────────────────────
 
-export const claimBatch = mutation({
-  args: { slot: v.number(), limit: v.number(), maxWorkers: v.number() },
+/**
+ * Read-only query to list pending task IDs for a slot.
+ * Because this is a query (not a mutation), it has no OCC implications.
+ * The executor calls this first, then calls claimByIds to claim the tasks
+ * via point reads — avoiding index range conflicts with concurrent inserts
+ * from onComplete handlers.
+ */
+export const listPending = query({
+  args: { slot: v.number(), limit: v.number() },
+  returns: v.array(v.id("batchTasks")),
+  handler: async (ctx, { slot, limit }) => {
+    const now = Date.now();
+    const pending = await ctx.db
+      .query("batchTasks")
+      .withIndex("by_slot_status_readyAt", (q) =>
+        q.eq("slot", slot).eq("status", "pending").lte("readyAt", now),
+      )
+      .take(limit);
+    return pending.map((t) => t._id);
+  },
+});
+
+/**
+ * Claim specific tasks by ID using point reads only.
+ * The read set is just the individual documents — no index range scan.
+ * This eliminates OCC conflicts from concurrent inserts (onComplete enqueues).
+ */
+export const claimByIds = mutation({
+  args: { taskIds: v.array(v.id("batchTasks")) },
   returns: v.array(
     v.object({
       _id: v.id("batchTasks"),
@@ -134,20 +161,14 @@ export const claimBatch = mutation({
       attempt: v.number(),
     }),
   ),
-  handler: async (ctx, { slot, limit, maxWorkers }) => {
+  handler: async (ctx, { taskIds }) => {
     const now = Date.now();
     const claimed = [];
-
-    // Query this slot plus any overflow slots (handles maxWorkers shrink)
-    for (let s = slot; s < 1000 && claimed.length < limit; s += maxWorkers) {
-      const pending = await ctx.db
-        .query("batchTasks")
-        .withIndex("by_slot_status_readyAt", (q) =>
-          q.eq("slot", s).eq("status", "pending").lte("readyAt", now),
-        )
-        .take(limit - claimed.length);
-
-      for (const task of pending) {
+    for (const taskId of taskIds) {
+      const task = await ctx.db.get(taskId);
+      // Only claim if still pending and ready — it may have been
+      // claimed by a sweep or canceled between the query and this mutation.
+      if (task && task.status === "pending" && task.readyAt <= now) {
         await ctx.db.patch(task._id, {
           status: "claimed",
           claimedAt: now,
@@ -164,6 +185,59 @@ export const claimBatch = mutation({
   },
 });
 
+/**
+ * @deprecated Use listPending + claimByIds instead.
+ * Kept for backward compatibility / testing.
+ */
+export const claimBatch = mutation({
+  args: { slot: v.number(), limit: v.number() },
+  returns: v.array(
+    v.object({
+      _id: v.id("batchTasks"),
+      name: v.string(),
+      args: v.any(),
+      attempt: v.number(),
+    }),
+  ),
+  handler: async (ctx, { slot, limit }) => {
+    const now = Date.now();
+    const pending = await ctx.db
+      .query("batchTasks")
+      .withIndex("by_slot_status_readyAt", (q) =>
+        q.eq("slot", slot).eq("status", "pending").lte("readyAt", now),
+      )
+      .take(limit);
+
+    const claimed = [];
+    for (const task of pending) {
+      await ctx.db.patch(task._id, {
+        status: "claimed",
+        claimedAt: now,
+      });
+      claimed.push({
+        _id: task._id,
+        name: task.name,
+        args: task.args,
+        attempt: task.attempt,
+      });
+    }
+    return claimed;
+  },
+});
+
+// ─── OnComplete return type ──────────────────────────────────────────────────
+
+const vOnCompleteItem = v.object({
+  fnHandle: v.string(),
+  workId: v.string(),
+  context: v.optional(v.any()),
+  result: v.union(
+    v.object({ kind: v.literal("success"), returnValue: v.any() }),
+    v.object({ kind: v.literal("failed"), error: v.string() }),
+    v.object({ kind: v.literal("canceled") }),
+  ),
+});
+
 // ─── Complete ───────────────────────────────────────────────────────────────
 
 export const complete = mutation({
@@ -172,26 +246,67 @@ export const complete = mutation({
     result: v.any(),
   },
   handler: async (ctx, { taskId, result }) => {
-    const task = await ctx.db.get(taskId);
-    if (!task) {
-      // Task was canceled or already completed
-      return;
+    const item = await completeOne(ctx, taskId, result);
+    // Legacy single-complete still schedules onComplete for backward compat
+    if (item) {
+      await scheduleOnComplete(ctx, item);
     }
-    if (task.status !== "claimed") {
-      // Task is not in expected state (e.g. was canceled)
-      return;
-    }
-
-    // Call onComplete with success result
-    if (task.onComplete) {
-      const runResult: RunResult = { kind: "success", returnValue: result };
-      await callOnComplete(ctx, taskId, task.onComplete, runResult);
-    }
-
-    // Delete the task (terminal state)
-    await ctx.db.delete(taskId);
   },
 });
+
+/**
+ * Batch-complete multiple tasks in a single mutation.
+ * Returns onComplete data for the executor to dispatch directly,
+ * bypassing the scheduler queue for much higher throughput.
+ */
+export const completeBatch = mutation({
+  args: {
+    items: v.array(
+      v.object({
+        taskId: v.id("batchTasks"),
+        result: v.any(),
+      }),
+    ),
+  },
+  returns: v.array(vOnCompleteItem),
+  handler: async (ctx, { items }) => {
+    const onCompleteItems: OnCompleteItem[] = [];
+    for (const { taskId, result } of items) {
+      const item = await completeOne(ctx, taskId, result);
+      if (item) onCompleteItems.push(item);
+    }
+    return onCompleteItems;
+  },
+});
+
+type OnCompleteItem = {
+  fnHandle: string;
+  workId: string;
+  context?: unknown;
+  result: RunResult;
+};
+
+async function completeOne(
+  ctx: MutationCtx,
+  taskId: Id<"batchTasks">,
+  result: unknown,
+): Promise<OnCompleteItem | null> {
+  const task = await ctx.db.get(taskId);
+  if (!task) return null;
+  if (task.status !== "claimed") return null;
+
+  await ctx.db.delete(taskId);
+
+  if (task.onComplete) {
+    return {
+      fnHandle: task.onComplete.fnHandle,
+      workId: taskId as unknown as string,
+      context: task.onComplete.context,
+      result: { kind: "success", returnValue: result },
+    };
+  }
+  return null;
+}
 
 // ─── Fail ───────────────────────────────────────────────────────────────────
 
@@ -201,41 +316,103 @@ export const fail = mutation({
     error: v.string(),
   },
   handler: async (ctx, { taskId, error }) => {
-    const task = await ctx.db.get(taskId);
-    if (!task) {
-      // Task was canceled or already completed
-      return;
+    const item = await failOne(ctx, taskId, error);
+    if (item) {
+      await scheduleOnComplete(ctx, item);
     }
-    if (task.status !== "claimed") {
-      // Task is not in expected state
-      return;
+  },
+});
+
+/**
+ * Batch-fail multiple tasks in a single mutation.
+ * Returns onComplete data for permanently-failed tasks (no more retries).
+ */
+export const failBatch = mutation({
+  args: {
+    items: v.array(
+      v.object({
+        taskId: v.id("batchTasks"),
+        error: v.string(),
+      }),
+    ),
+  },
+  returns: v.array(vOnCompleteItem),
+  handler: async (ctx, { items }) => {
+    const onCompleteItems: OnCompleteItem[] = [];
+    for (const { taskId, error } of items) {
+      const item = await failOne(ctx, taskId, error);
+      if (item) onCompleteItems.push(item);
     }
+    return onCompleteItems;
+  },
+});
 
-    const maxAttempts = task.retryBehavior?.maxAttempts;
-    const nextAttempt = task.attempt + 1;
-    const shouldRetry = !!maxAttempts && nextAttempt < maxAttempts;
+async function failOne(
+  ctx: MutationCtx,
+  taskId: Id<"batchTasks">,
+  error: string,
+): Promise<OnCompleteItem | null> {
+  const task = await ctx.db.get(taskId);
+  if (!task) return null;
+  if (task.status !== "claimed") return null;
 
-    if (shouldRetry) {
-      // Retry with exponential backoff + jitter
-      const backoffMs =
-        task.retryBehavior!.initialBackoffMs *
-        Math.pow(task.retryBehavior!.base, nextAttempt - 1);
-      const delayMs = withJitter(backoffMs);
+  const maxAttempts = task.retryBehavior?.maxAttempts;
+  const nextAttempt = task.attempt + 1;
+  const shouldRetry = !!maxAttempts && nextAttempt < maxAttempts;
 
-      await ctx.db.patch(taskId, {
-        status: "pending",
-        attempt: nextAttempt,
-        claimedAt: undefined,
-        readyAt: Date.now() + delayMs,
-        error,
-      });
-    } else {
-      // Retries exhausted (or no retry config). Terminal failure.
-      if (task.onComplete) {
-        const runResult: RunResult = { kind: "failed", error };
-        await callOnComplete(ctx, taskId, task.onComplete, runResult);
-      }
-      await ctx.db.delete(taskId);
+  if (shouldRetry) {
+    const backoffMs =
+      task.retryBehavior!.initialBackoffMs *
+      Math.pow(task.retryBehavior!.base, nextAttempt - 1);
+    const delayMs = withJitter(backoffMs);
+
+    await ctx.db.patch(taskId, {
+      status: "pending",
+      attempt: nextAttempt,
+      claimedAt: undefined,
+      readyAt: Date.now() + delayMs,
+      error,
+    });
+    return null;
+  }
+
+  await ctx.db.delete(taskId);
+
+  if (task.onComplete) {
+    return {
+      fnHandle: task.onComplete.fnHandle,
+      workId: taskId as unknown as string,
+      context: task.onComplete.context,
+      result: { kind: "failed", error },
+    };
+  }
+  return null;
+}
+
+// ─── Batch onComplete dispatch ───────────────────────────────────────────────
+
+/**
+ * Dispatch multiple onComplete handlers in a single mutation transaction.
+ * This is dramatically more efficient than calling each handler individually
+ * from the action, since it reduces mutation count from O(N) to O(N/batchSize).
+ *
+ * Each onComplete handler runs in the same transaction, so all their writes
+ * (including enqueue calls for the next pipeline stage) happen atomically.
+ */
+export const dispatchOnCompleteBatch = mutation({
+  args: {
+    items: v.array(vOnCompleteItem),
+  },
+  handler: async (ctx, { items }) => {
+    for (const item of items) {
+      await ctx.runMutation(
+        item.fnHandle as FunctionHandle<"mutation">,
+        {
+          workId: item.workId,
+          context: item.context,
+          result: item.result,
+        },
+      );
     }
   },
 });
@@ -312,10 +489,14 @@ export const cancel = mutation({
       return;
     }
 
-    // Call onComplete with canceled result
+    // Call onComplete with canceled result (cancel is user-initiated, uses scheduler)
     if (task.onComplete) {
-      const runResult: RunResult = { kind: "canceled" };
-      await callOnComplete(ctx, taskId, task.onComplete, runResult);
+      await scheduleOnComplete(ctx, {
+        fnHandle: task.onComplete.fnHandle,
+        workId: taskId as unknown as string,
+        context: task.onComplete.context,
+        result: { kind: "canceled" },
+      });
     }
 
     await ctx.db.delete(taskId);
@@ -496,25 +677,23 @@ async function upsertBatchConfig(
   }
 }
 
-async function callOnComplete(
+/**
+ * Schedule onComplete via the scheduler. Used by legacy single-item
+ * complete/fail mutations. The batch variants return onComplete data
+ * for the executor to dispatch directly (much higher throughput).
+ */
+async function scheduleOnComplete(
   ctx: MutationCtx,
-  taskId: Id<"batchTasks">,
-  onComplete: { fnHandle: string; context?: unknown },
-  runResult: RunResult,
+  item: OnCompleteItem,
 ) {
-  try {
-    const handle = onComplete.fnHandle as FunctionHandle<
-      "mutation",
-      OnCompleteArgs,
-      void
-    >;
-    await ctx.runMutation(handle, {
-      workId: taskId as unknown as string,
-      context: onComplete.context,
-      result: runResult,
-    });
-  } catch (e) {
-    // Log but don't propagate onComplete errors, matching workpool behavior
-    console.error(`[batch.complete] error running onComplete for ${taskId}`, e);
-  }
+  const handle = item.fnHandle as FunctionHandle<
+    "mutation",
+    OnCompleteArgs,
+    void
+  >;
+  await ctx.scheduler.runAfter(0, handle, {
+    workId: item.workId,
+    context: item.context,
+    result: item.result,
+  });
 }
