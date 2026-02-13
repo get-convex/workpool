@@ -421,16 +421,10 @@ async function ensureExecutors(ctx: MutationCtx) {
   const config = await ctx.db.query("batchConfig").unique();
   if (!config) return;
 
-  // Check if there's pending work
-  const pendingTask = await ctx.db
-    .query("batchTasks")
-    .withIndex("by_status_readyAt", (q) =>
-      q.eq("status", "pending").lte("readyAt", Date.now()),
-    )
-    .first();
-  if (!pendingTask) return;
-
-  // Start executors up to maxWorkers
+  // Start executors up to maxWorkers.
+  // No need to check batchTasks for pending work here — this is only called
+  // right after inserting a task, so we know there's work. Avoiding the
+  // batchTasks query prevents OCC conflicts with concurrent claimBatch calls.
   if (config.activeExecutors < config.maxWorkers) {
     const handle = config.executorHandle as FunctionHandle<"action">;
     await ctx.db.patch(config._id, {

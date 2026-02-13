@@ -61,7 +61,8 @@ export type BatchWorkpoolOptions = {
   maxWorkers?: number;
   /**
    * How many task handlers to run concurrently inside each executor.
-   * Default: 200.
+   * Default: 1000. Memory-based back-pressure (maxHeapMB) provides
+   * a safety net if tasks hold large data in memory.
    */
   maxConcurrencyPerWorker?: number;
   /**
@@ -94,6 +95,13 @@ export type BatchWorkpoolOptions = {
    * tasks exist (possibly with future readyAt). Default: 500.
    */
   pollIntervalMs?: number;
+  /**
+   * Stop claiming new tasks when heap usage exceeds this many MB.
+   * In-flight tasks continue running; claiming resumes when memory drops.
+   * Default: 448 MB in Node.js (512 MB limit), 48 MB in Convex runtime (64 MB limit).
+   * Set to 0 to disable memory-based back-pressure.
+   */
+  maxHeapMB?: number;
 };
 
 export type BatchTaskStatus =
@@ -190,17 +198,43 @@ export class BatchWorkpool {
         const claimDeadline =
           startTime + (options.claimDeadlineMs ?? 5 * 60 * 1000);
         const maxConcurrency =
-          options.maxConcurrencyPerWorker ?? 200;
+          options.maxConcurrencyPerWorker ?? 1000;
+        // Cap how many tasks we claim per mutation to avoid oversized transactions.
+        const maxClaimBatch = 200;
         const pollInterval = options.pollIntervalMs ?? 500;
+        // Detect runtime: Node.js has process.memoryUsage, Convex runtime doesn't
+        const isNode =
+          typeof process !== "undefined" &&
+          typeof process.memoryUsage === "function";
+        const defaultHeapMB = isNode ? 448 : 48;
+        const maxHeapMB = options.maxHeapMB ?? defaultHeapMB;
+        const maxHeapBytes = maxHeapMB * 1024 * 1024;
         const inFlight = new Map<string, Promise<void>>();
 
         try {
           while (Date.now() < softDeadline) {
             const canClaim = Date.now() < claimDeadline;
 
-            // Fill concurrency slots (only before claim deadline)
-            if (canClaim) {
-              const available = maxConcurrency - inFlight.size;
+            // Check memory pressure — skip claiming if heap is too large
+            let memoryOk = true;
+            if (maxHeapMB > 0 && isNode) {
+              const heapUsed = process.memoryUsage().heapUsed;
+              memoryOk = heapUsed < maxHeapBytes;
+              if (!memoryOk && canClaim && inFlight.size > 0) {
+                const heapMB = (heapUsed / (1024 * 1024)).toFixed(1);
+                console.log(
+                  `[batch] memory pressure: ${heapMB} MB heap, ` +
+                    `${inFlight.size} in flight — waiting for tasks to complete`,
+                );
+              }
+            }
+
+            // Fill concurrency slots (only before claim deadline and under memory limit)
+            if (canClaim && memoryOk) {
+              const available = Math.min(
+                maxConcurrency - inFlight.size,
+                maxClaimBatch,
+              );
               if (available > 0) {
                 const batch: Array<{
                   _id: string;
