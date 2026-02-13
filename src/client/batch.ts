@@ -194,76 +194,85 @@ export class BatchWorkpool {
         const pollInterval = options.pollIntervalMs ?? 500;
         const inFlight = new Map<string, Promise<void>>();
 
-        while (Date.now() < softDeadline) {
-          const canClaim = Date.now() < claimDeadline;
+        try {
+          while (Date.now() < softDeadline) {
+            const canClaim = Date.now() < claimDeadline;
 
-          // Fill concurrency slots (only before claim deadline)
-          if (canClaim) {
-            const available = maxConcurrency - inFlight.size;
-            if (available > 0) {
-              const batch: Array<{
-                _id: string;
-                name: string;
-                args: any;
-                attempt: number;
-              }> = await ctx.runMutation(component.batch.claimBatch, {
-                limit: available,
-              });
+            // Fill concurrency slots (only before claim deadline)
+            if (canClaim) {
+              const available = maxConcurrency - inFlight.size;
+              if (available > 0) {
+                const batch: Array<{
+                  _id: string;
+                  name: string;
+                  args: any;
+                  attempt: number;
+                }> = await ctx.runMutation(component.batch.claimBatch, {
+                  limit: available,
+                });
 
-              for (const task of batch) {
-                const handler = registry.get(task.name);
-                if (!handler) {
-                  await ctx.runMutation(component.batch.fail, {
-                    taskId: task._id,
-                    error: `Unknown handler: ${task.name}`,
-                  });
-                  continue;
-                }
-
-                const p = handler(ctx, task.args)
-                  .then(async (result) => {
-                    await ctx.runMutation(component.batch.complete, {
-                      taskId: task._id,
-                      result: result ?? null,
-                    });
-                  })
-                  .catch(async (err: unknown) => {
+                for (const task of batch) {
+                  const handler = registry.get(task.name);
+                  if (!handler) {
                     await ctx.runMutation(component.batch.fail, {
                       taskId: task._id,
-                      error: String(err),
+                      error: `Unknown handler: ${task.name}`,
                     });
-                  })
-                  .finally(() => inFlight.delete(task._id));
+                    continue;
+                  }
 
-                inFlight.set(task._id, p);
+                  const p = handler(ctx, task.args)
+                    .then(async (result) => {
+                      await ctx.runMutation(component.batch.complete, {
+                        taskId: task._id,
+                        result: result ?? null,
+                      });
+                    })
+                    .catch(async (err: unknown) => {
+                      try {
+                        await ctx.runMutation(component.batch.fail, {
+                          taskId: task._id,
+                          error: String(err),
+                        });
+                      } catch (failErr) {
+                        console.error(
+                          `[batch] failed to report failure for ${task._id}:`,
+                          failErr,
+                        );
+                      }
+                    })
+                    .finally(() => inFlight.delete(task._id));
+
+                  inFlight.set(task._id, p);
+                }
               }
             }
+
+            // Nothing in flight — check if we should exit
+            if (inFlight.size === 0) {
+              // Past claim deadline with nothing in flight: we're done draining
+              if (!canClaim) break;
+              const pending: number = await ctx.runQuery(
+                component.batch.countPending,
+                {},
+              );
+              if (pending === 0) break;
+              await new Promise((r) => setTimeout(r, pollInterval));
+              continue;
+            }
+
+            // Wait for at least one task to finish before looping
+            await Promise.race([...inFlight.values()]);
           }
-
-          // Nothing in flight — check if we should exit
-          if (inFlight.size === 0) {
-            // Past claim deadline with nothing in flight: we're done draining
-            if (!canClaim) break;
-            const pending: number = await ctx.runQuery(
-              component.batch.countPending,
-              {},
-            );
-            if (pending === 0) break;
-            await new Promise((r) => setTimeout(r, pollInterval));
-            continue;
+        } finally {
+          // Guarantee claim release even if the executor crashes.
+          // Released tasks return to "pending" for another executor to pick up.
+          const unfinished = [...inFlight.keys()];
+          if (unfinished.length > 0) {
+            await ctx.runMutation(component.batch.releaseClaims, {
+              taskIds: unfinished,
+            });
           }
-
-          // Wait for at least one task to finish before looping
-          await Promise.race([...inFlight.values()]);
-        }
-
-        // Release claims for any tasks still in flight at the soft deadline.
-        // These will return to "pending" for another executor to pick up.
-        const unfinished = [...inFlight.keys()];
-        if (unfinished.length > 0) {
-          await ctx.runMutation(component.batch.releaseClaims, {
-            taskIds: unfinished,
-          });
         }
 
         // Check if there's remaining work
