@@ -644,9 +644,141 @@ export const _maybeStartExecutors = internalMutation({
       }
     }
 
+    const patch: Record<string, unknown> = {};
     if (newSlots.length !== config.activeSlots.length) {
-      await ctx.db.patch(config._id, { activeSlots: newSlots });
+      patch.activeSlots = newSlots;
     }
+
+    // Schedule watchdog if not recently scheduled (dedup window: 20s)
+    const now = Date.now();
+    if (
+      !config.watchdogScheduledAt ||
+      now - config.watchdogScheduledAt > 20_000
+    ) {
+      await ctx.scheduler.runAfter(30_000, internal.batch._watchdog);
+      patch.watchdogScheduledAt = now;
+    }
+
+    if (Object.keys(patch).length > 0) {
+      await ctx.db.patch(config._id, patch);
+    }
+  },
+});
+
+// ─── Watchdog: self-healing after redeploys / executor crashes ────────────
+
+/**
+ * Periodic watchdog that self-schedules while work remains.
+ * Handles three failure modes:
+ * 1. Stale claims: tasks claimed by dead executors (crash/redeploy)
+ * 2. Dead executors: slots marked active but not processing work
+ * 3. Missing executors: slots not in activeSlots with pending work
+ *
+ * After a redeploy, scheduled functions survive so the watchdog fires
+ * even though all executor actions were killed.
+ */
+export const _watchdog = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const config = await ctx.db.query("batchConfig").unique();
+    if (!config) return;
+
+    const now = Date.now();
+
+    // 1. Sweep stale claims (older than claimTimeoutMs)
+    const claimCutoff = now - config.claimTimeoutMs;
+    const staleClaims = await ctx.db
+      .query("batchTasks")
+      .withIndex("by_status_claimedAt", (q) =>
+        q.eq("status", "claimed").lt("claimedAt", claimCutoff),
+      )
+      .take(500);
+
+    const deadSlots = new Set<number>();
+    for (const task of staleClaims) {
+      deadSlots.add(task.slot);
+      await ctx.db.patch(task._id, {
+        status: "pending",
+        claimedAt: undefined,
+        readyAt: now,
+      });
+    }
+
+    // 2. Detect stuck executors: slots marked active but with old
+    //    pending tasks (readyAt > 30s ago). If an executor were alive
+    //    it would have claimed these within a few seconds.
+    const stuckThreshold = now - 30_000;
+    const activeSet = new Set(config.activeSlots);
+    for (let s = 0; s < config.maxWorkers; s++) {
+      if (!activeSet.has(s) || deadSlots.has(s)) continue;
+      const oldPending = await ctx.db
+        .query("batchTasks")
+        .withIndex("by_slot_status_readyAt", (q) =>
+          q
+            .eq("slot", s)
+            .eq("status", "pending")
+            .lte("readyAt", stuckThreshold),
+        )
+        .first();
+      if (oldPending) {
+        deadSlots.add(s);
+      }
+    }
+
+    // 3. Remove dead slots from activeSlots
+    let newSlots =
+      deadSlots.size > 0
+        ? config.activeSlots.filter((s) => !deadSlots.has(s))
+        : [...config.activeSlots];
+
+    // 4. Check if any work remains
+    let hasWork = staleClaims.length > 0;
+    if (!hasWork) {
+      for (let s = 0; s < config.maxWorkers; s++) {
+        const one = await ctx.db
+          .query("batchTasks")
+          .withIndex("by_slot_status_readyAt", (q) =>
+            q.eq("slot", s).eq("status", "pending"),
+          )
+          .first();
+        if (one) {
+          hasWork = true;
+          break;
+        }
+      }
+    }
+    if (!hasWork) {
+      const claimed = await ctx.db
+        .query("batchTasks")
+        .withIndex("by_status_claimedAt", (q) => q.eq("status", "claimed"))
+        .first();
+      if (claimed) hasWork = true;
+    }
+
+    if (!hasWork) {
+      // No work left — clean up and stop the watchdog
+      if (config.activeSlots.length > 0) {
+        await ctx.db.patch(config._id, { activeSlots: [] });
+      }
+      return;
+    }
+
+    // 5. Start executors for missing slots
+    const activeSetNew = new Set(newSlots);
+    const handle = config.executorHandle as FunctionHandle<"action">;
+    for (let s = 0; s < config.maxWorkers; s++) {
+      if (!activeSetNew.has(s)) {
+        newSlots.push(s);
+        await ctx.scheduler.runAfter(0, handle, { slot: s });
+      }
+    }
+
+    // 6. Update config and reschedule watchdog
+    await ctx.db.patch(config._id, {
+      activeSlots: newSlots,
+      watchdogScheduledAt: now,
+    });
+    await ctx.scheduler.runAfter(30_000, internal.batch._watchdog);
   },
 });
 

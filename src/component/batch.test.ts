@@ -87,7 +87,7 @@ describe("batch", () => {
       expect(taskId).toBeDefined();
 
       // Flush the scheduled _maybeStartExecutors mutation
-      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      await (t.finishAllScheduledFunctions as any)(() => vi.advanceTimersByTime(1000), 10);
 
       await t.run(async (ctx) => {
         const config = await ctx.db.query("batchConfig").unique();
@@ -842,7 +842,7 @@ describe("batch", () => {
       });
 
       // Flush the scheduled _maybeStartExecutors mutation
-      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      await (t.finishAllScheduledFunctions as any)(() => vi.advanceTimersByTime(1000), 10);
 
       await t.run(async (ctx) => {
         const config = await ctx.db.query("batchConfig").unique();
@@ -865,7 +865,7 @@ describe("batch", () => {
       });
 
       // Flush the scheduled _maybeStartExecutors mutation
-      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      await (t.finishAllScheduledFunctions as any)(() => vi.advanceTimersByTime(1000), 10);
 
       await t.run(async (ctx) => {
         const config = await ctx.db.query("batchConfig").unique();
@@ -892,7 +892,7 @@ describe("batch", () => {
       expect(taskIds).toHaveLength(2);
 
       // Flush the scheduled _maybeStartExecutors mutation
-      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      await (t.finishAllScheduledFunctions as any)(() => vi.advanceTimersByTime(1000), 10);
 
       await t.run(async (ctx) => {
         const config = await ctx.db.query("batchConfig").unique();
@@ -1064,6 +1064,102 @@ describe("batch", () => {
       await t.run(async (ctx) => {
         const task = await ctx.db.get(taskId);
         expect(task).toBeNull();
+      });
+    });
+  });
+
+  // ─── Watchdog (redeploy recovery) ──────────────────────────────────────
+
+  describe("watchdog", () => {
+    it("should sweep stale claims and restart dead executors", async () => {
+      await setupPoolConfig({
+        maxWorkers: 3,
+        activeSlots: [0, 1, 2], // all "active" but actually dead
+        claimTimeoutMs: 60_000,
+      });
+
+      // Simulate orphaned tasks: claimed 120s ago by dead executors
+      await t.run(async (ctx) => {
+        await ctx.db.insert("batchTasks", {
+          name: "orphan1",
+          slot: 0,
+          args: {},
+          status: "claimed" as const,
+          claimedAt: Date.now() - 120_000,
+          readyAt: Date.now() - 120_000,
+          attempt: 0,
+        });
+        await ctx.db.insert("batchTasks", {
+          name: "orphan2",
+          slot: 1,
+          args: {},
+          status: "claimed" as const,
+          claimedAt: Date.now() - 120_000,
+          readyAt: Date.now() - 120_000,
+          attempt: 0,
+        });
+      });
+
+      // Run watchdog (internal mutation via api)
+      await t.mutation(api.batch._watchdog, {});
+
+      await t.run(async (ctx) => {
+        // Stale claims should be released back to pending
+        const tasks = await ctx.db.query("batchTasks").collect();
+        expect(tasks).toHaveLength(2);
+        for (const task of tasks) {
+          expect(task.status).toBe("pending");
+          expect(task.claimedAt).toBeUndefined();
+        }
+
+        // Dead slots should be removed and re-added (executors restarted)
+        const config = await ctx.db.query("batchConfig").unique();
+        expect(config!.activeSlots.sort()).toEqual([0, 1, 2]);
+        expect(config!.watchdogScheduledAt).toBeDefined();
+      });
+    });
+
+    it("should detect stuck executors via old pending tasks", async () => {
+      await setupPoolConfig({
+        maxWorkers: 2,
+        activeSlots: [0, 1], // "active" but dead — no stale claims yet
+        claimTimeoutMs: 120_000,
+      });
+
+      // Simulate tasks pending for > 30s (executor not claiming them)
+      await t.run(async (ctx) => {
+        await ctx.db.insert("batchTasks", {
+          name: "stuck",
+          slot: 0,
+          args: {},
+          status: "pending" as const,
+          readyAt: Date.now() - 60_000, // pending for 60s
+          attempt: 0,
+        });
+      });
+
+      await t.mutation(api.batch._watchdog, {});
+
+      await t.run(async (ctx) => {
+        const config = await ctx.db.query("batchConfig").unique();
+        // Slot 0 was detected as dead (old pending task), restarted
+        // Slot 1 had no old pending tasks, stays active
+        expect(config!.activeSlots.sort()).toEqual([0, 1]);
+      });
+    });
+
+    it("should stop when no work remains", async () => {
+      await setupPoolConfig({
+        maxWorkers: 2,
+        activeSlots: [0, 1],
+      });
+
+      // No tasks at all — watchdog should clean up and stop
+      await t.mutation(api.batch._watchdog, {});
+
+      await t.run(async (ctx) => {
+        const config = await ctx.db.query("batchConfig").unique();
+        expect(config!.activeSlots).toEqual([]);
       });
     });
   });

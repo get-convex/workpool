@@ -43,6 +43,7 @@ export default defineSchema({
     maxWorkers: v.number(),
     activeSlots: v.array(v.number()), // which executor slots are currently running
     claimTimeoutMs: v.number(),
+    watchdogScheduledAt: v.optional(v.number()), // when the last watchdog was scheduled
   }),
 
   // ----- Standard workpool tables -----
