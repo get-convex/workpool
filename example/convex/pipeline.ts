@@ -78,14 +78,21 @@ export const batchAfterSpanish = internalMutation({
       await ctx.db.patch(context.jobId, { status: "failed" });
       return;
     }
+    const { text, fetchStart, fetchEnd } = result.returnValue as {
+      text: string;
+      fetchStart: number;
+      fetchEnd: number;
+    };
     await ctx.db.patch(context.jobId, {
-      spanish: result.returnValue,
+      spanish: text,
       status: "step1",
+      fetch1Start: fetchStart,
+      fetch1End: fetchEnd,
     });
     await batch.enqueue(
       ctx,
       "translateToEnglish",
-      { sentence: result.returnValue },
+      { sentence: text },
       {
         onComplete: internal.pipeline.batchAfterEnglish,
         context: { jobId: context.jobId },
@@ -101,14 +108,21 @@ export const batchAfterEnglish = internalMutation({
       await ctx.db.patch(context.jobId, { status: "failed" });
       return;
     }
+    const { text, fetchStart, fetchEnd } = result.returnValue as {
+      text: string;
+      fetchStart: number;
+      fetchEnd: number;
+    };
     await ctx.db.patch(context.jobId, {
-      backToEnglish: result.returnValue,
+      backToEnglish: text,
       status: "step2",
+      fetch2Start: fetchStart,
+      fetch2End: fetchEnd,
     });
     await batch.enqueue(
       ctx,
       "countLetters",
-      { text: result.returnValue },
+      { text },
       {
         onComplete: internal.pipeline.batchAfterCount,
         context: { jobId: context.jobId },

@@ -555,11 +555,19 @@ export const executorDone = mutation({
     const newSlots = config.activeSlots.filter((s) => s !== slot);
 
     if (startMore) {
-      // Only restart the exiting slot — the watchdog reconciles others.
-      // This avoids duplicate scheduling when many executors exit concurrently.
+      // Start executors for ALL missing slots, not just this one.
+      // In pipeline workloads, stage 2+ tasks land in random slots —
+      // if those executors already exited, they need to be restarted now
+      // (the 30s watchdog is too slow). Duplicate scheduling is safe:
+      // executors exit quickly when they find no work.
+      const activeSet = new Set(newSlots);
       const handle = config.executorHandle as FunctionHandle<"action">;
-      newSlots.push(slot);
-      await ctx.scheduler.runAfter(0, handle, { slot });
+      for (let s = 0; s < config.maxWorkers; s++) {
+        if (!activeSet.has(s)) {
+          newSlots.push(s);
+          await ctx.scheduler.runAfter(0, handle, { slot: s });
+        }
+      }
     }
 
     await ctx.db.patch(config._id, { activeSlots: newSlots });

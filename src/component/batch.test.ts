@@ -596,15 +596,15 @@ describe("batch", () => {
       });
     });
 
-    it("should restart only the exiting slot when startMore is true", async () => {
+    it("should start all missing executors when startMore is true", async () => {
       await setupPoolConfig({ activeSlots: [0, 2] });
 
       await t.mutation(api.batch.executorDone, { startMore: true, slot: 2 });
 
       await t.run(async (ctx) => {
         const config = await ctx.db.query("batchConfig").unique();
-        // Slot 2 was removed then re-added (only exiting slot restarted)
-        expect(config!.activeSlots.sort()).toEqual([0, 2]);
+        // Slot 2 was removed, then ALL missing slots 0..9 were started
+        expect(config!.activeSlots.sort()).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
       });
     });
   });
@@ -1131,7 +1131,7 @@ describe("batch", () => {
       await t.mutation(api.batch.fail, { taskId, error: "too late" });
     });
 
-    it("executorDone with startMore restarts only the exiting slot", async () => {
+    it("executorDone with startMore starts all missing executors", async () => {
       await setupPoolConfig({ activeSlots: [0], maxWorkers: 3 });
 
       // Enqueue work
@@ -1146,8 +1146,8 @@ describe("batch", () => {
 
       await t.run(async (ctx) => {
         const config = await ctx.db.query("batchConfig").unique();
-        // Only slot 0 restarted (watchdog handles other missing slots)
-        expect(config!.activeSlots.sort()).toEqual([0]);
+        // All 3 slots (0, 1, 2) should be started since there's pending work
+        expect(config!.activeSlots.sort()).toEqual([0, 1, 2]);
       });
     });
   });

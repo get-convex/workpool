@@ -16,6 +16,11 @@ export default defineSchema({
     status: v.string(), // "pending" | "step1" | "step2" | "step3" | "completed" | "failed"
     startedAt: v.number(),
     completedAt: v.optional(v.number()),
+    // Per-fetch timing for concurrency graphing
+    fetch1Start: v.optional(v.number()),
+    fetch1End: v.optional(v.number()),
+    fetch2Start: v.optional(v.number()),
+    fetch2End: v.optional(v.number()),
   })
     .index("by_mode_status", ["mode", "status"])
     .index("by_mode", ["mode"]),

@@ -6,9 +6,12 @@ import { v } from "convex/values";
 
 // ─── API helper ──────────────────────────────────────────────────────────────
 
-async function callSonnet(prompt: string): Promise<string> {
+type FetchResult = { text: string; fetchStart: number; fetchEnd: number };
+
+async function callSonnet(prompt: string): Promise<FetchResult> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
+  const fetchStart = Date.now();
   const maxRetries = 8;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const resp = await fetch("https://api.anthropic.com/v1/messages", {
@@ -28,7 +31,7 @@ async function callSonnet(prompt: string): Promise<string> {
       const data = (await resp.json()) as {
         content: Array<{ type: string; text: string }>;
       };
-      return data.content[0].text;
+      return { text: data.content[0].text, fetchStart, fetchEnd: Date.now() };
     }
     const body = await resp.text();
     if (resp.status === 429 || resp.status === 529 || resp.status >= 500) {
@@ -57,7 +60,7 @@ export const translateToSpanish = batch.action("translateToSpanish", {
       `Translate this sentence to Spanish. Reply with ONLY the translation, nothing else:\n${sentence}`,
     );
   },
-});
+}) as any; // Return type is FetchResult, not string
 
 export const translateToEnglish = batch.action("translateToEnglish", {
   args: { sentence: v.string() },
@@ -66,7 +69,7 @@ export const translateToEnglish = batch.action("translateToEnglish", {
       `Translate this sentence to English. Reply with ONLY the translation, nothing else:\n${sentence}`,
     );
   },
-});
+}) as any; // Return type is FetchResult, not string
 
 export const countLetters = batch.action("countLetters", {
   args: { text: v.string() },

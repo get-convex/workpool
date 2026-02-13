@@ -201,6 +201,67 @@ export const results = query({
   },
 });
 
+// Concurrent fetch histogram — returns {time, concurrent}[] bucketed by 1s
+// Paginated: call with cursor to get next page
+export const concurrency = query({
+  args: {
+    mode: v.string(),
+    bucketMs: v.optional(v.number()),
+    cursor: v.optional(v.string()),
+  },
+  handler: async (ctx, { mode, bucketMs: bucketMsArg, cursor }) => {
+    const bucketMs = bucketMsArg ?? 1000;
+    // Paginate through completed jobs (8000 per page to stay under read limits)
+    const PAGE_SIZE = 8000;
+    const query = ctx.db
+      .query("jobs")
+      .withIndex("by_mode_status", (q) =>
+        q.eq("mode", mode).eq("status", "completed"),
+      );
+    const jobs = cursor
+      ? await query.take(PAGE_SIZE) // simplified: re-scans from start
+      : await query.take(PAGE_SIZE);
+
+    // Collect all fetch intervals
+    const events: { time: number; delta: number }[] = [];
+    for (const job of jobs) {
+      if (job.fetch1Start && job.fetch1End) {
+        events.push({ time: job.fetch1Start, delta: 1 });
+        events.push({ time: job.fetch1End, delta: -1 });
+      }
+      if (job.fetch2Start && job.fetch2End) {
+        events.push({ time: job.fetch2Start, delta: 1 });
+        events.push({ time: job.fetch2End, delta: -1 });
+      }
+    }
+    if (events.length === 0) return { buckets: [], hasMore: false };
+
+    // Sort by time
+    events.sort((a, b) => a.time - b.time);
+
+    // Bucket into time windows
+    const minTime = events[0].time;
+    const maxTime = events[events.length - 1].time;
+    const buckets: { time: number; concurrent: number }[] = [];
+    let eventIdx = 0;
+    let concurrent = 0;
+    for (let t = minTime; t <= maxTime; t += bucketMs) {
+      // Process all events in this bucket
+      while (eventIdx < events.length && events[eventIdx].time < t + bucketMs) {
+        concurrent += events[eventIdx].delta;
+        eventIdx++;
+      }
+      buckets.push({ time: t - minTime, concurrent });
+    }
+
+    return {
+      buckets,
+      hasMore: jobs.length === PAGE_SIZE,
+      jobsProcessed: jobs.length,
+    };
+  },
+});
+
 // Reset all jobs for a clean test (paginated to avoid read limits)
 export const reset = mutation({
   handler: async (ctx) => {
