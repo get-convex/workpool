@@ -403,17 +403,30 @@ export const dispatchOnCompleteBatch = mutation({
   args: {
     items: v.array(vOnCompleteItem),
   },
+  returns: v.number(),
   handler: async (ctx, { items }) => {
+    let failures = 0;
     for (const item of items) {
-      await ctx.runMutation(
-        item.fnHandle as FunctionHandle<"mutation">,
-        {
-          workId: item.workId,
-          context: item.context,
-          result: item.result,
-        },
-      );
+      try {
+        await ctx.runMutation(
+          item.fnHandle as FunctionHandle<"mutation">,
+          {
+            workId: item.workId,
+            context: item.context,
+            result: item.result,
+          },
+        );
+      } catch (err: unknown) {
+        failures++;
+        // Log but continue — don't let one bad handler block the rest.
+        // The failed handler's writes are not applied, but the rest are.
+        console.error(
+          `[batch] onComplete handler failed for workId=${item.workId}:`,
+          String(err),
+        );
+      }
     }
+    return failures;
   },
 });
 

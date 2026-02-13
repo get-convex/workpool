@@ -688,7 +688,9 @@ export class BatchWorkpool {
       retry?: boolean | RetryBehavior;
     },
   ): Promise<BatchTaskId> {
-    const batchConfig = await this.getBatchConfig();
+    const batchConfig = this.configSentThisTx
+      ? undefined
+      : await this.getBatchConfig();
     const retryBehavior = this.getRetryBehavior(options?.retry);
     const maxWorkers = this.options.maxWorkers ?? 10;
     const slot = Math.floor(Math.random() * maxWorkers);
@@ -700,6 +702,7 @@ export class BatchWorkpool {
       retryBehavior,
       batchConfig,
     });
+    if (batchConfig) this.configSentThisTx = true;
     return id as unknown as BatchTaskId;
   }
 
