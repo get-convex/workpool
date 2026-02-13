@@ -43,7 +43,7 @@ import {
   internalActionGeneric,
   type RegisteredAction,
 } from "convex/server";
-import type { Validator } from "convex/values";
+import { v, type Validator } from "convex/values";
 import type { ComponentApi } from "../component/_generated/component.js";
 import type { RetryBehavior } from "../component/shared.js";
 import type { RunMutationCtx, RunQueryCtx } from "./utils.js";
@@ -193,7 +193,22 @@ export async function _runExecutorLoop(
 
             const p = handler(task.args)
               .then(async (result) => {
-                await deps.complete(task._id, result ?? null);
+                try {
+                  await deps.complete(task._id, result ?? null);
+                } catch (completeErr: unknown) {
+                  // OCC conflict on complete: task may have been swept or
+                  // canceled concurrently. Log and move on.
+                  const msg = String(completeErr);
+                  if (
+                    msg.includes("changed while this mutation was being run")
+                  ) {
+                    console.warn(
+                      `[batch] OCC conflict completing ${task._id}, skipping`,
+                    );
+                  } else {
+                    throw completeErr;
+                  }
+                }
               })
               .catch(async (err: unknown) => {
                 try {
@@ -235,7 +250,11 @@ export async function _runExecutorLoop(
     // Released tasks return to "pending" for another executor to pick up.
     const unfinished = [...inFlight.keys()];
     if (unfinished.length > 0) {
-      await deps.releaseClaims(unfinished);
+      try {
+        await deps.releaseClaims(unfinished);
+      } catch (err: unknown) {
+        console.error(`[batch] failed to release ${unfinished.length} claims:`, err);
+      }
     }
   }
 
@@ -243,8 +262,8 @@ export async function _runExecutorLoop(
   const remaining = await deps.countPending();
 
   // Notify component that this executor is done.
-  // If there's remaining work, executorDone calls ensureExecutors
-  // to schedule a replacement — no self-scheduling needed.
+  // If there's remaining work, executorDone schedules a replacement
+  // for the same slot — no self-scheduling needed.
   await deps.executorDone(remaining > 0);
 }
 
@@ -261,6 +280,7 @@ export class BatchWorkpool {
   private cachedBatchConfig:
     | { executorHandle: string; maxWorkers: number; claimTimeoutMs: number }
     | undefined;
+  private configSentThisTx = false;
 
   constructor(component: ComponentApi, options?: BatchWorkpoolOptions) {
     this.component = component;
@@ -310,29 +330,30 @@ export class BatchWorkpool {
    * batch.setExecutorRef(internal.batch.executor);
    * ```
    */
-  executor(): RegisteredAction<"internal", Record<string, never>, void> {
+  executor(): RegisteredAction<"internal", { slot: number }, void> {
     const component = this.component;
     const registry = this.registry;
     const options = this.options;
     return internalActionGeneric({
-      args: {},
-      handler: async (ctx: GenericActionCtx<any>) => {
+      args: { slot: v.number() },
+      handler: async (ctx: GenericActionCtx<any>, { slot }: { slot: number }) => {
         const isNode =
           typeof process !== "undefined" &&
           typeof process.memoryUsage === "function";
+        const maxWorkers = options.maxWorkers ?? 10;
         const deps: _ExecutorDeps = {
           claimBatch: (limit) =>
-            ctx.runMutation(component.batch.claimBatch, { limit }),
+            ctx.runMutation(component.batch.claimBatch, { slot, limit, maxWorkers }),
           complete: (taskId, result) =>
             ctx.runMutation(component.batch.complete, { taskId, result }),
           fail: (taskId, error) =>
             ctx.runMutation(component.batch.fail, { taskId, error }),
           countPending: () =>
-            ctx.runQuery(component.batch.countPending, {}),
+            ctx.runQuery(component.batch.countPending, { slot }),
           releaseClaims: (taskIds) =>
             ctx.runMutation(component.batch.releaseClaims, { taskIds }),
           executorDone: (startMore) =>
-            ctx.runMutation(component.batch.executorDone, { startMore }),
+            ctx.runMutation(component.batch.executorDone, { startMore, slot }),
           getHandler: (name) => {
             const h = registry.get(name);
             return h ? (args) => h(ctx, args) : undefined;
@@ -371,7 +392,11 @@ export class BatchWorkpool {
     args: DefaultFunctionArgs,
     options?: BatchEnqueueOptions,
   ): Promise<BatchTaskId> {
-    const batchConfig = await this.getBatchConfig();
+    // Only pass batchConfig on first enqueue per mutation to avoid
+    // OCC contention on the batchConfig singleton.
+    const batchConfig = this.configSentThisTx
+      ? undefined
+      : await this.getBatchConfig();
     const onComplete = options?.onComplete
       ? {
           fnHandle: await createFunctionHandle(options.onComplete),
@@ -379,13 +404,17 @@ export class BatchWorkpool {
         }
       : undefined;
     const retryBehavior = this.getRetryBehavior(options?.retry);
+    const maxWorkers = this.options.maxWorkers ?? 10;
+    const slot = Math.floor(Math.random() * maxWorkers);
     const id = await ctx.runMutation(this.component.batch.enqueue, {
       name,
       args,
+      slot,
       onComplete,
       retryBehavior,
       batchConfig,
     });
+    if (batchConfig) this.configSentThisTx = true;
     return id as unknown as BatchTaskId;
   }
 
@@ -400,11 +429,15 @@ export class BatchWorkpool {
       options?: BatchEnqueueOptions;
     }>,
   ): Promise<BatchTaskId[]> {
-    const batchConfig = await this.getBatchConfig();
+    const batchConfig = this.configSentThisTx
+      ? undefined
+      : await this.getBatchConfig();
+    const maxWorkers = this.options.maxWorkers ?? 10;
     const resolvedTasks = await Promise.all(
       tasks.map(async (task) => ({
         name: task.name,
         args: task.args,
+        slot: Math.floor(Math.random() * maxWorkers),
         onComplete: task.options?.onComplete
           ? {
               fnHandle: await createFunctionHandle(task.options.onComplete),
@@ -418,6 +451,7 @@ export class BatchWorkpool {
       tasks: resolvedTasks,
       batchConfig,
     });
+    if (batchConfig) this.configSentThisTx = true;
     return ids as unknown as BatchTaskId[];
   }
 
@@ -485,9 +519,12 @@ export class BatchWorkpool {
   ): Promise<BatchTaskId> {
     const batchConfig = await this.getBatchConfig();
     const retryBehavior = this.getRetryBehavior(options?.retry);
+    const maxWorkers = this.options.maxWorkers ?? 10;
+    const slot = Math.floor(Math.random() * maxWorkers);
     const id = await ctx.runMutation(this.component.batch.enqueue, {
       name,
       args,
+      slot,
       onComplete: options?.onComplete,
       retryBehavior,
       batchConfig,

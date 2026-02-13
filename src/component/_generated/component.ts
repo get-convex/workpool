@@ -137,7 +137,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       claimBatch: FunctionReference<
         "mutation",
         "internal",
-        { limit: number },
+        { slot: number; limit: number; maxWorkers: number },
         Array<{ _id: string; args: any; attempt: number; name: string }>,
         Name
       >;
@@ -155,13 +155,14 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         any,
         Name
       >;
-      countPending: FunctionReference<"query", "internal", {}, number, Name>;
+      countPending: FunctionReference<"query", "internal", { slot?: number }, number, Name>;
       enqueue: FunctionReference<
         "mutation",
         "internal",
         {
           args: any;
           name: string;
+          slot: number;
           onComplete?: { context?: any; fnHandle: string };
           batchConfig?: {
             claimTimeoutMs: number;
@@ -189,6 +190,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           tasks: Array<{
             args: any;
             name: string;
+            slot: number;
             onComplete?: { context?: any; fnHandle: string };
             retryBehavior?: {
               base: number;
@@ -203,7 +205,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       executorDone: FunctionReference<
         "mutation",
         "internal",
-        { startMore: boolean },
+        { startMore: boolean; slot: number },
         any,
         Name
       >;

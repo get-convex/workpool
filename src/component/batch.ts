@@ -7,8 +7,14 @@
  */
 import type { FunctionHandle } from "convex/server";
 import { v } from "convex/values";
+import { internal } from "./_generated/api.js";
 import type { Id } from "./_generated/dataModel.js";
-import { mutation, type MutationCtx, query } from "./_generated/server.js";
+import {
+  internalMutation,
+  mutation,
+  type MutationCtx,
+  query,
+} from "./_generated/server.js";
 import {
   type OnCompleteArgs,
   retryBehavior,
@@ -43,19 +49,18 @@ export const enqueue = mutation({
   args: {
     name: v.string(),
     args: v.any(),
+    slot: v.number(),
     onComplete: v.optional(vOnCompleteFnContext),
     retryBehavior: v.optional(retryBehavior),
-    // Batch config passed on every enqueue for lazy init
+    // Batch config passed on first enqueue for lazy init
     batchConfig: v.optional(batchConfigArgs),
   },
   returns: v.id("batchTasks"),
   handler: async (ctx, args) => {
-    // Lazy-init batch config
-    await upsertBatchConfig(ctx, args.batchConfig);
-
     const taskId = await ctx.db.insert("batchTasks", {
       name: args.name,
       args: args.args,
+      slot: args.slot,
       status: "pending",
       readyAt: Date.now(),
       attempt: 0,
@@ -63,12 +68,14 @@ export const enqueue = mutation({
       retryBehavior: args.retryBehavior,
     });
 
-    // Only start executors when batchConfig is provided (initial enqueue).
-    // Chained enqueues from onComplete callbacks don't pass batchConfig and
-    // don't need this — the executor is already running and will pick up
-    // new tasks. Skipping avoids OCC conflicts with claimBatch/executorDone.
+    // Schedule config setup + executor start as a separate transaction
+    // to avoid OCC conflicts on the batchConfig singleton.
     if (args.batchConfig) {
-      await ensureExecutors(ctx);
+      await ctx.scheduler.runAfter(
+        0,
+        internal.batch._maybeStartExecutors,
+        args.batchConfig,
+      );
     }
     return taskId;
   },
@@ -80,6 +87,7 @@ export const enqueueBatch = mutation({
       v.object({
         name: v.string(),
         args: v.any(),
+        slot: v.number(),
         onComplete: v.optional(vOnCompleteFnContext),
         retryBehavior: v.optional(retryBehavior),
       }),
@@ -88,13 +96,12 @@ export const enqueueBatch = mutation({
   },
   returns: v.array(v.id("batchTasks")),
   handler: async (ctx, args) => {
-    await upsertBatchConfig(ctx, args.batchConfig);
-
     const ids = await Promise.all(
       args.tasks.map((task) =>
         ctx.db.insert("batchTasks", {
           name: task.name,
           args: task.args,
+          slot: task.slot,
           status: "pending",
           readyAt: Date.now(),
           attempt: 0,
@@ -105,7 +112,11 @@ export const enqueueBatch = mutation({
     );
 
     if (args.batchConfig) {
-      await ensureExecutors(ctx);
+      await ctx.scheduler.runAfter(
+        0,
+        internal.batch._maybeStartExecutors,
+        args.batchConfig,
+      );
     }
     return ids;
   },
@@ -114,7 +125,7 @@ export const enqueueBatch = mutation({
 // ─── Claim ──────────────────────────────────────────────────────────────────
 
 export const claimBatch = mutation({
-  args: { limit: v.number() },
+  args: { slot: v.number(), limit: v.number(), maxWorkers: v.number() },
   returns: v.array(
     v.object({
       _id: v.id("batchTasks"),
@@ -123,27 +134,31 @@ export const claimBatch = mutation({
       attempt: v.number(),
     }),
   ),
-  handler: async (ctx, { limit }) => {
+  handler: async (ctx, { slot, limit, maxWorkers }) => {
     const now = Date.now();
-    const pending = await ctx.db
-      .query("batchTasks")
-      .withIndex("by_status_readyAt", (q) =>
-        q.eq("status", "pending").lte("readyAt", now),
-      )
-      .take(limit);
-
     const claimed = [];
-    for (const task of pending) {
-      await ctx.db.patch(task._id, {
-        status: "claimed",
-        claimedAt: now,
-      });
-      claimed.push({
-        _id: task._id,
-        name: task.name,
-        args: task.args,
-        attempt: task.attempt,
-      });
+
+    // Query this slot plus any overflow slots (handles maxWorkers shrink)
+    for (let s = slot; s < 1000 && claimed.length < limit; s += maxWorkers) {
+      const pending = await ctx.db
+        .query("batchTasks")
+        .withIndex("by_slot_status_readyAt", (q) =>
+          q.eq("slot", s).eq("status", "pending").lte("readyAt", now),
+        )
+        .take(limit - claimed.length);
+
+      for (const task of pending) {
+        await ctx.db.patch(task._id, {
+          status: "claimed",
+          claimedAt: now,
+        });
+        claimed.push({
+          _id: task._id,
+          name: task.name,
+          args: task.args,
+          attempt: task.attempt,
+        });
+      }
     }
     return claimed;
   },
@@ -228,14 +243,25 @@ export const fail = mutation({
 // ─── Count pending ──────────────────────────────────────────────────────────
 
 export const countPending = query({
-  args: {},
+  args: { slot: v.optional(v.number()) },
   returns: v.number(),
-  handler: async (ctx) => {
-    const pending = await ctx.db
+  handler: async (ctx, { slot }) => {
+    // Just check if there's at least one pending task (avoids 32K read limit)
+    if (slot !== undefined) {
+      const one = await ctx.db
+        .query("batchTasks")
+        .withIndex("by_slot_status_readyAt", (q) =>
+          q.eq("slot", slot).eq("status", "pending"),
+        )
+        .first();
+      return one ? 1 : 0;
+    }
+    // Global check: filter-based scan (no slot-specific index needed)
+    const one = await ctx.db
       .query("batchTasks")
-      .withIndex("by_status_readyAt", (q) => q.eq("status", "pending"))
-      .collect();
-    return pending.length;
+      .filter((q) => q.eq(q.field("status"), "pending"))
+      .first();
+    return one ? 1 : 0;
   },
 });
 
@@ -347,11 +373,6 @@ export const sweepStaleClaims = mutation({
       });
     }
 
-    // Schedule next sweep if there are claimed tasks
-    if (stale.length > 0) {
-      await ensureExecutors(ctx);
-    }
-
     return stale.length;
   },
 });
@@ -363,17 +384,79 @@ export const sweepStaleClaims = mutation({
  * decrement active executor count and potentially schedule replacements.
  */
 export const executorDone = mutation({
-  args: { startMore: v.boolean() },
-  handler: async (ctx, { startMore }) => {
+  args: { startMore: v.boolean(), slot: v.number() },
+  handler: async (ctx, { startMore, slot }) => {
     const config = await ctx.db.query("batchConfig").unique();
     if (!config) return;
 
-    const newActive = Math.max(0, config.activeExecutors - 1);
-    await ctx.db.patch(config._id, { activeExecutors: newActive });
+    // Remove this slot from activeSlots
+    let newSlots = config.activeSlots.filter((s) => s !== slot);
 
     if (startMore) {
-      await ensureExecutors(ctx);
+      // Self-replace: re-add slot and schedule a new executor
+      newSlots = [...newSlots, slot];
+      const handle = config.executorHandle as FunctionHandle<"action">;
+      await ctx.scheduler.runAfter(0, handle, { slot });
     }
+
+    await ctx.db.patch(config._id, { activeSlots: newSlots });
+  },
+});
+
+// ─── Internal: executor startup (separate tx to avoid OCC) ──────────────
+
+/**
+ * Scheduled from enqueue/enqueueBatch to set up config and start executors
+ * in a separate transaction. This avoids OCC conflicts between concurrent
+ * enqueue mutations that would otherwise all read/write the batchConfig doc.
+ */
+export const _maybeStartExecutors = internalMutation({
+  args: batchConfigArgs,
+  handler: async (ctx, args) => {
+    await upsertBatchConfig(ctx, args);
+
+    // Start executors for any missing slots 0..maxWorkers-1.
+    const config = await ctx.db.query("batchConfig").unique();
+    if (!config) return;
+
+    const activeSet = new Set(config.activeSlots);
+    const handle = config.executorHandle as FunctionHandle<"action">;
+    const newSlots = [...config.activeSlots];
+
+    for (let slot = 0; slot < config.maxWorkers; slot++) {
+      if (!activeSet.has(slot)) {
+        await ctx.scheduler.runAfter(0, handle, { slot });
+        newSlots.push(slot);
+      }
+    }
+
+    if (newSlots.length !== config.activeSlots.length) {
+      await ctx.db.patch(config._id, { activeSlots: newSlots });
+    }
+  },
+});
+
+// ─── Reset (for testing) ─────────────────────────────────────────────────────
+
+export const resetConfig = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const config = await ctx.db.query("batchConfig").unique();
+    if (config) {
+      await ctx.db.delete(config._id);
+    }
+  },
+});
+
+export const resetTasks = mutation({
+  args: {},
+  returns: v.object({ deleted: v.number(), more: v.boolean() }),
+  handler: async (ctx) => {
+    const tasks = await ctx.db.query("batchTasks").take(1000);
+    for (const task of tasks) {
+      await ctx.db.delete(task._id);
+    }
+    return { deleted: tasks.length, more: tasks.length === 1000 };
   },
 });
 
@@ -392,6 +475,14 @@ async function upsertBatchConfig(
   if (!batchConfig) return;
   const existing = await ctx.db.query("batchConfig").unique();
   if (existing) {
+    // Skip write if config already matches — avoids OCC contention
+    if (
+      existing.executorHandle === batchConfig.executorHandle &&
+      existing.maxWorkers === batchConfig.maxWorkers &&
+      existing.claimTimeoutMs === batchConfig.claimTimeoutMs
+    ) {
+      return;
+    }
     await ctx.db.patch(existing._id, {
       executorHandle: batchConfig.executorHandle,
       maxWorkers: batchConfig.maxWorkers,
@@ -400,25 +491,8 @@ async function upsertBatchConfig(
   } else {
     await ctx.db.insert("batchConfig", {
       ...batchConfig,
-      activeExecutors: 0,
+      activeSlots: [],
     });
-  }
-}
-
-async function ensureExecutors(ctx: MutationCtx) {
-  const config = await ctx.db.query("batchConfig").unique();
-  if (!config) return;
-
-  // Start executors up to maxWorkers.
-  // No need to check batchTasks for pending work here — this is only called
-  // right after inserting a task, so we know there's work. Avoiding the
-  // batchTasks query prevents OCC conflicts with concurrent claimBatch calls.
-  if (config.activeExecutors < config.maxWorkers) {
-    const handle = config.executorHandle as FunctionHandle<"action">;
-    await ctx.db.patch(config._id, {
-      activeExecutors: config.activeExecutors + 1,
-    });
-    await ctx.scheduler.runAfter(0, handle, {});
   }
 }
 

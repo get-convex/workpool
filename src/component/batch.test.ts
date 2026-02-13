@@ -34,7 +34,7 @@ describe("batch", () => {
     overrides?: Partial<{
       executorHandle: string;
       maxWorkers: number;
-      activeExecutors: number;
+      activeSlots: number[];
       claimTimeoutMs: number;
     }>,
   ) {
@@ -42,7 +42,7 @@ describe("batch", () => {
       await ctx.db.insert("batchConfig", {
         executorHandle: overrides?.executorHandle ?? "function://test-executor",
         maxWorkers: overrides?.maxWorkers ?? 10,
-        activeExecutors: overrides?.activeExecutors ?? 0,
+        activeSlots: overrides?.activeSlots ?? [],
         claimTimeoutMs: overrides?.claimTimeoutMs ?? 120_000,
       });
     });
@@ -54,6 +54,7 @@ describe("batch", () => {
 
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "generateBio",
+        slot: 0,
         args: { userId: "user123" },
       });
 
@@ -65,6 +66,7 @@ describe("batch", () => {
         expect(task!.name).toBe("generateBio");
         expect(task!.args).toEqual({ userId: "user123" });
         expect(task!.status).toBe("pending");
+        expect(task!.slot).toBe(0);
         expect(task!.attempt).toBe(0);
         expect(task!.readyAt).toBeLessThanOrEqual(Date.now());
       });
@@ -73,6 +75,7 @@ describe("batch", () => {
     it("should lazy-init batch config via batchConfig arg", async () => {
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "myHandler",
+        slot: 0,
         args: {},
         batchConfig: {
           executorHandle: "function://my-executor",
@@ -83,15 +86,17 @@ describe("batch", () => {
 
       expect(taskId).toBeDefined();
 
+      // Flush the scheduled _maybeStartExecutors mutation
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
       await t.run(async (ctx) => {
         const config = await ctx.db.query("batchConfig").unique();
         expect(config).not.toBeNull();
         expect(config!.executorHandle).toBe("function://my-executor");
         expect(config!.maxWorkers).toBe(5);
         expect(config!.claimTimeoutMs).toBe(60_000);
-        // activeExecutors is 1 because enqueue() calls ensureExecutors()
-        // which starts an executor when there's pending work
-        expect(config!.activeExecutors).toBe(1);
+        // activeSlots has all 5 slots because _maybeStartExecutors starts all workers
+        expect(config!.activeSlots.sort()).toEqual([0, 1, 2, 3, 4]);
       });
     });
 
@@ -100,6 +105,7 @@ describe("batch", () => {
 
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "myHandler",
+        slot: 0,
         args: {},
         onComplete: {
           fnHandle: "function://on-complete",
@@ -133,9 +139,9 @@ describe("batch", () => {
 
       const taskIds = await t.mutation(api.batch.enqueueBatch, {
         tasks: [
-          { name: "handler1", args: { a: 1 } },
-          { name: "handler2", args: { b: 2 } },
-          { name: "handler3", args: { c: 3 } },
+          { name: "handler1", slot: 0, args: { a: 1 } },
+          { name: "handler2", slot: 1, args: { b: 2 } },
+          { name: "handler3", slot: 2, args: { c: 3 } },
         ],
       });
 
@@ -155,18 +161,20 @@ describe("batch", () => {
     it("should claim pending tasks and set them to claimed", async () => {
       await setupPoolConfig();
 
-      // Enqueue some tasks
+      // Enqueue some tasks on slot 0
       const id1 = await t.mutation(api.batch.enqueue, {
         name: "handler1",
+        slot: 0,
         args: { a: 1 },
       });
       const id2 = await t.mutation(api.batch.enqueue, {
         name: "handler2",
+        slot: 0,
         args: { b: 2 },
       });
 
       // Claim them
-      const claimed = await t.mutation(api.batch.claimBatch, { limit: 10 });
+      const claimed = await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10, maxWorkers: 10 });
       expect(claimed).toHaveLength(2);
       expect(claimed.map((c: { name: string }) => c.name).sort()).toEqual([
         "handler1",
@@ -187,23 +195,26 @@ describe("batch", () => {
     it("should respect the limit", async () => {
       await setupPoolConfig();
 
-      // Enqueue 5 tasks
+      // Enqueue 5 tasks on slot 0
       for (let i = 0; i < 5; i++) {
         await t.mutation(api.batch.enqueue, {
           name: `handler${i}`,
+          slot: 0,
           args: {},
         });
       }
 
       // Claim only 2
-      const claimed = await t.mutation(api.batch.claimBatch, { limit: 2 });
+      const claimed = await t.mutation(api.batch.claimBatch, { slot: 0, limit: 2, maxWorkers: 10 });
       expect(claimed).toHaveLength(2);
 
       // 3 should still be pending
       await t.run(async (ctx) => {
         const pending = await ctx.db
           .query("batchTasks")
-          .withIndex("by_status_readyAt", (q) => q.eq("status", "pending"))
+          .withIndex("by_slot_status_readyAt", (q) =>
+            q.eq("slot", 0).eq("status", "pending"),
+          )
           .collect();
         expect(pending).toHaveLength(3);
       });
@@ -216,6 +227,7 @@ describe("batch", () => {
       await t.run(async (ctx) => {
         await ctx.db.insert("batchTasks", {
           name: "futureTask",
+          slot: 0,
           args: {},
           status: "pending",
           readyAt: Date.now() + 60_000, // 1 minute in the future
@@ -224,7 +236,7 @@ describe("batch", () => {
       });
 
       // Claim — should get nothing
-      const claimed = await t.mutation(api.batch.claimBatch, { limit: 10 });
+      const claimed = await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10, maxWorkers: 10 });
       expect(claimed).toHaveLength(0);
     });
 
@@ -233,16 +245,56 @@ describe("batch", () => {
 
       await t.mutation(api.batch.enqueue, {
         name: "handler",
+        slot: 0,
         args: {},
       });
 
       // First claim
-      const batch1 = await t.mutation(api.batch.claimBatch, { limit: 10 });
+      const batch1 = await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10, maxWorkers: 10 });
       expect(batch1).toHaveLength(1);
 
       // Second claim — should get nothing
-      const batch2 = await t.mutation(api.batch.claimBatch, { limit: 10 });
+      const batch2 = await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10, maxWorkers: 10 });
       expect(batch2).toHaveLength(0);
+    });
+
+    it("should only claim tasks matching the given slot", async () => {
+      await setupPoolConfig();
+
+      // Enqueue tasks on different slots
+      await t.mutation(api.batch.enqueue, {
+        name: "slot0-task",
+        slot: 0,
+        args: {},
+      });
+      await t.mutation(api.batch.enqueue, {
+        name: "slot1-task",
+        slot: 1,
+        args: {},
+      });
+      await t.mutation(api.batch.enqueue, {
+        name: "slot2-task",
+        slot: 2,
+        args: {},
+      });
+
+      // Claim from slot 1 — should only get the slot-1 task
+      const claimed = await t.mutation(api.batch.claimBatch, { slot: 1, limit: 10, maxWorkers: 10 });
+      expect(claimed).toHaveLength(1);
+      expect(claimed[0].name).toBe("slot1-task");
+
+      // Slot 0 and slot 2 tasks should still be pending
+      await t.run(async (ctx) => {
+        const pending = await ctx.db
+          .query("batchTasks")
+          .filter((q) => q.eq(q.field("status"), "pending"))
+          .collect();
+        expect(pending).toHaveLength(2);
+        expect(pending.map((t) => t.name).sort()).toEqual([
+          "slot0-task",
+          "slot2-task",
+        ]);
+      });
     });
   });
 
@@ -252,11 +304,12 @@ describe("batch", () => {
 
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "handler",
+        slot: 0,
         args: {},
       });
 
       // Claim it
-      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
 
       // Complete it
       await t.mutation(api.batch.complete, {
@@ -276,6 +329,7 @@ describe("batch", () => {
 
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "handler",
+        slot: 0,
         args: {},
       });
 
@@ -296,6 +350,7 @@ describe("batch", () => {
 
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "handler",
+        slot: 0,
         args: {},
       });
       // Task is "pending", not "claimed"
@@ -320,12 +375,13 @@ describe("batch", () => {
 
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "handler",
+        slot: 0,
         args: {},
         // no retryBehavior
       });
 
       // Claim and fail
-      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
       await t.mutation(api.batch.fail, {
         taskId,
         error: "Something went wrong",
@@ -343,6 +399,7 @@ describe("batch", () => {
 
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "handler",
+        slot: 0,
         args: {},
         retryBehavior: {
           maxAttempts: 3,
@@ -352,7 +409,7 @@ describe("batch", () => {
       });
 
       // Claim and fail
-      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
       await t.mutation(api.batch.fail, {
         taskId,
         error: "Temporary error",
@@ -376,6 +433,7 @@ describe("batch", () => {
 
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "handler",
+        slot: 0,
         args: {},
         retryBehavior: {
           maxAttempts: 2, // 2 total attempts (1 initial + 1 retry)
@@ -385,7 +443,7 @@ describe("batch", () => {
       });
 
       // First attempt: claim and fail
-      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
       await t.mutation(api.batch.fail, {
         taskId,
         error: "First failure",
@@ -402,7 +460,7 @@ describe("batch", () => {
       vi.advanceTimersByTime(60_000);
 
       // Second attempt: claim and fail again
-      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
       await t.mutation(api.batch.fail, {
         taskId,
         error: "Second failure",
@@ -417,29 +475,69 @@ describe("batch", () => {
   });
 
   describe("countPending", () => {
-    it("should count pending tasks", async () => {
+    it("should count pending tasks globally", async () => {
       await setupPoolConfig();
 
       // Initially 0
       const count0 = await t.query(api.batch.countPending, {});
       expect(count0).toBe(0);
 
-      // Enqueue 3 tasks
+      // Enqueue 3 tasks on different slots
       for (let i = 0; i < 3; i++) {
         await t.mutation(api.batch.enqueue, {
           name: `handler${i}`,
+          slot: i,
           args: {},
         });
       }
 
       const count3 = await t.query(api.batch.countPending, {});
-      expect(count3).toBe(3);
+      // Returns 1 (at least one pending) not exact count
+      expect(count3).toBe(1);
 
-      // Claim 1
-      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      // Claim all from slot 0
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10, maxWorkers: 10 });
 
-      const count2 = await t.query(api.batch.countPending, {});
-      expect(count2).toBe(2);
+      // Still pending on other slots
+      const countAfter = await t.query(api.batch.countPending, {});
+      expect(countAfter).toBe(1);
+    });
+
+    it("should count pending tasks for a specific slot", async () => {
+      await setupPoolConfig();
+
+      // Enqueue tasks on different slots
+      await t.mutation(api.batch.enqueue, {
+        name: "slot0-task",
+        slot: 0,
+        args: {},
+      });
+      await t.mutation(api.batch.enqueue, {
+        name: "slot1-task",
+        slot: 1,
+        args: {},
+      });
+
+      // Check slot 0
+      const slot0Count = await t.query(api.batch.countPending, { slot: 0 });
+      expect(slot0Count).toBe(1);
+
+      // Check slot 1
+      const slot1Count = await t.query(api.batch.countPending, { slot: 1 });
+      expect(slot1Count).toBe(1);
+
+      // Check empty slot
+      const slot2Count = await t.query(api.batch.countPending, { slot: 2 });
+      expect(slot2Count).toBe(0);
+
+      // Claim slot 0
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10, maxWorkers: 10 });
+
+      // Slot 0 now empty, slot 1 still has pending
+      const slot0After = await t.query(api.batch.countPending, { slot: 0 });
+      expect(slot0After).toBe(0);
+      const slot1After = await t.query(api.batch.countPending, { slot: 1 });
+      expect(slot1After).toBe(1);
     });
   });
 
@@ -449,6 +547,7 @@ describe("batch", () => {
 
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "handler",
+        slot: 0,
         args: {},
       });
 
@@ -461,10 +560,11 @@ describe("batch", () => {
 
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "handler",
+        slot: 0,
         args: {},
       });
 
-      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
 
       const s = await t.query(api.batch.status, { taskId });
       expect(s).toEqual({ state: "running", attempt: 0 });
@@ -475,10 +575,11 @@ describe("batch", () => {
 
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "handler",
+        slot: 0,
         args: {},
       });
 
-      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
       await t.mutation(api.batch.complete, { taskId, result: null });
 
       const s = await t.query(api.batch.status, { taskId });
@@ -490,6 +591,7 @@ describe("batch", () => {
       await setupPoolConfig();
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "handler",
+        slot: 0,
         args: {},
       });
       await t.run(async (ctx) => {
@@ -507,6 +609,7 @@ describe("batch", () => {
 
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "handler",
+        slot: 0,
         args: {},
       });
 
@@ -523,10 +626,11 @@ describe("batch", () => {
 
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "handler",
+        slot: 0,
         args: {},
       });
 
-      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
       await t.mutation(api.batch.cancel, { taskId });
 
       await t.run(async (ctx) => {
@@ -539,6 +643,7 @@ describe("batch", () => {
       await setupPoolConfig();
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "handler",
+        slot: 0,
         args: {},
       });
       await t.run(async (ctx) => {
@@ -556,11 +661,12 @@ describe("batch", () => {
 
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "handler",
+        slot: 0,
         args: {},
       });
 
       // Claim it
-      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
 
       // Verify it's claimed
       await t.run(async (ctx) => {
@@ -588,10 +694,11 @@ describe("batch", () => {
 
       await t.mutation(api.batch.enqueue, {
         name: "handler",
+        slot: 0,
         args: {},
       });
 
-      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
 
       // Don't advance time — claim is fresh
       const swept = await t.mutation(api.batch.sweepStaleClaims, {});
@@ -600,25 +707,37 @@ describe("batch", () => {
   });
 
   describe("executorDone", () => {
-    it("should decrement activeExecutors", async () => {
-      await setupPoolConfig({ activeExecutors: 3 });
+    it("should remove slot from activeSlots", async () => {
+      await setupPoolConfig({ activeSlots: [0, 1, 2] });
 
-      await t.mutation(api.batch.executorDone, { startMore: false });
+      await t.mutation(api.batch.executorDone, { startMore: false, slot: 1 });
 
       await t.run(async (ctx) => {
         const config = await ctx.db.query("batchConfig").unique();
-        expect(config!.activeExecutors).toBe(2);
+        expect(config!.activeSlots.sort()).toEqual([0, 2]);
       });
     });
 
-    it("should not go below 0", async () => {
-      await setupPoolConfig({ activeExecutors: 0 });
+    it("should no-op for slot not in activeSlots", async () => {
+      await setupPoolConfig({ activeSlots: [] });
 
-      await t.mutation(api.batch.executorDone, { startMore: false });
+      await t.mutation(api.batch.executorDone, { startMore: false, slot: 0 });
 
       await t.run(async (ctx) => {
         const config = await ctx.db.query("batchConfig").unique();
-        expect(config!.activeExecutors).toBe(0);
+        expect(config!.activeSlots).toEqual([]);
+      });
+    });
+
+    it("should schedule replacement for same slot when startMore is true", async () => {
+      await setupPoolConfig({ activeSlots: [0, 2] });
+
+      await t.mutation(api.batch.executorDone, { startMore: true, slot: 2 });
+
+      await t.run(async (ctx) => {
+        const config = await ctx.db.query("batchConfig").unique();
+        // Slot 2 was removed then re-added (replacement scheduled)
+        expect(config!.activeSlots.sort()).toEqual([0, 2]);
       });
     });
   });
@@ -629,15 +748,17 @@ describe("batch", () => {
 
       const id1 = await t.mutation(api.batch.enqueue, {
         name: "handler1",
+        slot: 0,
         args: {},
       });
       const id2 = await t.mutation(api.batch.enqueue, {
         name: "handler2",
+        slot: 0,
         args: {},
       });
 
       // Claim both
-      await t.mutation(api.batch.claimBatch, { limit: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10, maxWorkers: 10 });
 
       // Verify claimed
       await t.run(async (ctx) => {
@@ -666,11 +787,12 @@ describe("batch", () => {
 
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "handler",
+        slot: 0,
         args: {},
       });
 
       // Claim and complete
-      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
       await t.mutation(api.batch.complete, { taskId, result: null });
 
       // Release should no-op (task is deleted)
@@ -688,6 +810,7 @@ describe("batch", () => {
 
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "handler",
+        slot: 0,
         args: {},
       });
 
@@ -702,13 +825,14 @@ describe("batch", () => {
     });
   });
 
-  describe("ensureExecutors", () => {
-    it("should not exceed maxWorkers", async () => {
-      await setupPoolConfig({ maxWorkers: 2, activeExecutors: 2 });
+  describe("_maybeStartExecutors", () => {
+    it("should not start slots already active", async () => {
+      await setupPoolConfig({ maxWorkers: 2, activeSlots: [0, 1] });
 
-      // Enqueue a task — ensureExecutors runs but should not start more
+      // Enqueue a task — _maybeStartExecutors runs but should not start more
       await t.mutation(api.batch.enqueue, {
         name: "handler",
+        slot: 0,
         args: {},
         batchConfig: {
           executorHandle: "function://test-executor",
@@ -717,17 +841,21 @@ describe("batch", () => {
         },
       });
 
+      // Flush the scheduled _maybeStartExecutors mutation
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
       await t.run(async (ctx) => {
         const config = await ctx.db.query("batchConfig").unique();
-        // Should stay at 2, not increase
-        expect(config!.activeExecutors).toBe(2);
+        // Should stay at [0, 1], not add more
+        expect(config!.activeSlots.sort()).toEqual([0, 1]);
       });
     });
 
-    it("should start one executor when below maxWorkers", async () => {
+    it("should start all executors up to maxWorkers", async () => {
       // No pre-existing config — lazy init via batchConfig arg
       const _taskId = await t.mutation(api.batch.enqueue, {
         name: "handler",
+        slot: 0,
         args: {},
         batchConfig: {
           executorHandle: "function://test-executor",
@@ -736,9 +864,13 @@ describe("batch", () => {
         },
       });
 
+      // Flush the scheduled _maybeStartExecutors mutation
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
       await t.run(async (ctx) => {
         const config = await ctx.db.query("batchConfig").unique();
-        expect(config!.activeExecutors).toBe(1);
+        // All 5 slots should be active
+        expect(config!.activeSlots.sort()).toEqual([0, 1, 2, 3, 4]);
       });
     });
   });
@@ -747,8 +879,8 @@ describe("batch", () => {
     it("should lazy-init batch config", async () => {
       const taskIds = await t.mutation(api.batch.enqueueBatch, {
         tasks: [
-          { name: "handler1", args: { a: 1 } },
-          { name: "handler2", args: { b: 2 } },
+          { name: "handler1", slot: 0, args: { a: 1 } },
+          { name: "handler2", slot: 1, args: { b: 2 } },
         ],
         batchConfig: {
           executorHandle: "function://bulk-executor",
@@ -759,13 +891,17 @@ describe("batch", () => {
 
       expect(taskIds).toHaveLength(2);
 
+      // Flush the scheduled _maybeStartExecutors mutation
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
       await t.run(async (ctx) => {
         const config = await ctx.db.query("batchConfig").unique();
         expect(config).not.toBeNull();
         expect(config!.executorHandle).toBe("function://bulk-executor");
         expect(config!.maxWorkers).toBe(3);
         expect(config!.claimTimeoutMs).toBe(90_000);
-        expect(config!.activeExecutors).toBe(1);
+        // All 3 slots active
+        expect(config!.activeSlots.sort()).toEqual([0, 1, 2]);
       });
     });
   });
@@ -784,7 +920,7 @@ describe("batch", () => {
         expect(config!.executorHandle).toBe("function://test");
         expect(config!.maxWorkers).toBe(5);
         expect(config!.claimTimeoutMs).toBe(30_000);
-        expect(config!.activeExecutors).toBe(0);
+        expect(config!.activeSlots).toEqual([]);
       });
     });
 
@@ -818,6 +954,7 @@ describe("batch", () => {
 
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "flaky",
+        slot: 0,
         args: {},
         retryBehavior: {
           maxAttempts: 4,
@@ -827,7 +964,7 @@ describe("batch", () => {
       });
 
       // Attempt 0: claim and fail
-      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
       const beforeFirstFail = Date.now();
       await t.mutation(api.batch.fail, { taskId, error: "fail-0" });
 
@@ -846,7 +983,7 @@ describe("batch", () => {
       vi.advanceTimersByTime(delay0 + 100);
 
       // Attempt 1: claim and fail again
-      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
       const beforeSecondFail = Date.now();
       await t.mutation(api.batch.fail, { taskId, error: "fail-1" });
 
@@ -865,6 +1002,7 @@ describe("batch", () => {
 
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "eventually-works",
+        slot: 0,
         args: {},
         retryBehavior: {
           maxAttempts: 3,
@@ -874,7 +1012,7 @@ describe("batch", () => {
       });
 
       // Attempt 0: fail
-      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
       await t.mutation(api.batch.fail, { taskId, error: "transient" });
 
       // Verify retried
@@ -888,7 +1026,7 @@ describe("batch", () => {
       vi.advanceTimersByTime(60_000);
 
       // Attempt 1: succeed
-      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
       await t.mutation(api.batch.complete, { taskId, result: "finally!" });
 
       // Task should be deleted (completed)
@@ -903,6 +1041,7 @@ describe("batch", () => {
 
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "always-fails",
+        slot: 0,
         args: {},
         retryBehavior: {
           maxAttempts: 2,
@@ -912,13 +1051,13 @@ describe("batch", () => {
       });
 
       // Attempt 0
-      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
       await t.mutation(api.batch.fail, { taskId, error: "fail-0" });
 
       vi.advanceTimersByTime(60_000);
 
       // Attempt 1 (final)
-      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
       await t.mutation(api.batch.fail, { taskId, error: "fail-1" });
 
       // Task deleted — no more retries
@@ -937,15 +1076,17 @@ describe("batch", () => {
 
       const staleId = await t.mutation(api.batch.enqueue, {
         name: "stale",
+        slot: 0,
         args: {},
       });
       const freshId = await t.mutation(api.batch.enqueue, {
         name: "fresh",
+        slot: 0,
         args: {},
       });
 
       // Claim both
-      await t.mutation(api.batch.claimBatch, { limit: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10, maxWorkers: 10 });
 
       // Advance past claim timeout
       vi.advanceTimersByTime(120_000);
@@ -953,9 +1094,10 @@ describe("batch", () => {
       // Enqueue a third task (claimed recently)
       const recentId = await t.mutation(api.batch.enqueue, {
         name: "recent",
+        slot: 0,
         args: {},
       });
-      await t.mutation(api.batch.claimBatch, { limit: 10 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 10, maxWorkers: 10 });
 
       // Sweep
       const swept = await t.mutation(api.batch.sweepStaleClaims, {});
@@ -976,17 +1118,18 @@ describe("batch", () => {
 
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "handler",
+        slot: 0,
         args: {},
       });
 
       // Executor A claims it
-      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
 
       // Executor A hits deadline, releases it
       await t.mutation(api.batch.releaseClaims, { taskIds: [taskId] });
 
-      // Executor B claims it
-      const claimed = await t.mutation(api.batch.claimBatch, { limit: 1 });
+      // Executor B claims it (same slot — after sweep or replacement)
+      const claimed = await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
       expect(claimed).toHaveLength(1);
       expect(claimed[0]._id).toBe(taskId);
 
@@ -1004,11 +1147,12 @@ describe("batch", () => {
 
       const taskId = await t.mutation(api.batch.enqueue, {
         name: "handler",
+        slot: 0,
         args: {},
       });
 
       // Claim it (executor is "running" it)
-      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.claimBatch, { slot: 0, limit: 1, maxWorkers: 10 });
 
       // Cancel while claimed (user cancels from dashboard)
       await t.mutation(api.batch.cancel, { taskId });
@@ -1025,22 +1169,22 @@ describe("batch", () => {
     });
 
     it("executorDone with startMore starts replacement when work remains", async () => {
-      await setupPoolConfig({ activeExecutors: 1, maxWorkers: 3 });
+      await setupPoolConfig({ activeSlots: [0], maxWorkers: 3 });
 
-      // Enqueue work so ensureExecutors has reason to start
+      // Enqueue work
       await t.mutation(api.batch.enqueue, {
         name: "handler",
+        slot: 0,
         args: {},
       });
 
       // Executor finishes and signals there's more work
-      await t.mutation(api.batch.executorDone, { startMore: true });
+      await t.mutation(api.batch.executorDone, { startMore: true, slot: 0 });
 
       await t.run(async (ctx) => {
         const config = await ctx.db.query("batchConfig").unique();
-        // activeExecutors: was 1, executorDone decremented to 0,
-        // then ensureExecutors incremented to 1 (started a replacement)
-        expect(config!.activeExecutors).toBe(1);
+        // Slot 0 was removed then re-added (replacement scheduled)
+        expect(config!.activeSlots).toEqual([0]);
       });
     });
   });

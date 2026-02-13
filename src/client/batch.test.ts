@@ -67,6 +67,7 @@ const SHORT_OPTIONS = {
   claimDeadlineMs: 500,
   softDeadlineMs: 599_000, // → 1s soft deadline
   maxConcurrencyPerWorker: 10,
+  maxWorkers: 10,
   pollIntervalMs: 50,
   maxHeapMB: 100, // 100 MB
 };

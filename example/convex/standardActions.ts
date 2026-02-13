@@ -4,52 +4,18 @@ import { v } from "convex/values";
 export const translateToSpanish = internalAction({
   args: { sentence: v.string() },
   handler: async (_ctx, { sentence }) => {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content:
-              "Translate the following to Spanish. Return only the translation.",
-          },
-          { role: "user", content: sentence },
-        ],
-      }),
-    });
-    const data = await response.json();
-    return data.choices[0].message.content;
+    // Mock: simulate LLM latency without hitting OpenAI
+    await new Promise((r) => setTimeout(r, 3000 + Math.random() * 2000));
+    return `[ES] ${sentence}`;
   },
 });
 
 export const translateToEnglish = internalAction({
   args: { sentence: v.string() },
   handler: async (_ctx, { sentence }) => {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content:
-              "Translate the following to English. Return only the translation.",
-          },
-          { role: "user", content: sentence },
-        ],
-      }),
-    });
-    const data = await response.json();
-    return data.choices[0].message.content;
+    // Mock: simulate LLM latency without hitting OpenAI
+    await new Promise((r) => setTimeout(r, 3000 + Math.random() * 2000));
+    return `[EN] ${sentence}`;
   },
 });
 

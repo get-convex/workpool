@@ -18,6 +18,7 @@ export default defineSchema({
   batchTasks: defineTable({
     name: v.string(), // handler name in the registry
     args: v.any(), // serialized args for the handler
+    slot: v.number(), // executor slot (0..maxWorkers-1) for claim partitioning
     status: v.union(
       v.literal("pending"),
       v.literal("claimed"),
@@ -33,14 +34,14 @@ export default defineSchema({
     onComplete: v.optional(vOnCompleteFnContext),
     retryBehavior: v.optional(retryBehavior),
   })
-    .index("by_status_readyAt", ["status", "readyAt"])
+    .index("by_slot_status_readyAt", ["slot", "status", "readyAt"])
     .index("by_status_claimedAt", ["status", "claimedAt"]),
 
   // Singleton configuration for the batch executor pool.
   batchConfig: defineTable({
     executorHandle: v.string(), // function handle for the user's executor action
     maxWorkers: v.number(),
-    activeExecutors: v.number(), // how many executors are currently running
+    activeSlots: v.array(v.number()), // which executor slots are currently running
     claimTimeoutMs: v.number(),
   }),
 
