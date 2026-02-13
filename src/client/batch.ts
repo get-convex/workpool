@@ -376,8 +376,10 @@ export async function _runExecutorLoop(
         try {
           pending = await deps.countPending();
         } catch {
-          // If countPending fails (timeout, etc.), assume work remains
-          pending = 1;
+          // If countPending fails, assume no work — avoids infinite loop
+          // of failing queries. If there IS work, executorDone(startMore)
+          // from another executor will restart us.
+          pending = 0;
         }
         if (pending === 0) break;
         await new Promise((r) => setTimeout(r, pollInterval));
@@ -412,12 +414,13 @@ export async function _runExecutorLoop(
     }
   }
 
-  // Check if there's remaining work — treat failures as "yes" to be safe
+  // Check if there's remaining work — treat failures as "no" to avoid
+  // cascading executor restarts that all fail at countPending.
   let remaining: number;
   try {
     remaining = await deps.countPending();
   } catch {
-    remaining = 1;
+    remaining = 0;
   }
 
   // Notify component that this executor is done — retry on transient errors
