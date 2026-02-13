@@ -134,13 +134,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         any,
         Name
       >;
-      claimBatch: FunctionReference<
-        "mutation",
-        "internal",
-        { slot: number; limit: number },
-        Array<{ _id: string; args: any; attempt: number; name: string }>,
-        Name
-      >;
       claimByIds: FunctionReference<
         "mutation",
         "internal",

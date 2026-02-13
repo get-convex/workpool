@@ -185,45 +185,6 @@ export const claimByIds = mutation({
   },
 });
 
-/**
- * @deprecated Use listPending + claimByIds instead.
- * Kept for backward compatibility / testing.
- */
-export const claimBatch = mutation({
-  args: { slot: v.number(), limit: v.number() },
-  returns: v.array(
-    v.object({
-      _id: v.id("batchTasks"),
-      name: v.string(),
-      args: v.any(),
-      attempt: v.number(),
-    }),
-  ),
-  handler: async (ctx, { slot, limit }) => {
-    const now = Date.now();
-    const pending = await ctx.db
-      .query("batchTasks")
-      .withIndex("by_slot_status_readyAt", (q) =>
-        q.eq("slot", slot).eq("status", "pending").lte("readyAt", now),
-      )
-      .take(limit);
-
-    const claimed = [];
-    for (const task of pending) {
-      await ctx.db.patch(task._id, {
-        status: "claimed",
-        claimedAt: now,
-      });
-      claimed.push({
-        _id: task._id,
-        name: task.name,
-        args: task.args,
-        attempt: task.attempt,
-      });
-    }
-    return claimed;
-  },
-});
 
 // ─── OnComplete return type ──────────────────────────────────────────────────
 

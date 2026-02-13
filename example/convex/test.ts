@@ -127,37 +127,36 @@ export const _runBatchChunk = internalMutation({
   },
 });
 
-// Check progress for a mode (uses indexed counts to handle large datasets)
+// Check progress for a mode — count non-terminal statuses (small) to avoid 32K limit
 export const progress = query({
-  args: { mode: v.string() },
-  handler: async (ctx, { mode }) => {
-    // Only count completed and failed (these grow over time and stay under limits)
-    const completedDocs = await ctx.db
-      .query("jobs")
-      .withIndex("by_mode_status", (q) =>
-        q.eq("mode", mode).eq("status", "completed"),
-      )
-      .take(31000);
-    const failedDocs = await ctx.db
-      .query("jobs")
-      .withIndex("by_mode_status", (q) =>
-        q.eq("mode", mode).eq("status", "failed"),
-      )
-      .take(1000);
+  args: { mode: v.string(), total: v.optional(v.number()) },
+  handler: async (ctx, { mode, total: totalArg }) => {
+    const total = totalArg ?? 40000;
 
-    const completed = completedDocs.length;
-    const failed = failedDocs.length;
-    const total = 20000; // hardcoded for this test
-    const inProgress = total - completed - failed;
+    // Count small sets: pending, step1, step2, failed
+    const statuses = ["pending", "step1", "step2", "failed"] as const;
+    const counts: Record<string, number> = {};
+    for (const status of statuses) {
+      const docs = await ctx.db
+        .query("jobs")
+        .withIndex("by_mode_status", (q) =>
+          q.eq("mode", mode).eq("status", status),
+        )
+        .take(10000);
+      counts[status] = docs.length;
+    }
 
-    // Sample completed jobs for duration stats (take up to 1000)
+    const failed = counts.failed;
+    const inProgress = counts.pending + counts.step1 + counts.step2;
+    const completed = total - inProgress - failed;
+
+    // Duration stats from sample of completed jobs
     const sample = await ctx.db
       .query("jobs")
       .withIndex("by_mode_status", (q) =>
         q.eq("mode", mode).eq("status", "completed"),
       )
-      .take(1000);
-
+      .take(500);
     const durations = sample.map((j) => j.completedAt! - j.startedAt);
     const avgDuration = durations.length
       ? durations.reduce((a, b) => a + b, 0) / durations.length
