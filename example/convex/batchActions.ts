@@ -1,3 +1,5 @@
+"use node";
+
 import { batch } from "./setup";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";

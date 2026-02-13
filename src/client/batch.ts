@@ -155,7 +155,8 @@ export interface _ExecutorDeps {
   isNode: boolean;
 }
 
-const FLUSH_BATCH_SIZE = 100;
+const FLUSH_BATCH_SIZE = 200;
+const FLUSH_CONCURRENCY = 3;
 
 function isTransientError(err: unknown): boolean {
   const msg = String(err);
@@ -180,7 +181,9 @@ export async function _runExecutorLoop(
   const claimDeadline =
     startTime + (options.claimDeadlineMs ?? 5 * 60 * 1000);
   const maxConcurrency = options.maxConcurrencyPerWorker ?? 1000;
-  const maxClaimBatch = 200;
+  // Claim all available slots at once — no need to throttle since
+  // listPending (query) + claimByIds (point reads) are OCC-safe.
+  const maxClaimBatch = maxConcurrency;
   const pollInterval = options.pollIntervalMs ?? 500;
   const defaultHeapMB = deps.isNode ? 448 : 48;
   const maxHeapMB = options.maxHeapMB ?? defaultHeapMB;
@@ -197,59 +200,41 @@ export async function _runExecutorLoop(
   let onCompleteInflight = 0;
   let onCompleteDrainerRunning = false;
 
-  // Dispatch onComplete items in batches of this size (single mutation each).
-  // Each handler does ~2-3 DB ops, so 50 items = ~125 ops (well under 16K limit).
-  // Kept moderate to avoid tying up Convex mutation workers too long.
+  // Larger batches (50) × moderate concurrency (5) = 250 items per round.
+  // 5 concurrent × 20 workers = 100 total mutations — safe headroom.
+  // Each 50-item batch takes ~500ms but we need fewer round-trips.
   const ONCOMPLETE_BATCH_SIZE = 50;
-  // Max concurrent batch mutations per executor: 5 × 20 workers = ~100 total
   const ONCOMPLETE_CONCURRENCY = 5;
 
   async function drainOnComplete() {
     if (onCompleteDrainerRunning) return;
     onCompleteDrainerRunning = true;
-    let backoff = 50;
     try {
       while (onCompleteBuffer.length > 0) {
         const available = ONCOMPLETE_CONCURRENCY - onCompleteInflight;
         if (available <= 0) {
-          await new Promise((r) => setTimeout(r, 20));
+          await new Promise((r) => setTimeout(r, 10));
           continue;
         }
         // Launch up to `available` batch mutations in parallel
-        const promises: Promise<void>[] = [];
         for (let i = 0; i < available && onCompleteBuffer.length > 0; i++) {
           const chunk = onCompleteBuffer.splice(0, ONCOMPLETE_BATCH_SIZE);
           onCompleteInflight++;
-          promises.push(
-            deps
-              .dispatchOnCompleteBatch(chunk)
-              .then(() => {
-                backoff = 50;
-              })
-              .catch((err: unknown) => {
-                if (isTransientError(err)) {
-                  onCompleteBuffer.push(...chunk);
-                } else {
-                  console.error(`[batch] onComplete dispatch failed:`, err);
-                }
-              })
-              .finally(() => {
-                onCompleteInflight--;
-              }),
-          );
+          deps
+            .dispatchOnCompleteBatch(chunk)
+            .catch((err: unknown) => {
+              if (isTransientError(err)) {
+                onCompleteBuffer.push(...chunk);
+              } else {
+                console.error(`[batch] onComplete dispatch failed:`, err);
+              }
+            })
+            .finally(() => {
+              onCompleteInflight--;
+            });
         }
-        await Promise.race([
-          Promise.all(promises),
-          new Promise((r) => setTimeout(r, 100)),
-        ]);
-        if (onCompleteBuffer.length > 0 && backoff > 50) {
-          await new Promise((r) =>
-            setTimeout(r, backoff + Math.random() * backoff),
-          );
-        }
-        if (onCompleteBuffer.length > 0 && promises.length === 0) {
-          backoff = Math.min(backoff * 1.5, 2000);
-        }
+        // Brief yield to let completions flow
+        await new Promise((r) => setTimeout(r, 10));
       }
     } finally {
       onCompleteDrainerRunning = false;
@@ -266,46 +251,64 @@ export async function _runExecutorLoop(
     }
   }
 
+  let flushRunning = false;
   async function flushBuffers() {
-    while (completionBuffer.length > 0) {
-      const batch = completionBuffer.splice(0, FLUSH_BATCH_SIZE);
-      try {
-        const onComplete = await deps.completeBatch(batch);
-        onCompleteBuffer.push(...onComplete);
-      } catch (err: unknown) {
-        if (isTransientError(err)) {
-          // Put items back and bail — will retry next flush cycle
-          completionBuffer.unshift(...batch);
-          await new Promise((r) => setTimeout(r, 100 + Math.random() * 200));
-          return;
+    if (flushRunning) return;
+    flushRunning = true;
+    try {
+      // Flush completions with concurrency — fire multiple completeBatch
+      // calls in parallel to reduce total flush time from O(N) to O(N/concurrency).
+      while (completionBuffer.length > 0) {
+        const batches: { taskId: string; result: unknown }[][] = [];
+        for (let i = 0; i < FLUSH_CONCURRENCY && completionBuffer.length > 0; i++) {
+          batches.push(completionBuffer.splice(0, FLUSH_BATCH_SIZE));
         }
-        console.error(`[batch] completeBatch failed for ${batch.length} items:`, err);
-      }
-    }
-    while (failureBuffer.length > 0) {
-      const batch = failureBuffer.splice(0, FLUSH_BATCH_SIZE);
-      try {
-        const onComplete = await deps.failBatch(batch);
-        onCompleteBuffer.push(...onComplete);
-      } catch (err: unknown) {
-        if (isTransientError(err)) {
-          failureBuffer.unshift(...batch);
-          await new Promise((r) => setTimeout(r, 100 + Math.random() * 200));
-          return;
+        const results = await Promise.allSettled(
+          batches.map((batch) => deps.completeBatch(batch)),
+        );
+        for (let i = 0; i < results.length; i++) {
+          const r = results[i];
+          if (r.status === "fulfilled") {
+            onCompleteBuffer.push(...r.value);
+          } else if (isTransientError(r.reason)) {
+            completionBuffer.unshift(...batches[i]);
+          } else {
+            console.error(`[batch] completeBatch failed for ${batches[i].length} items:`, r.reason);
+          }
         }
-        console.error(`[batch] failBatch failed for ${batch.length} items:`, err);
       }
+      while (failureBuffer.length > 0) {
+        const batches: { taskId: string; error: string }[][] = [];
+        for (let i = 0; i < FLUSH_CONCURRENCY && failureBuffer.length > 0; i++) {
+          batches.push(failureBuffer.splice(0, FLUSH_BATCH_SIZE));
+        }
+        const results = await Promise.allSettled(
+          batches.map((batch) => deps.failBatch(batch)),
+        );
+        for (let i = 0; i < results.length; i++) {
+          const r = results[i];
+          if (r.status === "fulfilled") {
+            onCompleteBuffer.push(...r.value);
+          } else if (isTransientError(r.reason)) {
+            failureBuffer.unshift(...batches[i]);
+          } else {
+            console.error(`[batch] failBatch failed for ${batches[i].length} items:`, r.reason);
+          }
+        }
+      }
+      // Kick off background drain (non-blocking)
+      void drainOnComplete();
+    } finally {
+      flushRunning = false;
     }
-    // Kick off background drain (non-blocking)
-    void drainOnComplete();
   }
 
   try {
     while (Date.now() < softDeadline) {
       const canClaim = Date.now() < claimDeadline;
 
-      // Flush buffered completions/failures before claiming more work
-      await flushBuffers();
+      // Kick off flush in background — don't block claiming
+      void flushBuffers();
 
       // Check memory pressure — skip claiming if heap is too large
       let memoryOk = true;
@@ -390,7 +393,7 @@ export async function _runExecutorLoop(
       const timeToDeadline = softDeadline - Date.now();
       if (timeToDeadline <= 0) break;
       const deadlineTimer = new Promise<void>((r) =>
-        setTimeout(r, Math.min(timeToDeadline, 200)),
+        setTimeout(r, Math.min(timeToDeadline, 50)),
       );
       if (inFlight.size > 0) {
         await Promise.race([...inFlight.values(), deadlineTimer]);
@@ -399,7 +402,10 @@ export async function _runExecutorLoop(
       }
     }
   } finally {
-    // Final flush of any remaining buffered results
+    // Wait for any background flush to finish, then do a final flush
+    while (flushRunning) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
     await flushBuffers();
     // Wait for all onComplete dispatches to finish
     await awaitOnCompleteDrain();
