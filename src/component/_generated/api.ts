@@ -16,6 +16,7 @@ import type * as kick from "../kick.js";
 import type * as lib from "../lib.js";
 import type * as logging from "../logging.js";
 import type * as loop from "../loop.js";
+import type * as batch from "../batch.js";
 import type * as recovery from "../recovery.js";
 import type * as shared from "../shared.js";
 import type * as stats from "../stats.js";
@@ -37,6 +38,7 @@ const fullApi: ApiFromModules<{
   lib: typeof lib;
   logging: typeof logging;
   loop: typeof loop;
+  batch: typeof batch;
   recovery: typeof recovery;
   shared: typeof shared;
   stats: typeof stats;

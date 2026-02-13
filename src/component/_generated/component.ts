@@ -126,4 +126,116 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         Name
       >;
     };
+    batch: {
+      cancel: FunctionReference<
+        "mutation",
+        "internal",
+        { taskId: string },
+        any,
+        Name
+      >;
+      claimBatch: FunctionReference<
+        "mutation",
+        "internal",
+        { limit: number },
+        Array<{ _id: string; args: any; attempt: number; name: string }>,
+        Name
+      >;
+      complete: FunctionReference<
+        "mutation",
+        "internal",
+        { result: any; taskId: string },
+        any,
+        Name
+      >;
+      configure: FunctionReference<
+        "mutation",
+        "internal",
+        { claimTimeoutMs: number; executorHandle: string; maxWorkers: number },
+        any,
+        Name
+      >;
+      countPending: FunctionReference<"query", "internal", {}, number, Name>;
+      enqueue: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          args: any;
+          name: string;
+          onComplete?: { context?: any; fnHandle: string };
+          batchConfig?: {
+            claimTimeoutMs: number;
+            executorHandle: string;
+            maxWorkers: number;
+          };
+          retryBehavior?: {
+            base: number;
+            initialBackoffMs: number;
+            maxAttempts: number;
+          };
+        },
+        string,
+        Name
+      >;
+      enqueueBatch: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          batchConfig?: {
+            claimTimeoutMs: number;
+            executorHandle: string;
+            maxWorkers: number;
+          };
+          tasks: Array<{
+            args: any;
+            name: string;
+            onComplete?: { context?: any; fnHandle: string };
+            retryBehavior?: {
+              base: number;
+              initialBackoffMs: number;
+              maxAttempts: number;
+            };
+          }>;
+        },
+        Array<string>,
+        Name
+      >;
+      executorDone: FunctionReference<
+        "mutation",
+        "internal",
+        { startMore: boolean },
+        any,
+        Name
+      >;
+      fail: FunctionReference<
+        "mutation",
+        "internal",
+        { error: string; taskId: string },
+        any,
+        Name
+      >;
+      releaseClaims: FunctionReference<
+        "mutation",
+        "internal",
+        { taskIds: Array<string> },
+        any,
+        Name
+      >;
+      status: FunctionReference<
+        "query",
+        "internal",
+        { taskId: string },
+        | { attempt: number; state: "pending" }
+        | { attempt: number; state: "running" }
+        | { state: "finished" },
+        Name
+      >;
+      sweepStaleClaims: FunctionReference<
+        "mutation",
+        "internal",
+        {},
+        number,
+        Name
+      >;
+    };
   };
