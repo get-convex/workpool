@@ -597,7 +597,7 @@ export const executorDone = mutation({
     if (!config) return;
 
     // Remove this slot from activeSlots
-    let newSlots = config.activeSlots.filter((s) => s !== slot);
+    const newSlots = config.activeSlots.filter((s) => s !== slot);
 
     if (startMore) {
       // Start executors for ALL missing slots, not just this one.
@@ -726,7 +726,7 @@ export const _watchdog = internalMutation({
     }
 
     // 3. Remove dead slots from activeSlots
-    let newSlots =
+    const newSlots =
       deadSlots.size > 0
         ? config.activeSlots.filter((s) => !deadSlots.has(s))
         : [...config.activeSlots];
