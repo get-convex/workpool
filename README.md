@@ -369,6 +369,116 @@ await pool.enqueueActionBatch(ctx, internal.weather.scrape, [
 ]);
 ```
 
+## Batch Execution Mode
+
+For high-throughput workloads (hundreds or thousands of concurrent tasks), the
+`BatchWorkpool` provides a fundamentally different execution model. Instead of
+one Convex action per task, a small number of long-lived "executor" actions each
+run many task handlers concurrently inside a single action.
+
+This dramatically reduces scheduling overhead and allows far higher effective
+concurrency. In benchmarks, 3000 tasks completed in ~47 seconds with batch mode
+vs an estimated ~10 minutes with standard mode.
+
+### How it works
+
+- A few executor actions (default: 10) run as long-lived Convex actions
+- Each executor claims pending tasks from a shared queue and runs their handlers
+  concurrently (default: up to 1000 per executor)
+- Handlers are plain async functions that call `ctx.runQuery`/`ctx.runMutation`
+  for durable reads/writes and `fetch()` for external API calls
+- Failed tasks are retried with exponential backoff, same as standard mode
+- Memory back-pressure automatically pauses claiming when heap usage is high
+
+### Setup
+
+```ts
+// convex/convex.config.ts
+import { defineApp } from "convex/server";
+import workpool from "@convex-dev/workpool/convex.config.js";
+
+const app = defineApp();
+app.use(workpool, { name: "batchPool" });
+export default app;
+```
+
+```ts
+// convex/batch.ts
+import { BatchWorkpool } from "@convex-dev/workpool";
+import { components, internal } from "./_generated/api";
+
+export const batch = new BatchWorkpool(components.batchPool, {
+  maxWorkers: 10,
+  maxConcurrencyPerWorker: 1000,
+});
+
+export const executor = batch.executor();
+batch.setExecutorRef(internal.batch.executor);
+```
+
+### Registering handlers
+
+Use `batch.action()` to register a handler and export it as an internal action:
+
+```ts
+// convex/llm.ts
+import { v } from "convex/values";
+import { batch } from "./batch";
+
+export const generateBio = batch.action("generateBio", {
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const user = await ctx.runQuery(internal.users.get, { id: args.userId });
+    const response = await fetch("https://api.openai.com/v1/...", { ... });
+    const bio = await response.json();
+    await ctx.runMutation(internal.users.setBio, { id: args.userId, bio });
+    return bio;
+  },
+});
+```
+
+### Enqueueing tasks
+
+From any mutation, enqueue tasks by handler name:
+
+```ts
+await batch.enqueue(ctx, "generateBio", { userId }, {
+  onComplete: internal.pipeline.afterBio,
+  context: { userId },
+});
+```
+
+For bulk enqueueing, use `enqueueBatch`:
+
+```ts
+await batch.enqueueBatch(ctx, users.map(u => ({
+  name: "generateBio",
+  args: { userId: u._id },
+})));
+```
+
+### Configuration options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `maxWorkers` | 10 | Number of concurrent executor actions |
+| `maxConcurrencyPerWorker` | 1000 | Task handlers per executor |
+| `claimDeadlineMs` | 300000 (5 min) | Stop claiming new work after this time |
+| `softDeadlineMs` | 30000 (30s buffer) | Release remaining claims before action timeout |
+| `claimTimeoutMs` | 120000 (2 min) | Sweep stale claims back to pending |
+| `maxHeapMB` | 448 (Node) / 48 (Convex) | Memory back-pressure threshold |
+| `pollIntervalMs` | 500 | Polling interval when idle with pending work |
+
+### When to use Batch vs Standard mode
+
+| | Standard (`Workpool`) | Batch (`BatchWorkpool`) |
+|---|---|---|
+| **Best for** | Long-running tasks, strict isolation | High-throughput, many short tasks |
+| **Concurrency** | Up to ~100 (action slots) | Up to ~100,000 (100 slots x 1000/slot) |
+| **Overhead per task** | Full action startup | Near zero (in-process function call) |
+| **Isolation** | Each task in its own action | Tasks share an action's memory |
+| **Task duration** | Any (up to 10 min) | Short tasks preferred (< 1 min each) |
+
 ## Canceling work
 
 You can cancel work by calling `pool.cancel(id)` or all of them with

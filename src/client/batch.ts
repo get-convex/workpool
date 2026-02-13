@@ -121,6 +121,133 @@ export type BatchEnqueueOptions = {
 
 type HandlerFn = (ctx: GenericActionCtx<any>, args: any) => Promise<any>;
 
+// ─── Executor loop (extracted for testability) ───────────────────────────────
+
+type ClaimedTask = { _id: string; name: string; args: any; attempt: number };
+
+/** @internal Dependencies injected into the executor loop. Exported for testing. */
+export interface _ExecutorDeps {
+  claimBatch(limit: number): Promise<ClaimedTask[]>;
+  complete(taskId: string, result: unknown): Promise<void>;
+  fail(taskId: string, error: string): Promise<void>;
+  countPending(): Promise<number>;
+  releaseClaims(taskIds: string[]): Promise<void>;
+  executorDone(startMore: boolean): Promise<void>;
+  getHandler(name: string): ((args: any) => Promise<any>) | undefined;
+  getHeapUsedBytes(): number;
+  isNode: boolean;
+}
+
+/** @internal Core executor loop. Exported for testing. */
+export async function _runExecutorLoop(
+  deps: _ExecutorDeps,
+  options: BatchWorkpoolOptions,
+): Promise<void> {
+  const startTime = Date.now();
+  const actionTimeout = 10 * 60 * 1000; // Convex action timeout: 10 min
+  const softDeadline =
+    startTime + actionTimeout - (options.softDeadlineMs ?? 30_000);
+  const claimDeadline =
+    startTime + (options.claimDeadlineMs ?? 5 * 60 * 1000);
+  const maxConcurrency = options.maxConcurrencyPerWorker ?? 1000;
+  const maxClaimBatch = 200;
+  const pollInterval = options.pollIntervalMs ?? 500;
+  const defaultHeapMB = deps.isNode ? 448 : 48;
+  const maxHeapMB = options.maxHeapMB ?? defaultHeapMB;
+  const maxHeapBytes = maxHeapMB * 1024 * 1024;
+  const inFlight = new Map<string, Promise<void>>();
+
+  try {
+    while (Date.now() < softDeadline) {
+      const canClaim = Date.now() < claimDeadline;
+
+      // Check memory pressure — skip claiming if heap is too large
+      let memoryOk = true;
+      if (maxHeapMB > 0 && deps.isNode) {
+        const heapUsed = deps.getHeapUsedBytes();
+        memoryOk = heapUsed < maxHeapBytes;
+        if (!memoryOk && canClaim && inFlight.size > 0) {
+          const heapMB = (heapUsed / (1024 * 1024)).toFixed(1);
+          console.log(
+            `[batch] memory pressure: ${heapMB} MB heap, ` +
+              `${inFlight.size} in flight — waiting for tasks to complete`,
+          );
+        }
+      }
+
+      // Fill concurrency slots (only before claim deadline and under memory limit)
+      if (canClaim && memoryOk) {
+        const available = Math.min(
+          maxConcurrency - inFlight.size,
+          maxClaimBatch,
+        );
+        if (available > 0) {
+          const batch = await deps.claimBatch(available);
+
+          for (const task of batch) {
+            const handler = deps.getHandler(task.name);
+            if (!handler) {
+              await deps.fail(task._id, `Unknown handler: ${task.name}`);
+              continue;
+            }
+
+            const p = handler(task.args)
+              .then(async (result) => {
+                await deps.complete(task._id, result ?? null);
+              })
+              .catch(async (err: unknown) => {
+                try {
+                  await deps.fail(task._id, String(err));
+                } catch (failErr) {
+                  console.error(
+                    `[batch] failed to report failure for ${task._id}:`,
+                    failErr,
+                  );
+                }
+              })
+              .finally(() => inFlight.delete(task._id));
+
+            inFlight.set(task._id, p);
+          }
+        }
+      }
+
+      // Nothing in flight — check if we should exit
+      if (inFlight.size === 0) {
+        // Past claim deadline with nothing in flight: we're done draining
+        if (!canClaim) break;
+        const pending = await deps.countPending();
+        if (pending === 0) break;
+        await new Promise((r) => setTimeout(r, pollInterval));
+        continue;
+      }
+
+      // Wait for at least one task to finish or soft deadline, whichever comes first
+      const timeToDeadline = softDeadline - Date.now();
+      if (timeToDeadline <= 0) break;
+      const deadlineTimer = new Promise<void>((r) =>
+        setTimeout(r, timeToDeadline),
+      );
+      await Promise.race([...inFlight.values(), deadlineTimer]);
+    }
+  } finally {
+    // Guarantee claim release even if the executor crashes.
+    // Released tasks return to "pending" for another executor to pick up.
+    const unfinished = [...inFlight.keys()];
+    if (unfinished.length > 0) {
+      await deps.releaseClaims(unfinished);
+    }
+  }
+
+  // Check if there's remaining work
+  const remaining = await deps.countPending();
+
+  // Notify component that this executor is done.
+  // If there's remaining work, executorDone calls ensureExecutors
+  // to schedule a replacement — no self-scheduling needed.
+  await deps.executorDone(remaining > 0);
+}
+
 // ─── Class ──────────────────────────────────────────────────────────────────
 
 export class BatchWorkpool {
@@ -131,6 +258,9 @@ export class BatchWorkpool {
     "action",
     "internal"
   > | null = null;
+  private cachedBatchConfig:
+    | { executorHandle: string; maxWorkers: number; claimTimeoutMs: number }
+    | undefined;
 
   constructor(component: ComponentApi, options?: BatchWorkpoolOptions) {
     this.component = component;
@@ -187,143 +317,31 @@ export class BatchWorkpool {
     return internalActionGeneric({
       args: {},
       handler: async (ctx: GenericActionCtx<any>) => {
-        const startTime = Date.now();
-        const actionTimeout = 10 * 60 * 1000; // Convex action timeout: 10 min
-        const softDeadline =
-          startTime +
-          actionTimeout -
-          (options.softDeadlineMs ?? 30_000);
-        const claimDeadline =
-          startTime + (options.claimDeadlineMs ?? 5 * 60 * 1000);
-        const maxConcurrency =
-          options.maxConcurrencyPerWorker ?? 1000;
-        // Cap how many tasks we claim per mutation to avoid oversized transactions.
-        const maxClaimBatch = 200;
-        const pollInterval = options.pollIntervalMs ?? 500;
-        // Detect runtime: Node.js has process.memoryUsage, Convex runtime doesn't
         const isNode =
           typeof process !== "undefined" &&
           typeof process.memoryUsage === "function";
-        const defaultHeapMB = isNode ? 448 : 48;
-        const maxHeapMB = options.maxHeapMB ?? defaultHeapMB;
-        const maxHeapBytes = maxHeapMB * 1024 * 1024;
-        const inFlight = new Map<string, Promise<void>>();
-
-        try {
-          while (Date.now() < softDeadline) {
-            const canClaim = Date.now() < claimDeadline;
-
-            // Check memory pressure — skip claiming if heap is too large
-            let memoryOk = true;
-            if (maxHeapMB > 0 && isNode) {
-              const heapUsed = process.memoryUsage().heapUsed;
-              memoryOk = heapUsed < maxHeapBytes;
-              if (!memoryOk && canClaim && inFlight.size > 0) {
-                const heapMB = (heapUsed / (1024 * 1024)).toFixed(1);
-                console.log(
-                  `[batch] memory pressure: ${heapMB} MB heap, ` +
-                    `${inFlight.size} in flight — waiting for tasks to complete`,
-                );
-              }
-            }
-
-            // Fill concurrency slots (only before claim deadline and under memory limit)
-            if (canClaim && memoryOk) {
-              const available = Math.min(
-                maxConcurrency - inFlight.size,
-                maxClaimBatch,
-              );
-              if (available > 0) {
-                const batch: Array<{
-                  _id: string;
-                  name: string;
-                  args: any;
-                  attempt: number;
-                }> = await ctx.runMutation(component.batch.claimBatch, {
-                  limit: available,
-                });
-
-                for (const task of batch) {
-                  const handler = registry.get(task.name);
-                  if (!handler) {
-                    await ctx.runMutation(component.batch.fail, {
-                      taskId: task._id,
-                      error: `Unknown handler: ${task.name}`,
-                    });
-                    continue;
-                  }
-
-                  const p = handler(ctx, task.args)
-                    .then(async (result) => {
-                      await ctx.runMutation(component.batch.complete, {
-                        taskId: task._id,
-                        result: result ?? null,
-                      });
-                    })
-                    .catch(async (err: unknown) => {
-                      try {
-                        await ctx.runMutation(component.batch.fail, {
-                          taskId: task._id,
-                          error: String(err),
-                        });
-                      } catch (failErr) {
-                        console.error(
-                          `[batch] failed to report failure for ${task._id}:`,
-                          failErr,
-                        );
-                      }
-                    })
-                    .finally(() => inFlight.delete(task._id));
-
-                  inFlight.set(task._id, p);
-                }
-              }
-            }
-
-            // Nothing in flight — check if we should exit
-            if (inFlight.size === 0) {
-              // Past claim deadline with nothing in flight: we're done draining
-              if (!canClaim) break;
-              const pending: number = await ctx.runQuery(
-                component.batch.countPending,
-                {},
-              );
-              if (pending === 0) break;
-              await new Promise((r) => setTimeout(r, pollInterval));
-              continue;
-            }
-
-            // Wait for at least one task to finish or soft deadline, whichever comes first
-            const timeToDeadline = softDeadline - Date.now();
-            if (timeToDeadline <= 0) break;
-            const deadlineTimer = new Promise<void>((r) =>
-              setTimeout(r, timeToDeadline),
-            );
-            await Promise.race([...inFlight.values(), deadlineTimer]);
-          }
-        } finally {
-          // Guarantee claim release even if the executor crashes.
-          // Released tasks return to "pending" for another executor to pick up.
-          const unfinished = [...inFlight.keys()];
-          if (unfinished.length > 0) {
-            await ctx.runMutation(component.batch.releaseClaims, {
-              taskIds: unfinished,
-            });
-          }
-        }
-
-        // Check if there's remaining work
-        const remaining: number = await ctx.runQuery(
-          component.batch.countPending,
-          {},
-        );
-
-        // Notify component that this executor is done.
-        // If there's remaining work, executorDone calls ensureExecutors
-        // to schedule a replacement — no self-scheduling needed.
-        await ctx.runMutation(component.batch.executorDone, {
-          startMore: remaining > 0,
-        });
+        const deps: _ExecutorDeps = {
+          claimBatch: (limit) =>
+            ctx.runMutation(component.batch.claimBatch, { limit }),
+          complete: (taskId, result) =>
+            ctx.runMutation(component.batch.complete, { taskId, result }),
+          fail: (taskId, error) =>
+            ctx.runMutation(component.batch.fail, { taskId, error }),
+          countPending: () =>
+            ctx.runQuery(component.batch.countPending, {}),
+          releaseClaims: (taskIds) =>
+            ctx.runMutation(component.batch.releaseClaims, { taskIds }),
+          executorDone: (startMore) =>
+            ctx.runMutation(component.batch.executorDone, { startMore }),
+          getHandler: (name) => {
+            const h = registry.get(name);
+            return h ? (args) => h(ctx, args) : undefined;
+          },
+          getHeapUsedBytes: () =>
+            isNode ? process.memoryUsage().heapUsed : 0,
+          isNode,
+        };
+        await _runExecutorLoop(deps, options);
       },
     });
   }
@@ -485,12 +503,15 @@ export class BatchWorkpool {
     // where the component already has the batchConfig in the DB from the
     // initial enqueue. The component's ensureExecutors reads from the DB.
     if (!this.executorFnRef) return undefined;
-    const executorHandle = await createFunctionHandle(this.executorFnRef);
-    return {
-      executorHandle,
-      maxWorkers: this.options.maxWorkers ?? 10,
-      claimTimeoutMs: this.options.claimTimeoutMs ?? 120_000,
-    };
+    if (!this.cachedBatchConfig) {
+      const executorHandle = await createFunctionHandle(this.executorFnRef);
+      this.cachedBatchConfig = {
+        executorHandle,
+        maxWorkers: this.options.maxWorkers ?? 10,
+        claimTimeoutMs: this.options.claimTimeoutMs ?? 120_000,
+      };
+    }
+    return this.cachedBatchConfig;
   }
 
   private getRetryBehavior(

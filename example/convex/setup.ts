@@ -3,7 +3,7 @@ import { components } from "./_generated/api";
 
 // Standard mode: 1 action per task, maxParallelism 10
 export const standard = new Workpool(components.standardPool, {
-  maxParallelism: 10,
+  maxParallelism: 100,
   logLevel: "INFO",
 });
 

@@ -623,6 +623,153 @@ describe("batch", () => {
     });
   });
 
+  describe("releaseClaims", () => {
+    it("should return claimed tasks to pending", async () => {
+      await setupPoolConfig();
+
+      const id1 = await t.mutation(api.batch.enqueue, {
+        name: "handler1",
+        args: {},
+      });
+      const id2 = await t.mutation(api.batch.enqueue, {
+        name: "handler2",
+        args: {},
+      });
+
+      // Claim both
+      await t.mutation(api.batch.claimBatch, { limit: 10 });
+
+      // Verify claimed
+      await t.run(async (ctx) => {
+        expect((await ctx.db.get(id1))!.status).toBe("claimed");
+        expect((await ctx.db.get(id2))!.status).toBe("claimed");
+      });
+
+      // Release both
+      await t.mutation(api.batch.releaseClaims, { taskIds: [id1, id2] });
+
+      // Verify back to pending
+      await t.run(async (ctx) => {
+        const task1 = await ctx.db.get(id1);
+        expect(task1!.status).toBe("pending");
+        expect(task1!.claimedAt).toBeUndefined();
+        expect(task1!.readyAt).toBeLessThanOrEqual(Date.now());
+
+        const task2 = await ctx.db.get(id2);
+        expect(task2!.status).toBe("pending");
+        expect(task2!.claimedAt).toBeUndefined();
+      });
+    });
+
+    it("should not release a completed task", async () => {
+      await setupPoolConfig();
+
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "handler",
+        args: {},
+      });
+
+      // Claim and complete
+      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.complete, { taskId, result: null });
+
+      // Release should no-op (task is deleted)
+      await t.mutation(api.batch.releaseClaims, { taskIds: [taskId] });
+
+      // Task should still be gone
+      await t.run(async (ctx) => {
+        const task = await ctx.db.get(taskId);
+        expect(task).toBeNull();
+      });
+    });
+
+    it("should not release a pending task", async () => {
+      await setupPoolConfig();
+
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "handler",
+        args: {},
+      });
+
+      // Don't claim — release should no-op
+      await t.mutation(api.batch.releaseClaims, { taskIds: [taskId] });
+
+      // Task should still be pending (unchanged)
+      await t.run(async (ctx) => {
+        const task = await ctx.db.get(taskId);
+        expect(task!.status).toBe("pending");
+      });
+    });
+  });
+
+  describe("ensureExecutors", () => {
+    it("should not exceed maxWorkers", async () => {
+      await setupPoolConfig({ maxWorkers: 2, activeExecutors: 2 });
+
+      // Enqueue a task — ensureExecutors runs but should not start more
+      await t.mutation(api.batch.enqueue, {
+        name: "handler",
+        args: {},
+        batchConfig: {
+          executorHandle: "function://test-executor",
+          maxWorkers: 2,
+          claimTimeoutMs: 120_000,
+        },
+      });
+
+      await t.run(async (ctx) => {
+        const config = await ctx.db.query("batchConfig").unique();
+        // Should stay at 2, not increase
+        expect(config!.activeExecutors).toBe(2);
+      });
+    });
+
+    it("should start one executor when below maxWorkers", async () => {
+      // No pre-existing config — lazy init via batchConfig arg
+      const _taskId = await t.mutation(api.batch.enqueue, {
+        name: "handler",
+        args: {},
+        batchConfig: {
+          executorHandle: "function://test-executor",
+          maxWorkers: 5,
+          claimTimeoutMs: 120_000,
+        },
+      });
+
+      await t.run(async (ctx) => {
+        const config = await ctx.db.query("batchConfig").unique();
+        expect(config!.activeExecutors).toBe(1);
+      });
+    });
+  });
+
+  describe("enqueueBatch with batchConfig", () => {
+    it("should lazy-init batch config", async () => {
+      const taskIds = await t.mutation(api.batch.enqueueBatch, {
+        tasks: [
+          { name: "handler1", args: { a: 1 } },
+          { name: "handler2", args: { b: 2 } },
+        ],
+        batchConfig: {
+          executorHandle: "function://bulk-executor",
+          maxWorkers: 3,
+          claimTimeoutMs: 90_000,
+        },
+      });
+
+      expect(taskIds).toHaveLength(2);
+
+      await t.run(async (ctx) => {
+        const config = await ctx.db.query("batchConfig").unique();
+        expect(config).not.toBeNull();
+        expect(config!.executorHandle).toBe("function://bulk-executor");
+        expect(config!.maxWorkers).toBe(3);
+        expect(config!.claimTimeoutMs).toBe(90_000);
+        expect(config!.activeExecutors).toBe(1);
+      });
+    });
+  });
+
   describe("configure", () => {
     it("should create batch config", async () => {
       await t.mutation(api.batch.configure, {
@@ -659,6 +806,241 @@ describe("batch", () => {
         expect(configs).toHaveLength(1);
         expect(configs[0].executorHandle).toBe("function://new");
         expect(configs[0].maxWorkers).toBe(20);
+      });
+    });
+  });
+
+  // ─── Full retry lifecycle ───────────────────────────────────────────────
+
+  describe("retry lifecycle", () => {
+    it("exponential backoff: readyAt increases with each attempt", async () => {
+      await setupPoolConfig();
+
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "flaky",
+        args: {},
+        retryBehavior: {
+          maxAttempts: 4,
+          initialBackoffMs: 1000,
+          base: 2,
+        },
+      });
+
+      // Attempt 0: claim and fail
+      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      const beforeFirstFail = Date.now();
+      await t.mutation(api.batch.fail, { taskId, error: "fail-0" });
+
+      const afterAttempt0 = await t.run(async (ctx) => {
+        const task = await ctx.db.get(taskId);
+        expect(task!.attempt).toBe(1);
+        expect(task!.status).toBe("pending");
+        // readyAt should be ~1000ms in the future (with jitter)
+        return task!.readyAt;
+      });
+      const delay0 = afterAttempt0 - beforeFirstFail;
+      expect(delay0).toBeGreaterThan(500); // at least half of 1000ms (jitter)
+      expect(delay0).toBeLessThan(2000); // not more than 2x
+
+      // Advance time past backoff
+      vi.advanceTimersByTime(delay0 + 100);
+
+      // Attempt 1: claim and fail again
+      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      const beforeSecondFail = Date.now();
+      await t.mutation(api.batch.fail, { taskId, error: "fail-1" });
+
+      const afterAttempt1 = await t.run(async (ctx) => {
+        const task = await ctx.db.get(taskId);
+        expect(task!.attempt).toBe(2);
+        return task!.readyAt;
+      });
+      const delay1 = afterAttempt1 - beforeSecondFail;
+      // Second backoff should be ~2000ms (1000 * 2^1), roughly double first
+      expect(delay1).toBeGreaterThan(delay0 * 0.7); // jitter makes this inexact
+    });
+
+    it("full cycle: fail → retry → succeed", async () => {
+      await setupPoolConfig();
+
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "eventually-works",
+        args: {},
+        retryBehavior: {
+          maxAttempts: 3,
+          initialBackoffMs: 100,
+          base: 2,
+        },
+      });
+
+      // Attempt 0: fail
+      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.fail, { taskId, error: "transient" });
+
+      // Verify retried
+      await t.run(async (ctx) => {
+        const task = await ctx.db.get(taskId);
+        expect(task!.status).toBe("pending");
+        expect(task!.attempt).toBe(1);
+      });
+
+      // Advance past backoff
+      vi.advanceTimersByTime(60_000);
+
+      // Attempt 1: succeed
+      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.complete, { taskId, result: "finally!" });
+
+      // Task should be deleted (completed)
+      await t.run(async (ctx) => {
+        const task = await ctx.db.get(taskId);
+        expect(task).toBeNull();
+      });
+    });
+
+    it("terminal failure after max attempts exhausted", async () => {
+      await setupPoolConfig();
+
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "always-fails",
+        args: {},
+        retryBehavior: {
+          maxAttempts: 2,
+          initialBackoffMs: 100,
+          base: 2,
+        },
+      });
+
+      // Attempt 0
+      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.fail, { taskId, error: "fail-0" });
+
+      vi.advanceTimersByTime(60_000);
+
+      // Attempt 1 (final)
+      await t.mutation(api.batch.claimBatch, { limit: 1 });
+      await t.mutation(api.batch.fail, { taskId, error: "fail-1" });
+
+      // Task deleted — no more retries
+      await t.run(async (ctx) => {
+        const task = await ctx.db.get(taskId);
+        expect(task).toBeNull();
+      });
+    });
+  });
+
+  // ─── Orphan recovery ──────────────────────────────────────────────────
+
+  describe("orphan recovery", () => {
+    it("sweep recovers only stale claims, leaves fresh ones alone", async () => {
+      await setupPoolConfig({ claimTimeoutMs: 60_000 });
+
+      const staleId = await t.mutation(api.batch.enqueue, {
+        name: "stale",
+        args: {},
+      });
+      const freshId = await t.mutation(api.batch.enqueue, {
+        name: "fresh",
+        args: {},
+      });
+
+      // Claim both
+      await t.mutation(api.batch.claimBatch, { limit: 10 });
+
+      // Advance past claim timeout
+      vi.advanceTimersByTime(120_000);
+
+      // Enqueue a third task (claimed recently)
+      const recentId = await t.mutation(api.batch.enqueue, {
+        name: "recent",
+        args: {},
+      });
+      await t.mutation(api.batch.claimBatch, { limit: 10 });
+
+      // Sweep
+      const swept = await t.mutation(api.batch.sweepStaleClaims, {});
+
+      // staleId and freshId were claimed 120s ago → both swept
+      // recentId was just claimed → not swept
+      expect(swept).toBe(2);
+
+      await t.run(async (ctx) => {
+        expect((await ctx.db.get(staleId))!.status).toBe("pending");
+        expect((await ctx.db.get(freshId))!.status).toBe("pending");
+        expect((await ctx.db.get(recentId))!.status).toBe("claimed");
+      });
+    });
+
+    it("released task can be re-claimed by another executor", async () => {
+      await setupPoolConfig();
+
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "handler",
+        args: {},
+      });
+
+      // Executor A claims it
+      await t.mutation(api.batch.claimBatch, { limit: 1 });
+
+      // Executor A hits deadline, releases it
+      await t.mutation(api.batch.releaseClaims, { taskIds: [taskId] });
+
+      // Executor B claims it
+      const claimed = await t.mutation(api.batch.claimBatch, { limit: 1 });
+      expect(claimed).toHaveLength(1);
+      expect(claimed[0]._id).toBe(taskId);
+
+      // Executor B completes it
+      await t.mutation(api.batch.complete, { taskId, result: "done" });
+
+      await t.run(async (ctx) => {
+        const task = await ctx.db.get(taskId);
+        expect(task).toBeNull(); // deleted on completion
+      });
+    });
+
+    it("cancel during claimed state is handled gracefully", async () => {
+      await setupPoolConfig();
+
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "handler",
+        args: {},
+      });
+
+      // Claim it (executor is "running" it)
+      await t.mutation(api.batch.claimBatch, { limit: 1 });
+
+      // Cancel while claimed (user cancels from dashboard)
+      await t.mutation(api.batch.cancel, { taskId });
+
+      // Task is gone
+      await t.run(async (ctx) => {
+        expect(await ctx.db.get(taskId)).toBeNull();
+      });
+
+      // Executor tries to complete — should no-op, not crash
+      await t.mutation(api.batch.complete, { taskId, result: "too late" });
+      // Executor tries to fail — should also no-op
+      await t.mutation(api.batch.fail, { taskId, error: "too late" });
+    });
+
+    it("executorDone with startMore starts replacement when work remains", async () => {
+      await setupPoolConfig({ activeExecutors: 1, maxWorkers: 3 });
+
+      // Enqueue work so ensureExecutors has reason to start
+      await t.mutation(api.batch.enqueue, {
+        name: "handler",
+        args: {},
+      });
+
+      // Executor finishes and signals there's more work
+      await t.mutation(api.batch.executorDone, { startMore: true });
+
+      await t.run(async (ctx) => {
+        const config = await ctx.db.query("batchConfig").unique();
+        // activeExecutors: was 1, executorDone decremented to 0,
+        // then ensureExecutors incremented to 1 (started a replacement)
+        expect(config!.activeExecutors).toBe(1);
       });
     });
   });
