@@ -59,7 +59,7 @@ function createTracker() {
  * Helper: creates listPending + claimByIds mocks from a vi.fn() mock
  * that returns ClaimedTask[] (same pattern as the old claimBatch mock).
  */
-function claimMocks(mock: ReturnType<typeof vi.fn>) {
+function claimMocks(mock: (...args: unknown[]) => Promise<ClaimedTask[]>) {
   let pendingResult: ClaimedTask[] = [];
   return {
     listPending: vi.fn().mockImplementation(async (limit: number) => {
@@ -238,7 +238,7 @@ describe("_runExecutorLoop", () => {
       await vi.advanceTimersByTimeAsync(500);
       const callsBefore = claimCallCount;
 
-      taskDeferred.resolve("result");
+      taskDeferred.resolve();
       await vi.advanceTimersByTimeAsync(200);
       await loopDone;
 

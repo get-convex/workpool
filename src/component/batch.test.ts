@@ -7,7 +7,7 @@ import {
   it,
   vi,
 } from "vitest";
-import { api } from "./_generated/api.js";
+import { api, internal } from "./_generated/api.js";
 import schema from "./schema.js";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -1101,7 +1101,7 @@ describe("batch", () => {
       });
 
       // Run watchdog (internal mutation via api)
-      await t.mutation(api.batch._watchdog, {});
+      await t.mutation(internal.batch._watchdog, {});
 
       await t.run(async (ctx) => {
         // Stale claims should be released back to pending
@@ -1138,7 +1138,7 @@ describe("batch", () => {
         });
       });
 
-      await t.mutation(api.batch._watchdog, {});
+      await t.mutation(internal.batch._watchdog, {});
 
       await t.run(async (ctx) => {
         const config = await ctx.db.query("batchConfig").unique();
@@ -1155,7 +1155,7 @@ describe("batch", () => {
       });
 
       // No tasks at all — watchdog should clean up and stop
-      await t.mutation(api.batch._watchdog, {});
+      await t.mutation(internal.batch._watchdog, {});
 
       await t.run(async (ctx) => {
         const config = await ctx.db.query("batchConfig").unique();
