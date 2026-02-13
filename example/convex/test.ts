@@ -142,13 +142,13 @@ export const results = query({
   },
 });
 
-// Reset all jobs for a clean test
+// Reset all jobs for a clean test (paginated to avoid read limits)
 export const reset = mutation({
   handler: async (ctx) => {
-    const all = await ctx.db.query("jobs").collect();
-    for (const job of all) {
+    const batch = await ctx.db.query("jobs").take(1000);
+    for (const job of batch) {
       await ctx.db.delete(job._id);
     }
-    return { deleted: all.length };
+    return { deleted: batch.length, more: batch.length === 1000 };
   },
 });
