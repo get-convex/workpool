@@ -407,18 +407,12 @@ export const countPending = query({
         .first();
       return one ? 1 : 0;
     }
-    // Global check: scan all slots using the index
-    const config = await ctx.db.query("batchConfig").unique();
-    const maxSlots = config?.maxWorkers ?? 20;
-    for (let s = 0; s < maxSlots; s++) {
-      const one = await ctx.db
-        .query("batchTasks")
-        .withIndex("by_slot_status_readyAt", (q) =>
-          q.eq("slot", s).eq("status", "pending"),
-        )
-        .first();
-      if (one) return 1;
-    }
+    // Global check: single query using status index (1 query instead of 20 per-slot)
+    const pending = await ctx.db
+      .query("batchTasks")
+      .withIndex("by_status_claimedAt", (q) => q.eq("status", "pending"))
+      .first();
+    if (pending) return 1;
     // Also check for any claimed tasks (might be stale)
     const claimed = await ctx.db
       .query("batchTasks")
@@ -665,24 +659,19 @@ export const _watchdog = internalMutation({
       });
     }
 
-    // 2. Detect stuck executors: slots marked active but with old
-    //    pending tasks (readyAt > 30s ago). If an executor were alive
-    //    it would have claimed these within a few seconds.
+    // 2. Detect stuck executors: sample pending tasks via the status
+    //    index (1 query) instead of per-slot scans (was 20 queries).
+    //    Pending tasks ordered by _id (oldest first), so old stuck
+    //    tasks appear at the front of the sample.
     const stuckThreshold = now - 30_000;
     const activeSet = new Set(config.activeSlots);
-    for (let s = 0; s < config.maxWorkers; s++) {
-      if (!activeSet.has(s) || deadSlots.has(s)) continue;
-      const oldPending = await ctx.db
-        .query("batchTasks")
-        .withIndex("by_slot_status_readyAt", (q) =>
-          q
-            .eq("slot", s)
-            .eq("status", "pending")
-            .lte("readyAt", stuckThreshold),
-        )
-        .first();
-      if (oldPending) {
-        deadSlots.add(s);
+    const pendingSample = await ctx.db
+      .query("batchTasks")
+      .withIndex("by_status_claimedAt", (q) => q.eq("status", "pending"))
+      .take(100);
+    for (const task of pendingSample) {
+      if (task.readyAt <= stuckThreshold && activeSet.has(task.slot)) {
+        deadSlots.add(task.slot);
       }
     }
 
@@ -692,21 +681,10 @@ export const _watchdog = internalMutation({
         ? config.activeSlots.filter((s) => !deadSlots.has(s))
         : [...config.activeSlots];
 
-    // 4. Check if any work remains
+    // 4. Check if any work remains (1 query via status index instead of 20 per-slot)
     let hasWork = staleClaims.length > 0;
     if (!hasWork) {
-      for (let s = 0; s < config.maxWorkers; s++) {
-        const one = await ctx.db
-          .query("batchTasks")
-          .withIndex("by_slot_status_readyAt", (q) =>
-            q.eq("slot", s).eq("status", "pending"),
-          )
-          .first();
-        if (one) {
-          hasWork = true;
-          break;
-        }
-      }
+      hasWork = pendingSample.length > 0;
     }
     if (!hasWork) {
       const claimed = await ctx.db

@@ -429,15 +429,17 @@ export async function _runExecutorLoop(
     remaining = 0;
   }
 
-  // Notify component that this executor is done — retry on transient errors
-  // since all executors write to the same batchConfig singleton.
-  for (let attempt = 0; attempt < 5; attempt++) {
+  // Notify component that this executor is done — retry with exponential
+  // backoff since all executors write to the same batchConfig singleton.
+  // With 20 concurrent writers, we need generous retries + wide jitter.
+  for (let attempt = 0; attempt < 10; attempt++) {
     try {
       await deps.executorDone(remaining > 0);
       break;
     } catch (err: unknown) {
-      if (attempt === 4 || !isTransientError(err)) throw err;
-      await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
+      if (attempt === 9 || !isTransientError(err)) throw err;
+      const backoff = Math.min(200 * Math.pow(2, attempt), 5000);
+      await new Promise((r) => setTimeout(r, backoff + Math.random() * backoff));
     }
   }
 }
