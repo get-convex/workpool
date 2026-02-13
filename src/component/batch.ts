@@ -33,19 +33,7 @@ const batchConfigArgs = v.object({
 export const configure = mutation({
   args: batchConfigArgs,
   handler: async (ctx, args) => {
-    const existing = await ctx.db.query("batchConfig").unique();
-    if (existing) {
-      await ctx.db.patch(existing._id, {
-        executorHandle: args.executorHandle,
-        maxWorkers: args.maxWorkers,
-        claimTimeoutMs: args.claimTimeoutMs,
-      });
-    } else {
-      await ctx.db.insert("batchConfig", {
-        ...args,
-        activeExecutors: 0,
-      });
-    }
+    await upsertBatchConfig(ctx, args);
   },
 });
 

@@ -184,8 +184,6 @@ export class BatchWorkpool {
     const component = this.component;
     const registry = this.registry;
     const options = this.options;
-    // Use a closure so we get the value set by setExecutorRef() after executor()
-    const getExecutorRef = () => this.executorFnRef;
     return internalActionGeneric({
       args: {},
       handler: async (ctx: GenericActionCtx<any>) => {
@@ -295,8 +293,13 @@ export class BatchWorkpool {
               continue;
             }
 
-            // Wait for at least one task to finish before looping
-            await Promise.race([...inFlight.values()]);
+            // Wait for at least one task to finish or soft deadline, whichever comes first
+            const timeToDeadline = softDeadline - Date.now();
+            if (timeToDeadline <= 0) break;
+            const deadlineTimer = new Promise<void>((r) =>
+              setTimeout(r, timeToDeadline),
+            );
+            await Promise.race([...inFlight.values(), deadlineTimer]);
           }
         } finally {
           // Guarantee claim release even if the executor crashes.
@@ -315,16 +318,12 @@ export class BatchWorkpool {
           {},
         );
 
-        // Notify component that this executor is done
+        // Notify component that this executor is done.
+        // If there's remaining work, executorDone calls ensureExecutors
+        // to schedule a replacement — no self-scheduling needed.
         await ctx.runMutation(component.batch.executorDone, {
           startMore: remaining > 0,
         });
-
-        // Also self-continue for faster restart if we have a ref
-        const executorRef = getExecutorRef();
-        if (remaining > 0 && executorRef) {
-          await ctx.scheduler.runAfter(0, executorRef, {});
-        }
       },
     });
   }
