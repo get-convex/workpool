@@ -433,12 +433,25 @@ export const countPending = query({
         .first();
       return one ? 1 : 0;
     }
-    // Global check: filter-based scan (no slot-specific index needed)
-    const one = await ctx.db
+    // Global check: scan all slots using the index
+    const config = await ctx.db.query("batchConfig").unique();
+    const maxSlots = config?.maxWorkers ?? 20;
+    for (let s = 0; s < maxSlots; s++) {
+      const one = await ctx.db
+        .query("batchTasks")
+        .withIndex("by_slot_status_readyAt", (q) =>
+          q.eq("slot", s).eq("status", "pending"),
+        )
+        .first();
+      if (one) return 1;
+    }
+    // Also check for any claimed tasks (might be stale)
+    const claimed = await ctx.db
       .query("batchTasks")
-      .filter((q) => q.eq(q.field("status"), "pending"))
+      .withIndex("by_status_claimedAt", (q) => q.eq("status", "claimed"))
       .first();
-    return one ? 1 : 0;
+    if (claimed) return 1;
+    return 0;
   },
 });
 
@@ -574,10 +587,17 @@ export const executorDone = mutation({
     let newSlots = config.activeSlots.filter((s) => s !== slot);
 
     if (startMore) {
-      // Self-replace: re-add slot and schedule a new executor
-      newSlots = [...newSlots, slot];
+      // Start executors for ALL missing slots, not just this one.
+      // This handles the case where tasks were enqueued into a slot
+      // whose executor already exited.
+      const activeSet = new Set(newSlots);
       const handle = config.executorHandle as FunctionHandle<"action">;
-      await ctx.scheduler.runAfter(0, handle, { slot });
+      for (let s = 0; s < config.maxWorkers; s++) {
+        if (!activeSet.has(s)) {
+          newSlots.push(s);
+          await ctx.scheduler.runAfter(0, handle, { slot: s });
+        }
+      }
     }
 
     await ctx.db.patch(config._id, { activeSlots: newSlots });

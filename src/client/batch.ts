@@ -161,7 +161,10 @@ function isTransientError(err: unknown): boolean {
   const msg = String(err);
   return (
     msg.includes("changed while this mutation was being run") ||
-    msg.includes("Too many concurrent commits")
+    msg.includes("Too many concurrent commits") ||
+    msg.includes("no available workers") ||
+    msg.includes("couldn't be completed") ||
+    msg.includes("timed out")
   );
 }
 
@@ -194,7 +197,9 @@ export async function _runExecutorLoop(
   let onCompleteInflight = 0;
   let onCompleteDrainerRunning = false;
 
-  // Dispatch onComplete items in batches of this size (single mutation each)
+  // Dispatch onComplete items in batches of this size (single mutation each).
+  // Each handler does ~2-3 DB ops, so 50 items = ~125 ops (well under 16K limit).
+  // Kept moderate to avoid tying up Convex mutation workers too long.
   const ONCOMPLETE_BATCH_SIZE = 50;
   // Max concurrent batch mutations per executor: 3 × 20 workers = ~60 total
   const ONCOMPLETE_CONCURRENCY = 3;
@@ -295,9 +300,6 @@ export async function _runExecutorLoop(
     void drainOnComplete();
   }
 
-  // Stagger executor start to reduce burst contention across executors
-  await new Promise((r) => setTimeout(r, Math.random() * 200));
-
   try {
     while (Date.now() < softDeadline) {
       const canClaim = Date.now() < claimDeadline;
@@ -370,7 +372,13 @@ export async function _runExecutorLoop(
       ) {
         // Past claim deadline with nothing in flight: we're done draining
         if (!canClaim) break;
-        const pending = await deps.countPending();
+        let pending: number;
+        try {
+          pending = await deps.countPending();
+        } catch {
+          // If countPending fails (timeout, etc.), assume work remains
+          pending = 1;
+        }
         if (pending === 0) break;
         await new Promise((r) => setTimeout(r, pollInterval));
         continue;
@@ -507,7 +515,7 @@ export class BatchWorkpool {
               items,
             }),
           countPending: () =>
-            ctx.runQuery(component.batch.countPending, { slot }),
+            ctx.runQuery(component.batch.countPending, {}),
           releaseClaims: (taskIds) =>
             ctx.runMutation(component.batch.releaseClaims, { taskIds }),
           executorDone: (startMore) =>
