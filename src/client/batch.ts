@@ -380,6 +380,61 @@ export class BatchWorkpool {
     });
   }
 
+  /**
+   * Check if a function name (from `safeFunctionName()`) matches a
+   * registered batch handler. Tries direct match first, then suffix
+   * match after `:` or `/`.
+   */
+  isRegistered(fnName: string): boolean {
+    return this.resolveHandlerName(fnName) !== undefined;
+  }
+
+  /**
+   * Same logic as `isRegistered` but returns the handler name, or
+   * `undefined` if no match.
+   */
+  resolveHandlerName(fnName: string): string | undefined {
+    if (this.registry.has(fnName)) return fnName;
+    // Try suffix after last `:` or `/`
+    const colonIdx = fnName.lastIndexOf(":");
+    if (colonIdx !== -1) {
+      const suffix = fnName.slice(colonIdx + 1);
+      if (this.registry.has(suffix)) return suffix;
+    }
+    const slashIdx = fnName.lastIndexOf("/");
+    if (slashIdx !== -1) {
+      const suffix = fnName.slice(slashIdx + 1);
+      if (this.registry.has(suffix)) return suffix;
+    }
+    return undefined;
+  }
+
+  /**
+   * Like `enqueue()` but takes a pre-computed onComplete handle string
+   * instead of a FunctionReference. Used by workflow integration where
+   * the component returns the onComplete as a function handle string.
+   */
+  async enqueueByHandle(
+    ctx: RunMutationCtx,
+    name: string,
+    args: DefaultFunctionArgs,
+    options?: {
+      onComplete?: { fnHandle: string; context?: unknown };
+      retry?: boolean | RetryBehavior;
+    },
+  ): Promise<BatchTaskId> {
+    const batchConfig = await this.getBatchConfig();
+    const retryBehavior = this.getRetryBehavior(options?.retry);
+    const id = await ctx.runMutation(this.component.batch.enqueue, {
+      name,
+      args,
+      onComplete: options?.onComplete,
+      retryBehavior,
+      batchConfig,
+    });
+    return id as unknown as BatchTaskId;
+  }
+
   // ─── Private helpers ────────────────────────────────────────────────────
 
   private async getBatchConfig() {
