@@ -78,6 +78,34 @@ export const countLetters = batch.action("countLetters", {
   },
 });
 
+// No-op echo handler for stress testing the queue mechanics
+// without external API calls.
+export const echo = batch.action("echo", {
+  args: { i: v.number() },
+  handler: async (_ctx, { i }: { i: number }) => {
+    return i;
+  },
+});
+
+// Simulated API call: 200ms delay to mimic a fast external fetch.
+// Tests realistic mutation rates without burning real API tokens.
+export const simulatedWork = batch.action("simulatedWork", {
+  args: { i: v.number() },
+  handler: async (_ctx, { i }: { i: number }) => {
+    await new Promise((r) => setTimeout(r, 200));
+    return i;
+  },
+});
+
+// Simulated slow API call: 2s delay to mimic a real external API.
+export const slowWork = batch.action("slowWork", {
+  args: { i: v.number() },
+  handler: async (_ctx, { i }: { i: number }) => {
+    await new Promise((r) => setTimeout(r, 2000));
+    return i;
+  },
+});
+
 // Export the executor — this is the long-lived action that runs many
 // handlers concurrently inside a single Convex action.
 export const executor = batch.executor();

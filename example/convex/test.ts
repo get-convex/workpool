@@ -262,6 +262,60 @@ export const concurrency = query({
   },
 });
 
+// ─── Stress test: pure queue mechanics, no external API calls ──────────────
+
+export const runStress = mutation({
+  args: { count: v.number(), handler: v.optional(v.string()) },
+  handler: async (ctx, { count, handler }) => {
+    const name = handler ?? "simulatedWork";
+    const chunk = Math.min(count, CHUNK_SIZE);
+    const tasks = [];
+    for (let i = 0; i < chunk; i++) {
+      tasks.push({ name, args: { i } });
+    }
+    await batch.enqueueBatch(ctx, tasks);
+    const remaining = count - chunk;
+    if (remaining > 0) {
+      await ctx.scheduler.runAfter(0, internal.test._runStressChunk, {
+        remaining,
+        handler: name,
+      });
+    }
+    return { started: count, handler: name };
+  },
+});
+
+export const _runStressChunk = internalMutation({
+  args: { remaining: v.number(), handler: v.optional(v.string()) },
+  handler: async (ctx, { remaining, handler }) => {
+    const name = handler ?? "simulatedWork";
+    const chunk = Math.min(remaining, CHUNK_SIZE);
+    const tasks = [];
+    for (let i = 0; i < chunk; i++) {
+      tasks.push({ name, args: { i } });
+    }
+    await batch.enqueueBatch(ctx, tasks);
+    const left = remaining - chunk;
+    if (left > 0) {
+      await ctx.scheduler.runAfter(0, internal.test._runStressChunk, {
+        remaining: left,
+        handler: name,
+      });
+    }
+  },
+});
+
+export const stressProgress = query({
+  args: {},
+  handler: async (ctx) => {
+    const pending = await ctx.runQuery(
+      components.batchPool.batch.countPending,
+      {},
+    );
+    return { pending };
+  },
+});
+
 // Reset all jobs for a clean test (paginated to avoid read limits)
 export const reset = mutation({
   handler: async (ctx) => {

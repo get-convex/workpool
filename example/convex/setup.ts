@@ -7,8 +7,8 @@ export const standard = new Workpool(components.standardPool, {
   logLevel: "INFO",
 });
 
-// Batch mode: 20 executor actions, 1000 concurrent tasks each
+// Batch mode: 5 executor actions, 1000 concurrent tasks each
 export const batch = new BatchWorkpool(components.batchPool, {
-  maxWorkers: 20,
+  maxWorkers: 5,
   maxConcurrencyPerWorker: 1000,
 });
