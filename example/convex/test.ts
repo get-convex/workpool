@@ -7,6 +7,14 @@ import { standard, batch } from "./setup";
 import "./batchActions";
 
 const CHUNK_SIZE = 2000;
+const MAX_CONCURRENCY_PAGE_SIZE = 8000;
+const stressHandler = v.union(v.literal("echo"), v.literal("slowWork"));
+const batchStressHandler = v.union(
+  v.literal("simulatedWork"),
+  v.literal("echo"),
+  v.literal("slowWork"),
+);
+const jobMode = v.union(v.literal("standard"), v.literal("batch"));
 
 const SENTENCES = [
   "The quick brown fox jumps over the lazy dog",
@@ -35,6 +43,7 @@ const SENTENCES = [
 export const runStandard = mutation({
   args: { count: v.number() },
   handler: async (ctx, { count }) => {
+    assertNonNegativeInt(count, "count");
     const startedAt = Date.now();
     for (let i = 0; i < count; i++) {
       const sentence = SENTENCES[i % SENTENCES.length];
@@ -62,6 +71,7 @@ export const runStandard = mutation({
 export const runBatch = mutation({
   args: { count: v.number() },
   handler: async (ctx, { count }) => {
+    assertNonNegativeInt(count, "count");
     const startedAt = Date.now();
     const chunk = Math.min(count, CHUNK_SIZE);
     const tasks = [];
@@ -97,6 +107,7 @@ export const runBatch = mutation({
 export const _runBatchChunk = internalMutation({
   args: { remaining: v.number(), startedAt: v.number() },
   handler: async (ctx, { remaining, startedAt }) => {
+    assertNonNegativeInt(remaining, "remaining");
     const chunk = Math.min(remaining, CHUNK_SIZE);
     const tasks = [];
     for (let i = 0; i < chunk; i++) {
@@ -129,21 +140,16 @@ export const _runBatchChunk = internalMutation({
 
 // Check progress for a mode — count non-terminal statuses (small) to avoid 32K limit
 export const progress = query({
-  args: { mode: v.string(), total: v.optional(v.number()) },
+  args: { mode: jobMode, total: v.optional(v.number()) },
   handler: async (ctx, { mode, total: totalArg }) => {
     const total = totalArg ?? 40000;
+    assertNonNegativeInt(total, "total");
 
-    // Count small sets: pending, step1, step2, failed
+    // Count all docs for each status exactly using pagination.
     const statuses = ["pending", "step1", "step2", "failed"] as const;
     const counts: Record<string, number> = {};
     for (const status of statuses) {
-      const docs = await ctx.db
-        .query("jobs")
-        .withIndex("by_mode_status", (q) =>
-          q.eq("mode", mode).eq("status", status),
-        )
-        .take(10000);
-      counts[status] = docs.length;
+      counts[status] = await countJobsByModeStatus(ctx, mode, status);
     }
 
     const failed = counts.failed;
@@ -176,7 +182,7 @@ export const progress = query({
 
 // Get completed results with spot-check data
 export const results = query({
-  args: { mode: v.string(), limit: v.optional(v.number()) },
+  args: { mode: jobMode, limit: v.optional(v.number()) },
   handler: async (ctx, { mode, limit }) => {
     const completed = await ctx.db
       .query("jobs")
@@ -205,22 +211,31 @@ export const results = query({
 // Paginated: call with cursor to get next page
 export const concurrency = query({
   args: {
-    mode: v.string(),
+    mode: jobMode,
     bucketMs: v.optional(v.number()),
     cursor: v.optional(v.string()),
+    pageSize: v.optional(v.number()),
   },
-  handler: async (ctx, { mode, bucketMs: bucketMsArg, cursor }) => {
+  handler: async (ctx, { mode, bucketMs: bucketMsArg, cursor, pageSize }) => {
     const bucketMs = bucketMsArg ?? 1000;
-    // Paginate through completed jobs (8000 per page to stay under read limits)
-    const PAGE_SIZE = 8000;
-    const query = ctx.db
+    assertPositiveInt(bucketMs, "bucketMs");
+    if (pageSize !== undefined) {
+      assertPositiveInt(pageSize, "pageSize");
+      if (pageSize > MAX_CONCURRENCY_PAGE_SIZE) {
+        throw new Error(`pageSize must be <= ${MAX_CONCURRENCY_PAGE_SIZE}`);
+      }
+    }
+    // Paginate through completed jobs to stay under read limits.
+    const queryBuilder = ctx.db
       .query("jobs")
       .withIndex("by_mode_status", (q) =>
         q.eq("mode", mode).eq("status", "completed"),
       );
-    const jobs = cursor
-      ? await query.take(PAGE_SIZE) // simplified: re-scans from start
-      : await query.take(PAGE_SIZE);
+    const page = await queryBuilder.paginate({
+      numItems: pageSize ?? MAX_CONCURRENCY_PAGE_SIZE,
+      cursor: cursor ?? null,
+    });
+    const jobs = page.page;
 
     // Collect all fetch intervals
     const events: { time: number; delta: number }[] = [];
@@ -234,7 +249,14 @@ export const concurrency = query({
         events.push({ time: job.fetch2End, delta: -1 });
       }
     }
-    if (events.length === 0) return { buckets: [], hasMore: false };
+    if (events.length === 0) {
+      return {
+        buckets: [],
+        hasMore: !page.isDone,
+        cursor: page.continueCursor,
+        jobsProcessed: jobs.length,
+      };
+    }
 
     // Sort by time
     events.sort((a, b) => a.time - b.time);
@@ -256,17 +278,69 @@ export const concurrency = query({
 
     return {
       buckets,
-      hasMore: jobs.length === PAGE_SIZE,
+      hasMore: !page.isDone,
+      cursor: page.continueCursor,
       jobsProcessed: jobs.length,
     };
   },
 });
 
-// ─── Stress test: pure queue mechanics, no external API calls ──────────────
+// ─── Stress test: standard mode (1 action per task) ────────────────────────
+
+export const runStandardStress = mutation({
+  args: {
+    count: v.number(),
+    handler: stressHandler,
+  },
+  handler: async (ctx, { count, handler }) => {
+    assertNonNegativeInt(count, "count");
+    const actionRef =
+      handler === "slowWork"
+        ? internal.standardActions.slowWork
+        : internal.standardActions.echo;
+    const chunk = Math.min(count, CHUNK_SIZE);
+    for (let i = 0; i < chunk; i++) {
+      await standard.enqueueAction(ctx, actionRef, { i });
+    }
+    const remaining = count - chunk;
+    if (remaining > 0) {
+      await ctx.scheduler.runAfter(0, internal.test._runStandardStressChunk, {
+        remaining,
+        handler,
+      });
+    }
+    return { started: count, handler, mode: "standard" };
+  },
+});
+
+export const _runStandardStressChunk = internalMutation({
+  args: { remaining: v.number(), handler: stressHandler },
+  handler: async (ctx, { remaining, handler }) => {
+    assertNonNegativeInt(remaining, "remaining");
+    const actionRef =
+      handler === "slowWork"
+        ? internal.standardActions.slowWork
+        : internal.standardActions.echo;
+    const chunk = Math.min(remaining, CHUNK_SIZE);
+    for (let i = 0; i < chunk; i++) {
+      await standard.enqueueAction(ctx, actionRef, { i });
+    }
+    const left = remaining - chunk;
+    if (left > 0) {
+      await ctx.scheduler.runAfter(0, internal.test._runStandardStressChunk, {
+        remaining: left,
+        handler,
+      });
+    }
+  },
+});
+
+// ─── Stress test: batch mode (shared executors) ────────────────────────────
 
 export const runStress = mutation({
-  args: { count: v.number(), handler: v.optional(v.string()) },
+  args: { count: v.number(), handler: v.optional(batchStressHandler) },
   handler: async (ctx, { count, handler }) => {
+    assertNonNegativeInt(count, "count");
     const name = handler ?? "simulatedWork";
     const chunk = Math.min(count, CHUNK_SIZE);
     const tasks = [];
@@ -286,8 +360,9 @@ export const runStress = mutation({
 });
 
 export const _runStressChunk = internalMutation({
-  args: { remaining: v.number(), handler: v.optional(v.string()) },
+  args: { remaining: v.number(), handler: v.optional(batchStressHandler) },
   handler: async (ctx, { remaining, handler }) => {
+    assertNonNegativeInt(remaining, "remaining");
     const name = handler ?? "simulatedWork";
     const chunk = Math.min(remaining, CHUNK_SIZE);
     const tasks = [];
@@ -334,3 +409,34 @@ export const reset = mutation({
     return { deleted: jobs.length, more: jobs.length === 1000 };
   },
 });
+
+function assertNonNegativeInt(value: number, name: string) {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`${name} must be a non-negative integer`);
+  }
+}
+
+function assertPositiveInt(value: number, name: string) {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+}
+
+async function countJobsByModeStatus(
+  ctx: any,
+  mode: "standard" | "batch",
+  status: "pending" | "step1" | "step2" | "failed",
+) {
+  let total = 0;
+  let cursor: string | null = null;
+  while (true) {
+    const page = await ctx.db
+      .query("jobs")
+      .withIndex("by_mode_status", (q) => q.eq("mode", mode).eq("status", status))
+      .paginate({ numItems: MAX_CONCURRENCY_PAGE_SIZE, cursor });
+    total += page.page.length;
+    if (page.isDone) break;
+    cursor = page.continueCursor;
+  }
+  return total;
+}

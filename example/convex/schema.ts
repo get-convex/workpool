@@ -6,6 +6,7 @@ export default defineSchema({
     data: v.number(),
   }),
 
+
   // Jobs table for the standard vs batch comparison test
   jobs: defineTable({
     sentence: v.string(),

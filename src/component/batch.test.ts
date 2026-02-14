@@ -47,7 +47,7 @@ describe("batch", () => {
   ) {
     await t.run(async (ctx) => {
       await ctx.db.insert("batchConfig", {
-        executorHandle: overrides?.executorHandle ?? "function://test-executor",
+        executorHandle: overrides?.executorHandle ?? "batchTestExecutor:noop",
         maxWorkers: overrides?.maxWorkers ?? 10,
         activeSlots: overrides?.activeSlots ?? [],
         claimTimeoutMs: overrides?.claimTimeoutMs ?? 120_000,
@@ -85,7 +85,7 @@ describe("batch", () => {
         slot: 0,
         args: {},
         batchConfig: {
-          executorHandle: "function://my-executor",
+          executorHandle: "batchTestExecutor:noop",
           maxWorkers: 5,
           claimTimeoutMs: 60_000,
         },
@@ -99,7 +99,7 @@ describe("batch", () => {
       await t.run(async (ctx) => {
         const config = await ctx.db.query("batchConfig").unique();
         expect(config).not.toBeNull();
-        expect(config!.executorHandle).toBe("function://my-executor");
+        expect(config!.executorHandle).toBe("batchTestExecutor:noop");
         expect(config!.maxWorkers).toBe(5);
         expect(config!.claimTimeoutMs).toBe(60_000);
         // activeSlots has all 5 slots because _ensureExecutors starts all workers
@@ -702,7 +702,7 @@ describe("batch", () => {
         slot: 0,
         args: {},
         batchConfig: {
-          executorHandle: "function://test-executor",
+          executorHandle: "batchTestExecutor:noop",
           maxWorkers: 2,
           claimTimeoutMs: 120_000,
         },
@@ -725,7 +725,7 @@ describe("batch", () => {
         slot: 0,
         args: {},
         batchConfig: {
-          executorHandle: "function://test-executor",
+          executorHandle: "batchTestExecutor:noop",
           maxWorkers: 5,
           claimTimeoutMs: 120_000,
         },
@@ -750,7 +750,7 @@ describe("batch", () => {
           { name: "handler2", slot: 1, args: { b: 2 } },
         ],
         batchConfig: {
-          executorHandle: "function://bulk-executor",
+          executorHandle: "batchTestExecutor:noop",
           maxWorkers: 3,
           claimTimeoutMs: 90_000,
         },
@@ -764,7 +764,7 @@ describe("batch", () => {
       await t.run(async (ctx) => {
         const config = await ctx.db.query("batchConfig").unique();
         expect(config).not.toBeNull();
-        expect(config!.executorHandle).toBe("function://bulk-executor");
+        expect(config!.executorHandle).toBe("batchTestExecutor:noop");
         expect(config!.maxWorkers).toBe(3);
         expect(config!.claimTimeoutMs).toBe(90_000);
         // All 3 slots active
@@ -776,7 +776,7 @@ describe("batch", () => {
   describe("configure", () => {
     it("should create batch config", async () => {
       await t.mutation(api.batch.configure, {
-        executorHandle: "function://test",
+        executorHandle: "batchTestExecutor:noop",
         maxWorkers: 5,
         claimTimeoutMs: 30_000,
       });
@@ -784,7 +784,7 @@ describe("batch", () => {
       await t.run(async (ctx) => {
         const config = await ctx.db.query("batchConfig").unique();
         expect(config).not.toBeNull();
-        expect(config!.executorHandle).toBe("function://test");
+        expect(config!.executorHandle).toBe("batchTestExecutor:noop");
         expect(config!.maxWorkers).toBe(5);
         expect(config!.claimTimeoutMs).toBe(30_000);
         expect(config!.activeSlots).toEqual([]);
@@ -793,13 +793,13 @@ describe("batch", () => {
 
     it("should update existing batch config", async () => {
       await t.mutation(api.batch.configure, {
-        executorHandle: "function://old",
+        executorHandle: "batchTestExecutor:noop",
         maxWorkers: 5,
         claimTimeoutMs: 30_000,
       });
 
       await t.mutation(api.batch.configure, {
-        executorHandle: "function://new",
+        executorHandle: "batchTestExecutor:noopAlt",
         maxWorkers: 20,
         claimTimeoutMs: 60_000,
       });
@@ -807,7 +807,7 @@ describe("batch", () => {
       await t.run(async (ctx) => {
         const configs = await ctx.db.query("batchConfig").collect();
         expect(configs).toHaveLength(1);
-        expect(configs[0].executorHandle).toBe("function://new");
+        expect(configs[0].executorHandle).toBe("batchTestExecutor:noopAlt");
         expect(configs[0].maxWorkers).toBe(20);
       });
     });
@@ -1867,7 +1867,7 @@ describe("batch", () => {
     it("does not write when config already matches", async () => {
       // First configure
       await t.mutation(api.batch.configure, {
-        executorHandle: "function://exec",
+        executorHandle: "batchTestExecutor:noop",
         maxWorkers: 5,
         claimTimeoutMs: 120_000,
       });
@@ -1881,7 +1881,7 @@ describe("batch", () => {
 
       // Configure with same values
       await t.mutation(api.batch.configure, {
-        executorHandle: "function://exec",
+        executorHandle: "batchTestExecutor:noop",
         maxWorkers: 5,
         claimTimeoutMs: 120_000,
       });
@@ -1997,7 +1997,7 @@ describe("batch", () => {
       const taskId1 = await t.mutation(api.batch.enqueue, {
         name: "h1", slot: 0, args: {},
         batchConfig: {
-          executorHandle: "function://exec",
+          executorHandle: "batchTestExecutor:noop",
           maxWorkers: 3,
           claimTimeoutMs: 120_000,
         },
@@ -2006,7 +2006,7 @@ describe("batch", () => {
       const taskId2 = await t.mutation(api.batch.enqueue, {
         name: "h2", slot: 1, args: {},
         batchConfig: {
-          executorHandle: "function://exec",
+          executorHandle: "batchTestExecutor:noop",
           maxWorkers: 3,
           claimTimeoutMs: 120_000,
         },
@@ -2156,7 +2156,7 @@ describe("batch", () => {
       await t.mutation(api.batch.enqueue, {
         name: "first-task", slot: 0, args: {},
         batchConfig: {
-          executorHandle: "function://test-executor",
+          executorHandle: "batchTestExecutor:noop",
           maxWorkers: 2,
           claimTimeoutMs: 120_000,
         },

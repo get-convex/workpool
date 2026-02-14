@@ -25,3 +25,20 @@ export const countLetters = internalAction({
     return text.replace(/\s/g, "").length;
   },
 });
+
+// Stress test handlers (mirror batch equivalents for apples-to-apples comparison)
+
+export const echo = internalAction({
+  args: { i: v.number() },
+  handler: async (_ctx, { i }) => {
+    return i;
+  },
+});
+
+export const slowWork = internalAction({
+  args: { i: v.number() },
+  handler: async (_ctx, { i }) => {
+    await new Promise((r) => setTimeout(r, 2000));
+    return i;
+  },
+});
