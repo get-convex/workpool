@@ -470,7 +470,6 @@ export class BatchWorkpool {
   private cachedBatchConfig:
     | { executorHandle: string; maxWorkers: number; claimTimeoutMs: number }
     | undefined;
-  private configSentThisTx = false;
 
   constructor(component: ComponentApi, options?: BatchWorkpoolOptions) {
     this.component = component;
@@ -587,11 +586,7 @@ export class BatchWorkpool {
     args: DefaultFunctionArgs,
     options?: BatchEnqueueOptions,
   ): Promise<BatchTaskId> {
-    // Only pass batchConfig on first enqueue per mutation to avoid
-    // OCC contention on the batchConfig singleton.
-    const batchConfig = this.configSentThisTx
-      ? undefined
-      : await this.getBatchConfig();
+    const batchConfig = await this.getBatchConfig();
     const onComplete = options?.onComplete
       ? {
           fnHandle: await createFunctionHandle(options.onComplete),
@@ -609,7 +604,6 @@ export class BatchWorkpool {
       retryBehavior,
       batchConfig,
     });
-    if (batchConfig) this.configSentThisTx = true;
     return id as unknown as BatchTaskId;
   }
 
@@ -624,9 +618,7 @@ export class BatchWorkpool {
       options?: BatchEnqueueOptions;
     }>,
   ): Promise<BatchTaskId[]> {
-    const batchConfig = this.configSentThisTx
-      ? undefined
-      : await this.getBatchConfig();
+    const batchConfig = await this.getBatchConfig();
     const maxWorkers = this.options.maxWorkers ?? 10;
     const resolvedTasks = await Promise.all(
       tasks.map(async (task) => ({
@@ -646,7 +638,6 @@ export class BatchWorkpool {
       tasks: resolvedTasks,
       batchConfig,
     });
-    if (batchConfig) this.configSentThisTx = true;
     return ids as unknown as BatchTaskId[];
   }
 
@@ -712,9 +703,7 @@ export class BatchWorkpool {
       retry?: boolean | RetryBehavior;
     },
   ): Promise<BatchTaskId> {
-    const batchConfig = this.configSentThisTx
-      ? undefined
-      : await this.getBatchConfig();
+    const batchConfig = await this.getBatchConfig();
     const retryBehavior = this.getRetryBehavior(options?.retry);
     const maxWorkers = this.options.maxWorkers ?? 10;
     const slot = Math.floor(Math.random() * maxWorkers);
@@ -726,7 +715,6 @@ export class BatchWorkpool {
       retryBehavior,
       batchConfig,
     });
-    if (batchConfig) this.configSentThisTx = true;
     return id as unknown as BatchTaskId;
   }
 

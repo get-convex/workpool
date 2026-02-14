@@ -93,7 +93,7 @@ describe("batch", () => {
 
       expect(taskId).toBeDefined();
 
-      // Flush the scheduled _maybeStartExecutors mutation
+      // Flush the scheduled _ensureExecutors mutation
       await (t.finishAllScheduledFunctions as any)(() => vi.advanceTimersByTime(1000), 10);
 
       await t.run(async (ctx) => {
@@ -102,7 +102,7 @@ describe("batch", () => {
         expect(config!.executorHandle).toBe("function://my-executor");
         expect(config!.maxWorkers).toBe(5);
         expect(config!.claimTimeoutMs).toBe(60_000);
-        // activeSlots has all 5 slots because _maybeStartExecutors starts all workers
+        // activeSlots has all 5 slots because _ensureExecutors starts all workers
         expect(config!.activeSlots.sort()).toEqual([0, 1, 2, 3, 4]);
       });
     });
@@ -692,11 +692,11 @@ describe("batch", () => {
     });
   });
 
-  describe("_maybeStartExecutors", () => {
+  describe("_ensureExecutors", () => {
     it("should not start slots already active", async () => {
       await setupPoolConfig({ maxWorkers: 2, activeSlots: [0, 1] });
 
-      // Enqueue a task — _maybeStartExecutors runs but should not start more
+      // Enqueue a task — _ensureExecutors runs but should not start more
       await t.mutation(api.batch.enqueue, {
         name: "handler",
         slot: 0,
@@ -708,7 +708,7 @@ describe("batch", () => {
         },
       });
 
-      // Flush the scheduled _maybeStartExecutors mutation
+      // Flush the scheduled _ensureExecutors mutation
       await (t.finishAllScheduledFunctions as any)(() => vi.advanceTimersByTime(1000), 10);
 
       await t.run(async (ctx) => {
@@ -731,7 +731,7 @@ describe("batch", () => {
         },
       });
 
-      // Flush the scheduled _maybeStartExecutors mutation
+      // Flush the scheduled _ensureExecutors mutation
       await (t.finishAllScheduledFunctions as any)(() => vi.advanceTimersByTime(1000), 10);
 
       await t.run(async (ctx) => {
@@ -758,7 +758,7 @@ describe("batch", () => {
 
       expect(taskIds).toHaveLength(2);
 
-      // Flush the scheduled _maybeStartExecutors mutation
+      // Flush the scheduled _ensureExecutors mutation
       await (t.finishAllScheduledFunctions as any)(() => vi.advanceTimersByTime(1000), 10);
 
       await t.run(async (ctx) => {
@@ -1991,9 +1991,9 @@ describe("batch", () => {
     });
   });
 
-  describe("_maybeStartExecutors idempotency", () => {
+  describe("_ensureExecutors idempotency", () => {
     it("concurrent calls don't create duplicate slots", async () => {
-      // Simulate two enqueue mutations both scheduling _maybeStartExecutors
+      // Simulate two enqueue mutations both scheduling _ensureExecutors
       const taskId1 = await t.mutation(api.batch.enqueue, {
         name: "h1", slot: 0, args: {},
         batchConfig: {
@@ -2012,7 +2012,7 @@ describe("batch", () => {
         },
       });
 
-      // Flush both scheduled _maybeStartExecutors
+      // Flush both scheduled _ensureExecutors
       await (t.finishAllScheduledFunctions as any)(() => vi.advanceTimersByTime(1000), 10);
 
       await t.run(async (ctx) => {
@@ -2149,7 +2149,7 @@ describe("batch", () => {
       // 1. First enqueue with batchConfig → executors start, watchdog starts
       // 2. All tasks complete → executors call executorDone(false) → activeSlots = []
       // 3. Watchdog fires, sees no work → stops (doesn't reschedule)
-      // 4. New enqueue WITHOUT batchConfig (simulating configSentThisTx=true)
+      // 4. New enqueue WITHOUT batchConfig (simulating no batchConfig in args)
       // 5. Executors SHOULD be started for the new task
 
       // Step 1: Initial enqueue with config
@@ -2162,7 +2162,7 @@ describe("batch", () => {
         },
       });
 
-      // Flush scheduled _maybeStartExecutors
+      // Flush scheduled _ensureExecutors
       await (t.finishAllScheduledFunctions as any)(() => vi.advanceTimersByTime(1000), 10);
 
       // Verify executors were started
@@ -2193,7 +2193,7 @@ describe("batch", () => {
       await t.mutation(internal.batch._watchdog, {});
 
       // Step 5: New task enqueued WITHOUT batchConfig
-      // (simulates configSentThisTx=true in the BatchWorkpool class)
+      // (simulates no batchConfig in args in the BatchWorkpool class)
       const newTaskId = await t.mutation(api.batch.enqueue, {
         name: "second-task", slot: 0, args: {},
         // NO batchConfig!

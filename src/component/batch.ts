@@ -70,17 +70,11 @@ export const enqueue = mutation({
 
     // Schedule executor start in a separate transaction to avoid OCC
     // conflicts on the batchConfig singleton.
-    if (args.batchConfig) {
-      await ctx.scheduler.runAfter(
-        0,
-        internal.batch._maybeStartExecutors,
-        args.batchConfig,
-      );
-    } else {
-      // No batchConfig means the client's configSentThisTx optimization
-      // skipped it. Ensure executors are running from the DB config.
-      await ctx.scheduler.runAfter(0, internal.batch._ensureExecutors, {});
-    }
+    await ctx.scheduler.runAfter(
+      0,
+      internal.batch._ensureExecutors,
+      args.batchConfig ? { batchConfig: args.batchConfig } : {},
+    );
     return taskId;
   },
 });
@@ -115,15 +109,11 @@ export const enqueueBatch = mutation({
       ),
     );
 
-    if (args.batchConfig) {
-      await ctx.scheduler.runAfter(
-        0,
-        internal.batch._maybeStartExecutors,
-        args.batchConfig,
-      );
-    } else {
-      await ctx.scheduler.runAfter(0, internal.batch._ensureExecutors, {});
-    }
+    await ctx.scheduler.runAfter(
+      0,
+      internal.batch._ensureExecutors,
+      args.batchConfig ? { batchConfig: args.batchConfig } : {},
+    );
     return ids;
   },
 });
@@ -610,16 +600,20 @@ export const executorDone = mutation({
 // ─── Internal: executor startup (separate tx to avoid OCC) ──────────────
 
 /**
- * Scheduled from enqueue/enqueueBatch to set up config and start executors
- * in a separate transaction. This avoids OCC conflicts between concurrent
- * enqueue mutations that would otherwise all read/write the batchConfig doc.
+ * Scheduled from enqueue/enqueueBatch to start executors in a separate
+ * transaction. This avoids OCC conflicts between concurrent enqueue
+ * mutations that would otherwise all read/write the batchConfig doc.
+ *
+ * Optionally accepts batchConfig for lazy init on first enqueue.
+ * Idempotent — safe to call multiple times concurrently.
  */
-export const _maybeStartExecutors = internalMutation({
-  args: batchConfigArgs,
+export const _ensureExecutors = internalMutation({
+  args: { batchConfig: v.optional(batchConfigArgs) },
   handler: async (ctx, args) => {
-    await upsertBatchConfig(ctx, args);
+    if (args.batchConfig) {
+      await upsertBatchConfig(ctx, args.batchConfig);
+    }
 
-    // Start executors for any missing slots 0..maxWorkers-1.
     const config = await ctx.db.query("batchConfig").unique();
     if (!config) return;
 
@@ -640,49 +634,6 @@ export const _maybeStartExecutors = internalMutation({
     }
 
     // Schedule watchdog if not recently scheduled (dedup window: 20s)
-    const now = Date.now();
-    if (
-      !config.watchdogScheduledAt ||
-      now - config.watchdogScheduledAt > 20_000
-    ) {
-      await ctx.scheduler.runAfter(30_000, internal.batch._watchdog);
-      patch.watchdogScheduledAt = now;
-    }
-
-    if (Object.keys(patch).length > 0) {
-      await ctx.db.patch(config._id, patch);
-    }
-  },
-});
-
-/**
- * Lightweight executor check — reads config from DB and starts missing
- * executors + watchdog. Scheduled from enqueue when batchConfig is not
- * provided (client-side configSentThisTx optimization).
- */
-export const _ensureExecutors = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const config = await ctx.db.query("batchConfig").unique();
-    if (!config) return;
-
-    const activeSet = new Set(config.activeSlots);
-    const handle = config.executorHandle as FunctionHandle<"action">;
-    const newSlots = [...config.activeSlots];
-
-    for (let slot = 0; slot < config.maxWorkers; slot++) {
-      if (!activeSet.has(slot)) {
-        await ctx.scheduler.runAfter(0, handle, { slot });
-        newSlots.push(slot);
-      }
-    }
-
-    const patch: Record<string, unknown> = {};
-    if (newSlots.length !== config.activeSlots.length) {
-      patch.activeSlots = newSlots;
-    }
-
-    // Restart watchdog if not recently scheduled
     const now = Date.now();
     if (
       !config.watchdogScheduledAt ||
