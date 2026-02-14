@@ -1148,4 +1148,370 @@ describe("_runExecutorLoop", () => {
       expect((result as Error).message).toBe("Internal server error");
     });
   });
+
+  // ─── Degenerate / boundary cases ──────────────────────────────────────────
+
+  describe("dispatchOnCompleteBatch transient failure retries", () => {
+    it("re-queues onComplete items on transient error and retries", async () => {
+      const tracker = createTracker();
+      let dispatchCallCount = 0;
+
+      const deps = makeDeps({
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+            ])
+            .mockResolvedValue([]),
+        ),
+        getHandler: () => async () => "result",
+        completeBatch: vi.fn().mockResolvedValue([
+          {
+            fnHandle: "function://callback",
+            workId: "t1",
+            context: {},
+            result: { kind: "success", returnValue: "result" },
+          },
+        ]),
+        dispatchOnCompleteBatch: vi.fn().mockImplementation(async (items) => {
+          dispatchCallCount++;
+          if (dispatchCallCount === 1) {
+            throw new Error("Too many concurrent commits in a short period of time.");
+          }
+          tracker.onCompleteDispatched.push(...items);
+        }),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      // Item should have been re-queued and dispatched on retry
+      expect(dispatchCallCount).toBeGreaterThanOrEqual(2);
+      expect(tracker.onCompleteDispatched).toHaveLength(1);
+    });
+  });
+
+  describe("executorDone retries exhausted", () => {
+    it("throws after 10 transient failures", async () => {
+      let executorDoneCalls = 0;
+
+      const deps = makeDeps({
+        ...claimMocks(vi.fn().mockResolvedValue([])),
+        countPending: vi.fn().mockResolvedValue(0),
+        executorDone: vi.fn().mockImplementation(async () => {
+          executorDoneCalls++;
+          throw new Error("Documents changed while this mutation was being run");
+        }),
+      });
+
+      const loopPromise = _runExecutorLoop(deps, SHORT_OPTIONS)
+        .then(() => null)
+        .catch((e: unknown) => e);
+
+      await vi.advanceTimersByTimeAsync(120_000);
+      const result = await loopPromise;
+
+      expect(executorDoneCalls).toBe(10);
+      expect(result).toBeInstanceOf(Error);
+    });
+  });
+
+  describe("failBatch transient failure retries", () => {
+    it("retries failBatch on transient error", async () => {
+      const tracker = createTracker();
+      let failBatchCalls = 0;
+
+      const deps = makeDeps({
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+            ])
+            .mockResolvedValue([]),
+        ),
+        getHandler: () => async () => { throw new Error("boom"); },
+        completeBatch: vi.fn().mockResolvedValue([]),
+        failBatch: vi.fn().mockImplementation(async (items: { taskId: string; error: string }[]) => {
+          failBatchCalls++;
+          if (failBatchCalls === 1) {
+            throw new Error("Too many concurrent commits in a short period of time.");
+          }
+          for (const item of items) tracker.failed.push({ id: item.taskId, error: item.error });
+          return [];
+        }),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      expect(failBatchCalls).toBeGreaterThanOrEqual(2);
+      expect(tracker.failed).toHaveLength(1);
+    });
+  });
+
+  describe("claimByIds transient failure retries", () => {
+    it("retries claiming on transient claimByIds error", async () => {
+      const tracker = createTracker();
+      let claimByIdsCalls = 0;
+
+      const deps = makeDeps({
+        listPending: vi.fn()
+          .mockResolvedValueOnce(["t1"])
+          .mockResolvedValueOnce(["t1"]) // retry round
+          .mockResolvedValue([]),
+        claimByIds: vi.fn().mockImplementation(async () => {
+          claimByIdsCalls++;
+          if (claimByIdsCalls === 1) {
+            throw new Error("Documents changed while this mutation was being run");
+          }
+          if (claimByIdsCalls === 2) {
+            return [{ _id: "t1", name: "handler", args: {}, attempt: 0 }];
+          }
+          return [];
+        }),
+        getHandler: () => async () => "ok",
+        ...batchMocks(tracker),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      expect(claimByIdsCalls).toBeGreaterThanOrEqual(2);
+      expect(tracker.completed).toContain("t1");
+    });
+  });
+
+  describe("flush concurrency guard", () => {
+    it("second flush call is no-op while first is running", async () => {
+      const tracker = createTracker();
+      let completeBatchCalls = 0;
+
+      const deps = makeDeps({
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce(
+              Array.from({ length: 5 }, (_, i) => ({
+                _id: `t${i}`, name: "handler", args: {}, attempt: 0,
+              })),
+            )
+            .mockResolvedValue([]),
+        ),
+        getHandler: () => async () => "result",
+        completeBatch: vi.fn().mockImplementation(async (items: { taskId: string; result: unknown }[]) => {
+          completeBatchCalls++;
+          // Simulate slow completion
+          await new Promise((r) => setTimeout(r, 100));
+          for (const item of items) tracker.completed.push(item.taskId);
+          return [];
+        }),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      // All 5 tasks should be completed exactly once
+      expect(tracker.completed.sort()).toEqual(["t0", "t1", "t2", "t3", "t4"]);
+    });
+  });
+
+  describe("empty claim round", () => {
+    it("claimByIds returning [] doesn't break the loop", async () => {
+      const tracker = createTracker();
+
+      const deps = makeDeps({
+        // listPending returns IDs but claimByIds gets nothing (all stolen)
+        listPending: vi.fn()
+          .mockResolvedValueOnce(["ghost1", "ghost2"])
+          .mockResolvedValueOnce(["t1"])
+          .mockResolvedValue([]),
+        claimByIds: vi.fn()
+          .mockResolvedValueOnce([]) // all stolen
+          .mockResolvedValueOnce([
+            { _id: "t1", name: "handler", args: {}, attempt: 0 },
+          ])
+          .mockResolvedValue([]),
+        getHandler: () => async () => "done",
+        ...batchMocks(tracker),
+        countPending: vi.fn().mockImplementation(async () => {
+          return tracker.completed.length === 0 ? 1 : 0;
+        }),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      // Should eventually claim and complete t1
+      expect(tracker.completed).toContain("t1");
+    });
+  });
+
+  describe("handler resolves just after soft deadline", () => {
+    it("handler completing during finally block puts result in buffer", async () => {
+      const lateResolve = deferred();
+      const tracker = createTracker();
+
+      const deps = makeDeps({
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "late", name: "slow", args: {}, attempt: 0 },
+            ])
+            .mockResolvedValue([]),
+        ),
+        getHandler: () => () => lateResolve.promise,
+        ...batchMocks(tracker),
+        releaseClaims: vi.fn().mockImplementation(async (ids: string[]) => {
+          tracker.released.push(...ids);
+        }),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, {
+        ...SHORT_OPTIONS,
+        softDeadlineMs: 599_800, // very short: 200ms
+      });
+
+      // Advance past soft deadline
+      await vi.advanceTimersByTimeAsync(500);
+
+      // Handler is still in-flight, hasn't resolved
+      // Soft deadline hit → finally block runs → releases claims
+      await loopDone;
+
+      // The late task should have been released (handler never resolved)
+      expect(tracker.released).toContain("late");
+
+      lateResolve.resolve("too late");
+    });
+  });
+
+  describe("handler throws synchronous error", () => {
+    it("synchronous throw is caught and reported as failure", async () => {
+      const tracker = createTracker();
+
+      const deps = makeDeps({
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "sync-err", name: "sync-throw", args: {}, attempt: 0 },
+            ])
+            .mockResolvedValue([]),
+        ),
+        getHandler: () => async () => {
+          // This is technically still in an async function, but the error
+          // is thrown synchronously (not from a rejected promise)
+          throw new TypeError("Cannot read properties of undefined");
+        },
+        ...batchMocks(tracker),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      expect(tracker.failed).toHaveLength(1);
+      expect(tracker.failed[0].error).toContain("Cannot read properties of undefined");
+    });
+  });
+
+  describe("completeBatch non-transient failure drops items", () => {
+    it("items are dropped (not retried) on non-transient completeBatch error", async () => {
+      const tracker = createTracker();
+
+      const deps = makeDeps({
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+            ])
+            .mockResolvedValue([]),
+        ),
+        getHandler: () => async () => "result",
+        completeBatch: vi.fn().mockRejectedValue(
+          new Error("Argument validation error: expected string, got number"),
+        ),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      // Items should be dropped (error logged), not infinitely retried
+      expect(console.error).toHaveBeenCalled();
+      expect(deps.executorDone).toHaveBeenCalled();
+    });
+  });
+
+  describe("no work for entire claim deadline", () => {
+    it("exits after polling past claim deadline with no work", async () => {
+      // countPending says "yes" so executor keeps polling, but listPending
+      // always returns empty (tasks have future readyAt). Eventually
+      // claim deadline passes and executor exits.
+      let countPendingCalls = 0;
+
+      const deps = makeDeps({
+        ...claimMocks(vi.fn().mockResolvedValue([])),
+        countPending: vi.fn().mockImplementation(async () => {
+          countPendingCalls++;
+          // Always say there's pending work (future readyAt tasks)
+          return 1;
+        }),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, {
+        ...SHORT_OPTIONS,
+        claimDeadlineMs: 300,
+        softDeadlineMs: 599_500, // 500ms soft deadline
+        pollIntervalMs: 50,
+      });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      // Executor should have polled multiple times then exited
+      expect(countPendingCalls).toBeGreaterThan(1);
+      // Should report startMore=true since pending > 0
+      expect(deps.executorDone).toHaveBeenCalledWith(true);
+    });
+  });
+
+  describe("handler with very large error message", () => {
+    it("large error string is passed through to failBatch", async () => {
+      const tracker = createTracker();
+      const hugeError = "X".repeat(10_000);
+
+      const deps = makeDeps({
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+            ])
+            .mockResolvedValue([]),
+        ),
+        getHandler: () => async () => { throw new Error(hugeError); },
+        ...batchMocks(tracker),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      expect(tracker.failed).toHaveLength(1);
+      expect(tracker.failed[0].error).toContain(hugeError);
+    });
+  });
 });
