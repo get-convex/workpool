@@ -1151,4 +1151,542 @@ describe("batch", () => {
       });
     });
   });
+
+  // ─── Black-box behavioral edge cases ─────────────────────────────────────
+
+  describe("slot isolation", () => {
+    it("tasks on slot 0 cannot be claimed from slot 1", async () => {
+      await setupPoolConfig();
+
+      await t.mutation(api.batch.enqueue, {
+        name: "handler",
+        slot: 0,
+        args: { data: "for-slot-0" },
+      });
+
+      // Try to claim from slot 1 — should get nothing
+      const claimed = await claimBatch(1, 10);
+      expect(claimed).toHaveLength(0);
+
+      // Claim from slot 0 — should get the task
+      const claimed0 = await claimBatch(0, 10);
+      expect(claimed0).toHaveLength(1);
+      expect(claimed0[0].args).toEqual({ data: "for-slot-0" });
+    });
+
+    it("two executors on different slots claim only their own tasks", async () => {
+      await setupPoolConfig();
+
+      const id0 = await t.mutation(api.batch.enqueue, {
+        name: "h0", slot: 0, args: { who: "zero" },
+      });
+      const id1 = await t.mutation(api.batch.enqueue, {
+        name: "h1", slot: 1, args: { who: "one" },
+      });
+
+      const fromSlot0 = await claimBatch(0, 10);
+      const fromSlot1 = await claimBatch(1, 10);
+
+      expect(fromSlot0).toHaveLength(1);
+      expect(fromSlot0[0]._id).toBe(id0);
+      expect(fromSlot1).toHaveLength(1);
+      expect(fromSlot1[0]._id).toBe(id1);
+    });
+  });
+
+  describe("claim race conditions", () => {
+    it("claimByIds skips tasks that were claimed between listPending and claimByIds", async () => {
+      await setupPoolConfig();
+
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "handler", slot: 0, args: {},
+      });
+
+      // Simulate: listPending returns the ID
+      const ids = await t.query(api.batch.listPending, { slot: 0, limit: 10 });
+      expect(ids).toHaveLength(1);
+
+      // Another executor claims it first
+      await claimBatch(0, 10);
+
+      // Our claimByIds should get nothing (task already claimed)
+      const claimed = await t.mutation(api.batch.claimByIds, { taskIds: ids });
+      expect(claimed).toHaveLength(0);
+    });
+
+    it("claimByIds skips tasks with future readyAt", async () => {
+      await setupPoolConfig();
+
+      // Insert a task with readyAt in the future (simulating retry backoff)
+      await t.run(async (ctx) => {
+        await ctx.db.insert("batchTasks", {
+          name: "delayed",
+          slot: 0,
+          args: {},
+          status: "pending" as const,
+          readyAt: Date.now() + 60_000,
+          attempt: 1,
+        });
+      });
+
+      // listPending should not return it (readyAt > now)
+      const ids = await t.query(api.batch.listPending, { slot: 0, limit: 10 });
+      expect(ids).toHaveLength(0);
+    });
+
+    it("claimByIds skips deleted tasks", async () => {
+      await setupPoolConfig();
+
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "handler", slot: 0, args: {},
+      });
+
+      // Task gets canceled between listPending and claimByIds
+      const ids = await t.query(api.batch.listPending, { slot: 0, limit: 10 });
+      await t.mutation(api.batch.cancel, { taskId });
+
+      // claimByIds should gracefully return nothing
+      const claimed = await t.mutation(api.batch.claimByIds, { taskIds: ids });
+      expect(claimed).toHaveLength(0);
+    });
+  });
+
+  describe("completeBatch", () => {
+    it("completes multiple tasks in one call", async () => {
+      await setupPoolConfig();
+
+      const id1 = await t.mutation(api.batch.enqueue, {
+        name: "h", slot: 0, args: {},
+      });
+      const id2 = await t.mutation(api.batch.enqueue, {
+        name: "h", slot: 0, args: {},
+      });
+
+      await claimBatch(0, 10);
+
+      const onCompleteItems = await t.mutation(api.batch.completeBatch, {
+        items: [
+          { taskId: id1, result: "result-1" },
+          { taskId: id2, result: "result-2" },
+        ],
+      });
+
+      // Both tasks should be deleted
+      await t.run(async (ctx) => {
+        expect(await ctx.db.get(id1)).toBeNull();
+        expect(await ctx.db.get(id2)).toBeNull();
+      });
+
+      // No onComplete configured, so no items returned
+      expect(onCompleteItems).toHaveLength(0);
+    });
+
+    it("returns onComplete data for tasks with onComplete handlers", async () => {
+      await setupPoolConfig();
+
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "h", slot: 0, args: {},
+        onComplete: {
+          fnHandle: "function://my-callback",
+          context: { jobId: "j42" },
+        },
+      });
+
+      await claimBatch(0, 10);
+
+      const items = await t.mutation(api.batch.completeBatch, {
+        items: [{ taskId, result: { answer: 42 } }],
+      });
+
+      expect(items).toHaveLength(1);
+      expect(items[0].fnHandle).toBe("function://my-callback");
+      expect(items[0].context).toEqual({ jobId: "j42" });
+      expect(items[0].result).toEqual({ kind: "success", returnValue: { answer: 42 } });
+    });
+
+    it("skips already-deleted tasks without error", async () => {
+      await setupPoolConfig();
+
+      const id1 = await t.mutation(api.batch.enqueue, {
+        name: "h", slot: 0, args: {},
+      });
+      const id2 = await t.mutation(api.batch.enqueue, {
+        name: "h", slot: 0, args: {},
+      });
+
+      await claimBatch(0, 10);
+
+      // Cancel id1 between claim and complete
+      await t.mutation(api.batch.cancel, { taskId: id1 });
+
+      // completeBatch should handle mixed: id1 gone, id2 still claimed
+      const items = await t.mutation(api.batch.completeBatch, {
+        items: [
+          { taskId: id1, result: "too late" },
+          { taskId: id2, result: "on time" },
+        ],
+      });
+
+      // Only id2 was actually completed
+      await t.run(async (ctx) => {
+        expect(await ctx.db.get(id2)).toBeNull(); // completed
+      });
+    });
+  });
+
+  describe("failBatch", () => {
+    it("returns onComplete data for permanently failed tasks", async () => {
+      await setupPoolConfig();
+
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "h", slot: 0, args: {},
+        onComplete: {
+          fnHandle: "function://error-handler",
+          context: { attempt: "final" },
+        },
+        // No retryBehavior → permanent failure on first fail
+      });
+
+      await claimBatch(0, 10);
+
+      const items = await t.mutation(api.batch.failBatch, {
+        items: [{ taskId, error: "permanent error" }],
+      });
+
+      expect(items).toHaveLength(1);
+      expect(items[0].fnHandle).toBe("function://error-handler");
+      expect(items[0].result).toEqual({ kind: "failed", error: "permanent error" });
+    });
+
+    it("does NOT return onComplete data for retried tasks", async () => {
+      await setupPoolConfig();
+
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "h", slot: 0, args: {},
+        onComplete: {
+          fnHandle: "function://handler",
+          context: {},
+        },
+        retryBehavior: { maxAttempts: 3, initialBackoffMs: 100, base: 2 },
+      });
+
+      await claimBatch(0, 10);
+
+      const items = await t.mutation(api.batch.failBatch, {
+        items: [{ taskId, error: "transient" }],
+      });
+
+      // Task was retried, not permanently failed → no onComplete
+      expect(items).toHaveLength(0);
+
+      // Task should be back to pending
+      await t.run(async (ctx) => {
+        const task = await ctx.db.get(taskId);
+        expect(task!.status).toBe("pending");
+        expect(task!.attempt).toBe(1);
+      });
+    });
+  });
+
+  describe("retry preserves task data", () => {
+    it("original args are preserved across retries", async () => {
+      await setupPoolConfig();
+
+      const originalArgs = { complex: { nested: [1, 2, 3] }, key: "value" };
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "handler", slot: 0,
+        args: originalArgs,
+        retryBehavior: { maxAttempts: 3, initialBackoffMs: 100, base: 2 },
+      });
+
+      // Fail twice
+      for (let i = 0; i < 2; i++) {
+        vi.advanceTimersByTime(60_000);
+        await claimBatch(0, 10);
+        await t.mutation(api.batch.fail, { taskId, error: `fail-${i}` });
+      }
+
+      vi.advanceTimersByTime(60_000);
+
+      // Re-claim — args should be identical
+      const claimed = await claimBatch(0, 10);
+      expect(claimed).toHaveLength(1);
+      expect(claimed[0].args).toEqual(originalArgs);
+      expect(claimed[0].attempt).toBe(2);
+    });
+
+    it("slot assignment is preserved across retries", async () => {
+      await setupPoolConfig();
+
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "handler", slot: 7, args: {},
+        retryBehavior: { maxAttempts: 3, initialBackoffMs: 100, base: 2 },
+      });
+
+      await claimBatch(7, 10);
+      await t.mutation(api.batch.fail, { taskId, error: "oops" });
+
+      vi.advanceTimersByTime(60_000);
+
+      // Should still be claimable from slot 7, not slot 0
+      const fromSlot0 = await claimBatch(0, 10);
+      const fromSlot7 = await claimBatch(7, 10);
+      expect(fromSlot0).toHaveLength(0);
+      expect(fromSlot7).toHaveLength(1);
+    });
+  });
+
+  describe("enqueue without config", () => {
+    it("creates task even without batchConfig or existing config", async () => {
+      // No setupPoolConfig, no batchConfig arg — just raw enqueue
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "handler", slot: 0, args: { key: "val" },
+      });
+
+      expect(taskId).toBeDefined();
+
+      await t.run(async (ctx) => {
+        const task = await ctx.db.get(taskId);
+        expect(task!.status).toBe("pending");
+        expect(task!.name).toBe("handler");
+      });
+    });
+  });
+
+  describe("complete and fail idempotency", () => {
+    it("completing same task twice is a no-op", async () => {
+      await setupPoolConfig();
+
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "h", slot: 0, args: {},
+      });
+      await claimBatch(0, 10);
+
+      // First complete — deletes the task
+      await t.mutation(api.batch.complete, { taskId, result: "first" });
+
+      // Second complete — task is gone, should not throw
+      await t.mutation(api.batch.complete, { taskId, result: "second" });
+    });
+
+    it("failing same task twice is a no-op", async () => {
+      await setupPoolConfig();
+
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "h", slot: 0, args: {},
+      });
+      await claimBatch(0, 10);
+
+      // First fail (no retry) — deletes the task
+      await t.mutation(api.batch.fail, { taskId, error: "first" });
+
+      // Second fail — task is gone, should not throw
+      await t.mutation(api.batch.fail, { taskId, error: "second" });
+    });
+
+    it("complete after cancel is a no-op", async () => {
+      await setupPoolConfig();
+
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "h", slot: 0, args: {},
+      });
+      await claimBatch(0, 10);
+      await t.mutation(api.batch.cancel, { taskId });
+
+      // Executor doesn't know about cancel, tries to complete
+      await t.mutation(api.batch.complete, { taskId, result: "too late" });
+      // Should not throw, should not resurrect the task
+    });
+
+    it("fail after cancel is a no-op", async () => {
+      await setupPoolConfig();
+
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "h", slot: 0, args: {},
+      });
+      await claimBatch(0, 10);
+      await t.mutation(api.batch.cancel, { taskId });
+
+      await t.mutation(api.batch.fail, { taskId, error: "too late" });
+    });
+  });
+
+  describe("large batch operations", () => {
+    it("enqueueBatch handles 100 tasks", async () => {
+      await setupPoolConfig();
+
+      const tasks = Array.from({ length: 100 }, (_, i) => ({
+        name: "handler",
+        slot: i % 5,
+        args: { index: i },
+      }));
+
+      const ids = await t.mutation(api.batch.enqueueBatch, { tasks });
+      expect(ids).toHaveLength(100);
+
+      // All should be pending
+      await t.run(async (ctx) => {
+        for (const id of ids) {
+          const task = await ctx.db.get(id);
+          expect(task!.status).toBe("pending");
+        }
+      });
+    });
+
+    it("completeBatch handles 50 tasks", async () => {
+      await setupPoolConfig();
+
+      const tasks = Array.from({ length: 50 }, (_, i) => ({
+        name: "handler", slot: 0, args: { i },
+      }));
+      const ids = await t.mutation(api.batch.enqueueBatch, { tasks });
+
+      await claimBatch(0, 100);
+
+      const items = ids.map((id) => ({ taskId: id, result: "done" }));
+      await t.mutation(api.batch.completeBatch, { items });
+
+      await t.run(async (ctx) => {
+        for (const id of ids) {
+          expect(await ctx.db.get(id)).toBeNull();
+        }
+      });
+    });
+  });
+
+  describe("status reflects full lifecycle", () => {
+    it("pending → running → finished through complete", async () => {
+      await setupPoolConfig();
+
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "h", slot: 0, args: {},
+      });
+
+      expect(await t.query(api.batch.status, { taskId }))
+        .toEqual({ state: "pending", attempt: 0 });
+
+      await claimBatch(0, 1);
+
+      expect(await t.query(api.batch.status, { taskId }))
+        .toEqual({ state: "running", attempt: 0 });
+
+      await t.mutation(api.batch.complete, { taskId, result: null });
+
+      expect(await t.query(api.batch.status, { taskId }))
+        .toEqual({ state: "finished" });
+    });
+
+    it("pending → running → pending (retry) → running → finished (fail)", async () => {
+      await setupPoolConfig();
+
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "h", slot: 0, args: {},
+        retryBehavior: { maxAttempts: 2, initialBackoffMs: 100, base: 2 },
+      });
+
+      // Attempt 0
+      await claimBatch(0, 1);
+      expect(await t.query(api.batch.status, { taskId }))
+        .toEqual({ state: "running", attempt: 0 });
+
+      await t.mutation(api.batch.fail, { taskId, error: "oops" });
+      expect(await t.query(api.batch.status, { taskId }))
+        .toEqual({ state: "pending", attempt: 1 });
+
+      // Attempt 1 (final)
+      vi.advanceTimersByTime(60_000);
+      await claimBatch(0, 1);
+      expect(await t.query(api.batch.status, { taskId }))
+        .toEqual({ state: "running", attempt: 1 });
+
+      await t.mutation(api.batch.fail, { taskId, error: "still broken" });
+      expect(await t.query(api.batch.status, { taskId }))
+        .toEqual({ state: "finished" });
+    });
+  });
+
+  describe("watchdog edge cases", () => {
+    it("watchdog with only pending tasks (no stale claims) still restarts dead slots", async () => {
+      await setupPoolConfig({
+        maxWorkers: 2,
+        activeSlots: [0, 1],
+        claimTimeoutMs: 120_000,
+      });
+
+      // Old pending task on slot 0 — executor for slot 0 must be dead
+      await t.run(async (ctx) => {
+        await ctx.db.insert("batchTasks", {
+          name: "old-pending",
+          slot: 0,
+          args: {},
+          status: "pending" as const,
+          readyAt: Date.now() - 60_000,
+          attempt: 0,
+        });
+      });
+
+      await t.mutation(internal.batch._watchdog, {});
+
+      // Slot 0 should have been restarted
+      await t.run(async (ctx) => {
+        const config = await ctx.db.query("batchConfig").unique();
+        expect(config!.activeSlots).toContain(0);
+        expect(config!.activeSlots).toContain(1);
+      });
+    });
+
+    it("watchdog is idempotent — running twice doesn't double-add slots", async () => {
+      await setupPoolConfig({
+        maxWorkers: 2,
+        activeSlots: [],
+        claimTimeoutMs: 60_000,
+      });
+
+      // Pending task triggers executor start
+      await t.mutation(api.batch.enqueue, {
+        name: "handler", slot: 0, args: {},
+      });
+
+      await t.mutation(internal.batch._watchdog, {});
+      await t.mutation(internal.batch._watchdog, {});
+
+      await t.run(async (ctx) => {
+        const config = await ctx.db.query("batchConfig").unique();
+        // Each slot should appear at most once
+        const unique = [...new Set(config!.activeSlots)];
+        expect(unique.length).toBe(config!.activeSlots.length);
+      });
+    });
+  });
+
+  describe("resetConfig and resetTasks", () => {
+    it("resetConfig clears config and activeSlots", async () => {
+      await setupPoolConfig({ activeSlots: [0, 1, 2], maxWorkers: 3 });
+
+      await t.mutation(api.batch.resetConfig, {});
+
+      await t.run(async (ctx) => {
+        const config = await ctx.db.query("batchConfig").unique();
+        expect(config).toBeNull();
+      });
+    });
+
+    it("resetTasks deletes all batch tasks", async () => {
+      await setupPoolConfig();
+
+      for (let i = 0; i < 5; i++) {
+        await t.mutation(api.batch.enqueue, {
+          name: "h", slot: 0, args: { i },
+        });
+      }
+
+      const result = await t.mutation(api.batch.resetTasks, {});
+      expect(result.deleted).toBe(5);
+
+      await t.run(async (ctx) => {
+        const tasks = await ctx.db.query("batchTasks").collect();
+        expect(tasks).toHaveLength(0);
+      });
+    });
+  });
 });

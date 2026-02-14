@@ -788,4 +788,364 @@ describe("_runExecutorLoop", () => {
       expect(deps.executorDone).toHaveBeenCalledWith(false);
     });
   });
+
+  // ─── Black-box behavioral edge cases ──────────────────────────────────
+
+  describe("all tasks fail", () => {
+    it("every handler throws but executor completes cleanly", async () => {
+      const tracker = createTracker();
+
+      const deps = makeDeps({
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "f1", name: "broken", args: {}, attempt: 0 },
+              { _id: "f2", name: "broken", args: {}, attempt: 0 },
+              { _id: "f3", name: "broken", args: {}, attempt: 0 },
+            ])
+            .mockResolvedValue([]),
+        ),
+        getHandler: () => async () => {
+          throw new Error("everything is broken");
+        },
+        ...batchMocks(tracker),
+        executorDone: vi.fn().mockImplementation(async (startMore: boolean) => {
+          tracker.markDone(startMore);
+        }),
+      });
+
+      const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      expect(tracker.failed).toHaveLength(3);
+      expect(tracker.completed).toHaveLength(0);
+      expect(tracker.done).toBe(true);
+    });
+  });
+
+  describe("mixed success and failure", () => {
+    it("some handlers succeed, some fail, all reported correctly", async () => {
+      const tracker = createTracker();
+
+      const deps = makeDeps({
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "ok-1", name: "good", args: {}, attempt: 0 },
+              { _id: "bad-1", name: "bad", args: {}, attempt: 0 },
+              { _id: "ok-2", name: "good", args: {}, attempt: 0 },
+              { _id: "bad-2", name: "bad", args: {}, attempt: 0 },
+            ])
+            .mockResolvedValue([]),
+        ),
+        getHandler: (name: string) => {
+          if (name === "good") return async () => "success";
+          return async () => { throw new Error("fail"); };
+        },
+        ...batchMocks(tracker),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      expect(tracker.completed.sort()).toEqual(["ok-1", "ok-2"]);
+      expect(tracker.failed.map((f) => f.id).sort()).toEqual(["bad-1", "bad-2"]);
+    });
+  });
+
+  describe("handler return values", () => {
+    it("passes handler result through to completeBatch", async () => {
+      const completedWith: Array<{ taskId: string; result: unknown }> = [];
+
+      const deps = makeDeps({
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+            ])
+            .mockResolvedValue([]),
+        ),
+        getHandler: () => async () => ({
+          large: "object",
+          nested: { array: [1, 2, 3] },
+          number: 42,
+        }),
+        completeBatch: vi.fn().mockImplementation(
+          async (items: { taskId: string; result: unknown }[]) => {
+            completedWith.push(...items);
+            return [];
+          },
+        ),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      expect(completedWith).toEqual([{
+        taskId: "t1",
+        result: { large: "object", nested: { array: [1, 2, 3] }, number: 42 },
+      }]);
+    });
+
+    it("null return value is passed through as-is", async () => {
+      const completedWith: Array<{ taskId: string; result: unknown }> = [];
+
+      const deps = makeDeps({
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+            ])
+            .mockResolvedValue([]),
+        ),
+        getHandler: () => async () => null,
+        completeBatch: vi.fn().mockImplementation(
+          async (items: { taskId: string; result: unknown }[]) => {
+            completedWith.push(...items);
+            return [];
+          },
+        ),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      expect(completedWith[0].result).toBeNull();
+    });
+  });
+
+  describe("listPending returns more IDs than claimByIds gets", () => {
+    it("handles race where some tasks were claimed between list and claim", async () => {
+      const tracker = createTracker();
+
+      const deps = makeDeps({
+        // listPending returns 5 IDs, but claimByIds only gets 2
+        // (the other 3 were claimed by another executor)
+        listPending: vi.fn()
+          .mockResolvedValueOnce(["t1", "t2", "t3", "t4", "t5"])
+          .mockResolvedValue([]),
+        claimByIds: vi.fn()
+          .mockResolvedValueOnce([
+            { _id: "t1", name: "handler", args: {}, attempt: 0 },
+            { _id: "t4", name: "handler", args: {}, attempt: 0 },
+          ])
+          .mockResolvedValue([]),
+        getHandler: () => async () => "done",
+        ...batchMocks(tracker),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      // Should complete the 2 it actually got
+      expect(tracker.completed.sort()).toEqual(["t1", "t4"]);
+    });
+  });
+
+  describe("onComplete dispatch failure", () => {
+    it("logs error but doesn't crash executor when dispatch fails", async () => {
+      const tracker = createTracker();
+
+      const deps = makeDeps({
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+            ])
+            .mockResolvedValue([]),
+        ),
+        getHandler: () => async () => "result",
+        completeBatch: vi.fn().mockResolvedValue([
+          {
+            fnHandle: "function://broken",
+            workId: "t1",
+            context: {},
+            result: { kind: "success", returnValue: "result" },
+          },
+        ]),
+        dispatchOnCompleteBatch: vi.fn().mockRejectedValue(
+          new Error("onComplete handler crashed"),
+        ),
+        executorDone: vi.fn().mockImplementation(async (startMore: boolean) => {
+          tracker.markDone(startMore);
+        }),
+      });
+
+      const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      // Executor should still finish cleanly
+      expect(tracker.done).toBe(true);
+      expect(console.error).toHaveBeenCalled();
+    });
+  });
+
+  describe("releaseClaims failure at shutdown", () => {
+    it("logs error but doesn't crash when releaseClaims fails", async () => {
+      const slow = deferred();
+
+      const deps = makeDeps({
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "slow-1", name: "slow", args: {}, attempt: 0 },
+            ])
+            .mockResolvedValue([]),
+        ),
+        getHandler: () => () => slow.promise,
+        releaseClaims: vi.fn().mockRejectedValue(
+          new Error("release mutation failed"),
+        ),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      // Should have tried to release
+      expect(deps.releaseClaims).toHaveBeenCalled();
+      expect(console.error).toHaveBeenCalled();
+
+      slow.resolve();
+    });
+  });
+
+  describe("countPending failure", () => {
+    it("treats countPending failure as no work (avoids infinite retry loop)", async () => {
+      const deps = makeDeps({
+        ...claimMocks(vi.fn().mockResolvedValue([])),
+        countPending: vi.fn().mockRejectedValue(
+          new Error("query timed out"),
+        ),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      // Should exit cleanly despite countPending failure
+      expect(deps.executorDone).toHaveBeenCalledWith(false);
+    });
+  });
+
+  describe("multiple claim rounds", () => {
+    it("claims new tasks while previous tasks are still running", async () => {
+      const tracker = createTracker();
+      let claimRound = 0;
+      const slow = deferred();
+
+      const deps = makeDeps({
+        ...claimMocks(vi.fn().mockImplementation(async () => {
+          claimRound++;
+          if (claimRound === 1) {
+            // First round: slow task fills 1 of 3 slots
+            return [{ _id: "slow", name: "slow", args: {}, attempt: 0 }];
+          }
+          if (claimRound === 2) {
+            // Second round: 2 fast tasks fill remaining slots
+            return [
+              { _id: "fast-1", name: "fast", args: {}, attempt: 0 },
+              { _id: "fast-2", name: "fast", args: {}, attempt: 0 },
+            ];
+          }
+          return [];
+        })),
+        getHandler: (name: string) => {
+          if (name === "slow") return () => slow.promise;
+          return async () => "done";
+        },
+        ...batchMocks(tracker),
+        countPending: vi.fn().mockImplementation(async () => {
+          return claimRound < 2 ? 1 : 0;
+        }),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, {
+        ...SHORT_OPTIONS,
+        maxConcurrencyPerWorker: 3,
+      });
+
+      await vi.advanceTimersByTimeAsync(500);
+
+      // Fast tasks should complete while slow one is still running
+      expect(tracker.completed).toContain("fast-1");
+      expect(tracker.completed).toContain("fast-2");
+
+      slow.resolve();
+      await vi.advanceTimersByTimeAsync(1_500);
+      await loopDone;
+
+      expect(tracker.completed).toContain("slow");
+    });
+  });
+
+  describe("transient error on listPending", () => {
+    it("retries claiming after transient listPending error", async () => {
+      const tracker = createTracker();
+      let listCallCount = 0;
+
+      const deps = makeDeps({
+        listPending: vi.fn().mockImplementation(async () => {
+          listCallCount++;
+          if (listCallCount === 1) {
+            throw new Error("couldn't be completed because of a conflict");
+          }
+          if (listCallCount === 2) {
+            return ["t1"];
+          }
+          return [];
+        }),
+        claimByIds: vi.fn().mockImplementation(async (ids: string[]) => {
+          if (ids.includes("t1")) {
+            return [{ _id: "t1", name: "handler", args: {}, attempt: 0 }];
+          }
+          return [];
+        }),
+        getHandler: () => async () => "recovered",
+        ...batchMocks(tracker),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      expect(tracker.completed).toContain("t1");
+    });
+  });
+
+  describe("executorDone fatal error", () => {
+    it("throws when executorDone fails with non-transient error", async () => {
+      const deps = makeDeps({
+        ...claimMocks(vi.fn().mockResolvedValue([])),
+        countPending: vi.fn().mockResolvedValue(0),
+        executorDone: vi.fn().mockRejectedValue(
+          new Error("Internal server error"),
+        ),
+      });
+
+      const loopPromise = _runExecutorLoop(deps, SHORT_OPTIONS)
+        .then(() => null)
+        .catch((e: unknown) => e);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      const result = await loopPromise;
+
+      expect(result).toBeInstanceOf(Error);
+      expect((result as Error).message).toBe("Internal server error");
+    });
+  });
 });
