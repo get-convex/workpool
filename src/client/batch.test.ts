@@ -21,7 +21,7 @@ function deferred<T = void>() {
   return { promise, resolve, reject };
 }
 
-type ClaimedTask = { _id: string; name: string; args: any; attempt: number };
+type ClaimedTask = { _id: string; name: string; args: any; attempt: number; claimedAt: number };
 type OnCompleteItem = {
   fnHandle: string;
   workId: string;
@@ -92,17 +92,19 @@ function makeDeps(overrides: Partial<_ExecutorDeps> = {}): _ExecutorDeps {
   };
 }
 
+const TEST_CLAIMED_AT = 1000000;
+
 /** Helper: create completeBatch/failBatch mocks that feed into a tracker */
 function batchMocks(tracker: ReturnType<typeof createTracker>) {
   return {
     completeBatch: vi.fn().mockImplementation(
-      async (items: { taskId: string; result: unknown }[]) => {
+      async (items: { taskId: string; result: unknown; claimedAt: number }[]) => {
         for (const item of items) tracker.completed.push(item.taskId);
         return []; // no onComplete items
       },
     ),
     failBatch: vi.fn().mockImplementation(
-      async (items: { taskId: string; error: string }[]) => {
+      async (items: { taskId: string; error: string; claimedAt: number }[]) => {
         for (const item of items) tracker.failed.push({ id: item.taskId, error: item.error });
         return []; // no onComplete items
       },
@@ -147,14 +149,14 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(
           vi.fn()
             .mockResolvedValueOnce([
-              { _id: "slow-1", name: "slow", args: {}, attempt: 0 },
-              { _id: "slow-2", name: "slow", args: {}, attempt: 0 },
+              { _id: "slow-1", name: "slow", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
+              { _id: "slow-2", name: "slow", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ])
             .mockResolvedValue([]),
         ),
         getHandler: () => () => slow.promise,
-        releaseClaims: vi.fn().mockImplementation(async (ids: string[]) => {
-          tracker.released.push(...ids);
+        releaseClaims: vi.fn().mockImplementation(async (items: { taskId: string; claimedAt: number }[]) => {
+          tracker.released.push(...items.map((i) => i.taskId));
         }),
         executorDone: vi.fn().mockImplementation(async (startMore: boolean) => {
           tracker.markDone(startMore);
@@ -179,8 +181,8 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(
           vi.fn()
             .mockResolvedValueOnce([
-              { _id: "fast-1", name: "fast", args: {}, attempt: 0 },
-              { _id: "slow-1", name: "slow", args: {}, attempt: 0 },
+              { _id: "fast-1", name: "fast", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
+              { _id: "slow-1", name: "slow", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ])
             .mockResolvedValue([]),
         ),
@@ -190,8 +192,8 @@ describe("_runExecutorLoop", () => {
           return undefined;
         },
         ...batchMocks(tracker),
-        releaseClaims: vi.fn().mockImplementation(async (ids: string[]) => {
-          tracker.released.push(...ids);
+        releaseClaims: vi.fn().mockImplementation(async (items: { taskId: string; claimedAt: number }[]) => {
+          tracker.released.push(...items.map((i) => i.taskId));
         }),
         executorDone: vi.fn().mockResolvedValue(undefined),
       });
@@ -220,7 +222,7 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(vi.fn().mockImplementation(async () => {
           claimCallCount++;
           if (claimCallCount === 1) {
-            return [{ _id: "t1", name: "handler", args: {}, attempt: 0 }];
+            return [{ _id: "t1", name: "handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT }];
           }
           return [];
         })),
@@ -259,10 +261,10 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(vi.fn().mockImplementation(async () => {
           claimCallCount++;
           if (claimCallCount === 1) {
-            return [{ _id: "t1", name: "spike", args: {}, attempt: 0 }];
+            return [{ _id: "t1", name: "spike", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT }];
           }
           if (claimCallCount === 2) {
-            return [{ _id: "t2", name: "normal", args: {}, attempt: 0 }];
+            return [{ _id: "t2", name: "normal", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT }];
           }
           return [];
         })),
@@ -310,7 +312,7 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(
           vi.fn()
             .mockResolvedValueOnce([
-              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+              { _id: "t1", name: "handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ])
             .mockResolvedValue([]),
         ),
@@ -335,7 +337,7 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(
           vi.fn()
             .mockResolvedValueOnce([
-              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+              { _id: "t1", name: "handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ])
             .mockResolvedValue([]),
         ),
@@ -364,8 +366,8 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(
           vi.fn()
             .mockResolvedValueOnce([
-              { _id: "unknown-1", name: "doesNotExist", args: {}, attempt: 0 },
-              { _id: "known-1", name: "myHandler", args: {}, attempt: 0 },
+              { _id: "unknown-1", name: "doesNotExist", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
+              { _id: "known-1", name: "myHandler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ])
             .mockResolvedValue([]),
         ),
@@ -394,7 +396,7 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(
           vi.fn()
             .mockResolvedValueOnce([
-              { _id: "crash-1", name: "crasher", args: {}, attempt: 0 },
+              { _id: "crash-1", name: "crasher", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ])
             .mockResolvedValue([]),
         ),
@@ -421,8 +423,8 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(
           vi.fn()
             .mockResolvedValueOnce([
-              { _id: "double-fail", name: "crasher", args: {}, attempt: 0 },
-              { _id: "healthy", name: "ok", args: {}, attempt: 0 },
+              { _id: "double-fail", name: "crasher", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
+              { _id: "healthy", name: "ok", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ])
             .mockResolvedValue([]),
         ),
@@ -464,8 +466,8 @@ describe("_runExecutorLoop", () => {
         claimByIds: vi.fn().mockImplementation(async (ids: string[]) => {
           if (ids.includes("fast-1")) {
             return [
-              { _id: "fast-1", name: "fast", args: {}, attempt: 0 },
-              { _id: "slow-1", name: "slow", args: {}, attempt: 0 },
+              { _id: "fast-1", name: "fast", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
+              { _id: "slow-1", name: "slow", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ];
           }
           return [];
@@ -474,8 +476,8 @@ describe("_runExecutorLoop", () => {
           if (name === "fast") return async () => "done";
           return () => slow.promise;
         },
-        releaseClaims: vi.fn().mockImplementation(async (ids: string[]) => {
-          tracker.released.push(...ids);
+        releaseClaims: vi.fn().mockImplementation(async (items: { taskId: string; claimedAt: number }[]) => {
+          tracker.released.push(...items.map((i) => i.taskId));
         }),
         executorDone: vi.fn(),
       });
@@ -503,7 +505,7 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(
           vi.fn()
             .mockResolvedValueOnce([
-              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+              { _id: "t1", name: "handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ])
             .mockResolvedValue([]),
         ),
@@ -565,7 +567,7 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(
           vi.fn()
             .mockResolvedValueOnce([
-              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+              { _id: "t1", name: "handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ])
             .mockResolvedValue([]),
         ),
@@ -601,7 +603,7 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(
           vi.fn()
             .mockResolvedValueOnce([
-              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+              { _id: "t1", name: "handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ])
             .mockResolvedValue([]),
         ),
@@ -632,7 +634,7 @@ describe("_runExecutorLoop", () => {
       const claimImpl = vi.fn()
         .mockResolvedValueOnce(
           Array.from({ length: 5 }, (_, i) => ({
-            _id: `t${i}`, name: "handler", args: {}, attempt: 0,
+            _id: `t${i}`, name: "handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT,
           })),
         )
         .mockResolvedValue([]);
@@ -673,10 +675,10 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(vi.fn().mockImplementation(async () => {
           claimCount++;
           if (claimCount === 1) {
-            return [{ _id: "retry-task", name: "flaky", args: {}, attempt: 0 }];
+            return [{ _id: "retry-task", name: "flaky", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT }];
           }
           if (claimCount === 2) {
-            return [{ _id: "retry-task", name: "flaky", args: {}, attempt: 1 }];
+            return [{ _id: "retry-task", name: "flaky", args: {}, attempt: 1, claimedAt: TEST_CLAIMED_AT + 1 }];
           }
           return [];
         })),
@@ -707,7 +709,7 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(
           vi.fn()
             .mockResolvedValueOnce([
-              { _id: "t1", name: "void-handler", args: {}, attempt: 0 },
+              { _id: "t1", name: "void-handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ])
             .mockResolvedValue([]),
         ),
@@ -725,7 +727,7 @@ describe("_runExecutorLoop", () => {
       await vi.advanceTimersByTimeAsync(2_000);
       await loopDone;
 
-      expect(completedWith).toEqual([{ taskId: "t1", result: null }]);
+      expect(completedWith).toEqual([{ taskId: "t1", result: null, claimedAt: TEST_CLAIMED_AT }]);
     });
   });
 
@@ -799,9 +801,9 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(
           vi.fn()
             .mockResolvedValueOnce([
-              { _id: "f1", name: "broken", args: {}, attempt: 0 },
-              { _id: "f2", name: "broken", args: {}, attempt: 0 },
-              { _id: "f3", name: "broken", args: {}, attempt: 0 },
+              { _id: "f1", name: "broken", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
+              { _id: "f2", name: "broken", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
+              { _id: "f3", name: "broken", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ])
             .mockResolvedValue([]),
         ),
@@ -832,10 +834,10 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(
           vi.fn()
             .mockResolvedValueOnce([
-              { _id: "ok-1", name: "good", args: {}, attempt: 0 },
-              { _id: "bad-1", name: "bad", args: {}, attempt: 0 },
-              { _id: "ok-2", name: "good", args: {}, attempt: 0 },
-              { _id: "bad-2", name: "bad", args: {}, attempt: 0 },
+              { _id: "ok-1", name: "good", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
+              { _id: "bad-1", name: "bad", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
+              { _id: "ok-2", name: "good", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
+              { _id: "bad-2", name: "bad", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ])
             .mockResolvedValue([]),
         ),
@@ -864,7 +866,7 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(
           vi.fn()
             .mockResolvedValueOnce([
-              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+              { _id: "t1", name: "handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ])
             .mockResolvedValue([]),
         ),
@@ -889,6 +891,7 @@ describe("_runExecutorLoop", () => {
       expect(completedWith).toEqual([{
         taskId: "t1",
         result: { large: "object", nested: { array: [1, 2, 3] }, number: 42 },
+        claimedAt: TEST_CLAIMED_AT,
       }]);
     });
 
@@ -899,7 +902,7 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(
           vi.fn()
             .mockResolvedValueOnce([
-              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+              { _id: "t1", name: "handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ])
             .mockResolvedValue([]),
         ),
@@ -933,8 +936,8 @@ describe("_runExecutorLoop", () => {
           .mockResolvedValue([]),
         claimByIds: vi.fn()
           .mockResolvedValueOnce([
-            { _id: "t1", name: "handler", args: {}, attempt: 0 },
-            { _id: "t4", name: "handler", args: {}, attempt: 0 },
+            { _id: "t1", name: "handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
+            { _id: "t4", name: "handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
           ])
           .mockResolvedValue([]),
         getHandler: () => async () => "done",
@@ -959,7 +962,7 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(
           vi.fn()
             .mockResolvedValueOnce([
-              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+              { _id: "t1", name: "handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ])
             .mockResolvedValue([]),
         ),
@@ -998,7 +1001,7 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(
           vi.fn()
             .mockResolvedValueOnce([
-              { _id: "slow-1", name: "slow", args: {}, attempt: 0 },
+              { _id: "slow-1", name: "slow", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ])
             .mockResolvedValue([]),
         ),
@@ -1051,13 +1054,13 @@ describe("_runExecutorLoop", () => {
           claimRound++;
           if (claimRound === 1) {
             // First round: slow task fills 1 of 3 slots
-            return [{ _id: "slow", name: "slow", args: {}, attempt: 0 }];
+            return [{ _id: "slow", name: "slow", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT }];
           }
           if (claimRound === 2) {
             // Second round: 2 fast tasks fill remaining slots
             return [
-              { _id: "fast-1", name: "fast", args: {}, attempt: 0 },
-              { _id: "fast-2", name: "fast", args: {}, attempt: 0 },
+              { _id: "fast-1", name: "fast", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
+              { _id: "fast-2", name: "fast", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ];
           }
           return [];
@@ -1110,7 +1113,7 @@ describe("_runExecutorLoop", () => {
         }),
         claimByIds: vi.fn().mockImplementation(async (ids: string[]) => {
           if (ids.includes("t1")) {
-            return [{ _id: "t1", name: "handler", args: {}, attempt: 0 }];
+            return [{ _id: "t1", name: "handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT }];
           }
           return [];
         }),
@@ -1160,7 +1163,7 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(
           vi.fn()
             .mockResolvedValueOnce([
-              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+              { _id: "t1", name: "handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ])
             .mockResolvedValue([]),
         ),
@@ -1227,7 +1230,7 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(
           vi.fn()
             .mockResolvedValueOnce([
-              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+              { _id: "t1", name: "handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ])
             .mockResolvedValue([]),
         ),
@@ -1269,7 +1272,7 @@ describe("_runExecutorLoop", () => {
             throw new Error("Documents changed while this mutation was being run");
           }
           if (claimByIdsCalls === 2) {
-            return [{ _id: "t1", name: "handler", args: {}, attempt: 0 }];
+            return [{ _id: "t1", name: "handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT }];
           }
           return [];
         }),
@@ -1297,7 +1300,7 @@ describe("_runExecutorLoop", () => {
           vi.fn()
             .mockResolvedValueOnce(
               Array.from({ length: 5 }, (_, i) => ({
-                _id: `t${i}`, name: "handler", args: {}, attempt: 0,
+                _id: `t${i}`, name: "handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT,
               })),
             )
             .mockResolvedValue([]),
@@ -1335,7 +1338,7 @@ describe("_runExecutorLoop", () => {
         claimByIds: vi.fn()
           .mockResolvedValueOnce([]) // all stolen
           .mockResolvedValueOnce([
-            { _id: "t1", name: "handler", args: {}, attempt: 0 },
+            { _id: "t1", name: "handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
           ])
           .mockResolvedValue([]),
         getHandler: () => async () => "done",
@@ -1364,14 +1367,14 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(
           vi.fn()
             .mockResolvedValueOnce([
-              { _id: "late", name: "slow", args: {}, attempt: 0 },
+              { _id: "late", name: "slow", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ])
             .mockResolvedValue([]),
         ),
         getHandler: () => () => lateResolve.promise,
         ...batchMocks(tracker),
-        releaseClaims: vi.fn().mockImplementation(async (ids: string[]) => {
-          tracker.released.push(...ids);
+        releaseClaims: vi.fn().mockImplementation(async (items: { taskId: string; claimedAt: number }[]) => {
+          tracker.released.push(...items.map((i) => i.taskId));
         }),
         executorDone: vi.fn().mockResolvedValue(undefined),
       });
@@ -1403,7 +1406,7 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(
           vi.fn()
             .mockResolvedValueOnce([
-              { _id: "sync-err", name: "sync-throw", args: {}, attempt: 0 },
+              { _id: "sync-err", name: "sync-throw", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ])
             .mockResolvedValue([]),
         ),
@@ -1433,7 +1436,7 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(
           vi.fn()
             .mockResolvedValueOnce([
-              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+              { _id: "t1", name: "handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ])
             .mockResolvedValue([]),
         ),
@@ -1497,7 +1500,7 @@ describe("_runExecutorLoop", () => {
         ...claimMocks(
           vi.fn()
             .mockResolvedValueOnce([
-              { _id: "t1", name: "handler", args: {}, attempt: 0 },
+              { _id: "t1", name: "handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
             ])
             .mockResolvedValue([]),
         ),

@@ -123,7 +123,7 @@ type HandlerFn = (ctx: GenericActionCtx<any>, args: any) => Promise<any>;
 
 // ─── Executor loop (extracted for testability) ───────────────────────────────
 
-type ClaimedTask = { _id: string; name: string; args: any; attempt: number };
+type ClaimedTask = { _id: string; name: string; args: any; attempt: number; claimedAt: number };
 
 type OnCompleteItem = {
   fnHandle: string;
@@ -140,15 +140,15 @@ export interface _ExecutorDeps {
   listPending(limit: number): Promise<string[]>;
   claimByIds(taskIds: string[]): Promise<ClaimedTask[]>;
   completeBatch(
-    items: { taskId: string; result: unknown }[],
+    items: { taskId: string; result: unknown; claimedAt: number }[],
   ): Promise<OnCompleteItem[]>;
   failBatch(
-    items: { taskId: string; error: string }[],
+    items: { taskId: string; error: string; claimedAt: number }[],
   ): Promise<OnCompleteItem[]>;
   /** Dispatch multiple onComplete handlers in a single mutation transaction. */
   dispatchOnCompleteBatch(items: OnCompleteItem[]): Promise<void>;
   countPending(): Promise<number>;
-  releaseClaims(taskIds: string[]): Promise<void>;
+  releaseClaims(items: { taskId: string; claimedAt: number }[]): Promise<void>;
   executorDone(startMore: boolean): Promise<void>;
   getHandler(name: string): ((args: any) => Promise<any>) | undefined;
   getHeapUsedBytes(): number;
@@ -189,11 +189,13 @@ export async function _runExecutorLoop(
   const maxHeapMB = options.maxHeapMB ?? defaultHeapMB;
   const maxHeapBytes = maxHeapMB * 1024 * 1024;
   const inFlight = new Map<string, Promise<void>>();
+  // Track claimedAt per task for claim ownership verification
+  const claimedAtMap = new Map<string, number>();
 
   // Completion/failure buffers — flushed as batch mutations to reduce
   // total mutation count from O(N) to O(N/batchSize).
-  const completionBuffer: { taskId: string; result: unknown }[] = [];
-  const failureBuffer: { taskId: string; error: string }[] = [];
+  const completionBuffer: { taskId: string; result: unknown; claimedAt: number }[] = [];
+  const failureBuffer: { taskId: string; error: string; claimedAt: number }[] = [];
   // OnComplete items returned from completeBatch/failBatch, dispatched
   // directly from the action for much higher throughput than scheduling.
   const onCompleteBuffer: OnCompleteItem[] = [];
@@ -259,7 +261,7 @@ export async function _runExecutorLoop(
       // Flush completions with concurrency — fire multiple completeBatch
       // calls in parallel to reduce total flush time from O(N) to O(N/concurrency).
       while (completionBuffer.length > 0) {
-        const batches: { taskId: string; result: unknown }[][] = [];
+        const batches: { taskId: string; result: unknown; claimedAt: number }[][] = [];
         for (let i = 0; i < FLUSH_CONCURRENCY && completionBuffer.length > 0; i++) {
           batches.push(completionBuffer.splice(0, FLUSH_BATCH_SIZE));
         }
@@ -281,7 +283,7 @@ export async function _runExecutorLoop(
         }
       }
       while (failureBuffer.length > 0) {
-        const batches: { taskId: string; error: string }[][] = [];
+        const batches: { taskId: string; error: string; claimedAt: number }[][] = [];
         for (let i = 0; i < FLUSH_CONCURRENCY && failureBuffer.length > 0; i++) {
           batches.push(failureBuffer.splice(0, FLUSH_BATCH_SIZE));
         }
@@ -348,20 +350,25 @@ export async function _runExecutorLoop(
           }
 
           for (const task of batch) {
+            claimedAtMap.set(task._id, task.claimedAt);
             const handler = deps.getHandler(task.name);
             if (!handler) {
-              failureBuffer.push({ taskId: task._id, error: `Unknown handler: ${task.name}` });
+              failureBuffer.push({ taskId: task._id, error: `Unknown handler: ${task.name}`, claimedAt: task.claimedAt });
               continue;
             }
 
+            const taskClaimedAt = task.claimedAt;
             const p = handler(task.args)
               .then((result) => {
-                completionBuffer.push({ taskId: task._id, result: result ?? null });
+                completionBuffer.push({ taskId: task._id, result: result ?? null, claimedAt: taskClaimedAt });
               })
               .catch((err: unknown) => {
-                failureBuffer.push({ taskId: task._id, error: String(err) });
+                failureBuffer.push({ taskId: task._id, error: String(err), claimedAt: taskClaimedAt });
               })
-              .finally(() => inFlight.delete(task._id));
+              .finally(() => {
+                inFlight.delete(task._id);
+                claimedAtMap.delete(task._id);
+              });
 
             inFlight.set(task._id, p);
           }
@@ -412,8 +419,11 @@ export async function _runExecutorLoop(
     await flushBuffers();
     // Wait for all onComplete dispatches to finish
     await awaitOnCompleteDrain();
-    // Release any tasks still in "claimed" state
-    const unfinished = [...inFlight.keys()];
+    // Release any tasks still in "claimed" state, with claim ownership tokens
+    const unfinished = [...inFlight.keys()].map((id) => ({
+      taskId: id,
+      claimedAt: claimedAtMap.get(id) ?? 0,
+    }));
     if (unfinished.length > 0) {
       try {
         await deps.releaseClaims(unfinished);
@@ -535,8 +545,8 @@ export class BatchWorkpool {
             }),
           countPending: () =>
             ctx.runQuery(component.batch.countPending, {}),
-          releaseClaims: (taskIds) =>
-            ctx.runMutation(component.batch.releaseClaims, { taskIds }),
+          releaseClaims: (items) =>
+            ctx.runMutation(component.batch.releaseClaims, { items }),
           executorDone: (startMore) =>
             ctx.runMutation(component.batch.executorDone, { startMore, slot }),
           getHandler: (name) => {

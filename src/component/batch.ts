@@ -159,6 +159,7 @@ export const claimByIds = mutation({
       name: v.string(),
       args: v.any(),
       attempt: v.number(),
+      claimedAt: v.number(),
     }),
   ),
   handler: async (ctx, { taskIds }) => {
@@ -178,6 +179,7 @@ export const claimByIds = mutation({
           name: task.name,
           args: task.args,
           attempt: task.attempt,
+          claimedAt: now,
         });
       }
     }
@@ -226,14 +228,15 @@ export const completeBatch = mutation({
       v.object({
         taskId: v.id("batchTasks"),
         result: v.any(),
+        claimedAt: v.optional(v.number()),
       }),
     ),
   },
   returns: v.array(vOnCompleteItem),
   handler: async (ctx, { items }) => {
     const onCompleteItems: OnCompleteItem[] = [];
-    for (const { taskId, result } of items) {
-      const item = await completeOne(ctx, taskId, result);
+    for (const { taskId, result, claimedAt } of items) {
+      const item = await completeOne(ctx, taskId, result, claimedAt);
       if (item) onCompleteItems.push(item);
     }
     return onCompleteItems;
@@ -251,10 +254,15 @@ async function completeOne(
   ctx: MutationCtx,
   taskId: Id<"batchTasks">,
   result: unknown,
+  claimedAt?: number,
 ): Promise<OnCompleteItem | null> {
   const task = await ctx.db.get(taskId);
   if (!task) return null;
   if (task.status !== "claimed") return null;
+  // Verify claim ownership: if claimedAt is provided, it must match.
+  // This prevents a stale executor (whose claim was swept and re-claimed
+  // by another executor) from completing someone else's claim.
+  if (claimedAt !== undefined && task.claimedAt !== claimedAt) return null;
 
   await ctx.db.delete(taskId);
 
@@ -294,14 +302,15 @@ export const failBatch = mutation({
       v.object({
         taskId: v.id("batchTasks"),
         error: v.string(),
+        claimedAt: v.optional(v.number()),
       }),
     ),
   },
   returns: v.array(vOnCompleteItem),
   handler: async (ctx, { items }) => {
     const onCompleteItems: OnCompleteItem[] = [];
-    for (const { taskId, error } of items) {
-      const item = await failOne(ctx, taskId, error);
+    for (const { taskId, error, claimedAt } of items) {
+      const item = await failOne(ctx, taskId, error, claimedAt);
       if (item) onCompleteItems.push(item);
     }
     return onCompleteItems;
@@ -312,10 +321,13 @@ async function failOne(
   ctx: MutationCtx,
   taskId: Id<"batchTasks">,
   error: string,
+  claimedAt?: number,
 ): Promise<OnCompleteItem | null> {
   const task = await ctx.db.get(taskId);
   if (!task) return null;
   if (task.status !== "claimed") return null;
+  // Verify claim ownership (same as completeOne)
+  if (claimedAt !== undefined && task.claimedAt !== claimedAt) return null;
 
   const maxAttempts = task.retryBehavior?.maxAttempts;
   const nextAttempt = task.attempt + 1;
@@ -493,13 +505,28 @@ export const cancel = mutation({
  * by another executor instead of waiting for the stale claim sweep.
  */
 export const releaseClaims = mutation({
-  args: { taskIds: v.array(v.id("batchTasks")) },
-  handler: async (ctx, { taskIds }) => {
-    for (const taskId of taskIds) {
+  args: {
+    // Accept either plain IDs (backward compat) or {taskId, claimedAt} pairs
+    taskIds: v.optional(v.array(v.id("batchTasks"))),
+    items: v.optional(
+      v.array(v.object({ taskId: v.id("batchTasks"), claimedAt: v.number() })),
+    ),
+  },
+  handler: async (ctx, { taskIds, items }) => {
+    // Support both formats: items with claimedAt (preferred) or plain taskIds
+    const entries: { taskId: Id<"batchTasks">; claimedAt?: number }[] =
+      items
+        ? items
+        : (taskIds ?? []).map((id) => ({ taskId: id }));
+
+    for (const { taskId, claimedAt } of entries) {
       const task = await ctx.db.get(taskId);
       // Only release if it's still claimed — it may have completed
       // between the executor deciding to release and this mutation running.
+      // If claimedAt is provided, verify ownership to avoid releasing
+      // a task that was re-claimed by another executor.
       if (task && task.status === "claimed") {
+        if (claimedAt !== undefined && task.claimedAt !== claimedAt) continue;
         await ctx.db.patch(taskId, {
           status: "pending",
           claimedAt: undefined,

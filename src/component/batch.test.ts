@@ -2025,6 +2025,122 @@ describe("batch", () => {
     });
   });
 
+  // ─── Claim ownership bugs ──────────────────────────────────────────────────
+  // These tests verify that a stale executor (whose claim was swept) cannot
+  // interfere with a task that has been re-claimed by another executor.
+
+  describe("stale executor completes a re-claimed task", () => {
+    it("should NOT delete a task that was re-claimed by another executor", async () => {
+      await setupPoolConfig({ claimTimeoutMs: 60_000 });
+
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "slow-handler", slot: 0, args: {},
+      });
+
+      // Executor A claims it — record the claimedAt
+      const claimedByA = await claimBatch(0, 1);
+      const aClaimedAt = claimedByA[0].claimedAt;
+
+      // Executor A's handler is slow — time passes beyond claimTimeout
+      vi.advanceTimersByTime(120_000);
+
+      // Stale claim sweep puts it back to pending
+      const swept = await t.mutation(api.batch.sweepStaleClaims, {});
+      expect(swept).toBe(1);
+
+      // Executor B claims it
+      const claimedByB = await claimBatch(0, 1);
+      expect(claimedByB).toHaveLength(1);
+
+      // Executor A's handler finally completes, calls completeBatch with its claimedAt
+      // This SHOULD be a no-op since A no longer owns the claim
+      await t.mutation(api.batch.completeBatch, {
+        items: [{ taskId, result: "stale result from A", claimedAt: aClaimedAt }],
+      });
+
+      // Task should STILL exist (claimed by B), not deleted
+      await t.run(async (ctx) => {
+        const task = await ctx.db.get(taskId);
+        expect(task).not.toBeNull();
+        expect(task!.status).toBe("claimed");
+      });
+    });
+  });
+
+  describe("stale executor fails a re-claimed task", () => {
+    it("should NOT modify a task that was re-claimed by another executor", async () => {
+      await setupPoolConfig({ claimTimeoutMs: 60_000 });
+
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "slow-handler", slot: 0, args: {},
+        retryBehavior: { maxAttempts: 3, initialBackoffMs: 100, base: 2 },
+      });
+
+      // Executor A claims it — record the claimedAt
+      const claimedByA = await claimBatch(0, 1);
+      const aClaimedAt = claimedByA[0].claimedAt;
+
+      // Executor A's handler is slow
+      vi.advanceTimersByTime(120_000);
+
+      // Sweep puts it back to pending
+      await t.mutation(api.batch.sweepStaleClaims, {});
+
+      // Executor B claims it
+      const claimedByB = await claimBatch(0, 1);
+      expect(claimedByB).toHaveLength(1);
+
+      // Executor A's handler finally fails, passes its claimedAt
+      // This SHOULD be a no-op since A no longer owns the claim
+      await t.mutation(api.batch.failBatch, {
+        items: [{ taskId, error: "stale failure from A", claimedAt: aClaimedAt }],
+      });
+
+      // Task should STILL be claimed by B, not put back to pending
+      await t.run(async (ctx) => {
+        const task = await ctx.db.get(taskId);
+        expect(task).not.toBeNull();
+        expect(task!.status).toBe("claimed");
+      });
+    });
+  });
+
+  describe("stale executor releases a re-claimed task", () => {
+    it("should NOT release a task that was re-claimed by another executor", async () => {
+      await setupPoolConfig({ claimTimeoutMs: 60_000 });
+
+      const taskId = await t.mutation(api.batch.enqueue, {
+        name: "handler", slot: 0, args: {},
+      });
+
+      // Executor A claims it — record the claimedAt
+      const claimedByA = await claimBatch(0, 1);
+      const aClaimedAt = claimedByA[0].claimedAt;
+
+      // Time passes beyond claimTimeout
+      vi.advanceTimersByTime(120_000);
+
+      // Sweep puts it back to pending
+      await t.mutation(api.batch.sweepStaleClaims, {});
+
+      // Executor B claims it
+      await claimBatch(0, 1);
+
+      // Executor A hits soft deadline, tries to release with its claimedAt
+      // This SHOULD be a no-op since A no longer owns the claim
+      await t.mutation(api.batch.releaseClaims, {
+        items: [{ taskId, claimedAt: aClaimedAt }],
+      });
+
+      // Task should STILL be claimed by B
+      await t.run(async (ctx) => {
+        const task = await ctx.db.get(taskId);
+        expect(task).not.toBeNull();
+        expect(task!.status).toBe("claimed");
+      });
+    });
+  });
+
   describe("resetConfig and resetTasks", () => {
     it("resetConfig clears config and activeSlots", async () => {
       await setupPoolConfig({ activeSlots: [0, 1, 2], maxWorkers: 3 });

@@ -138,7 +138,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "mutation",
         "internal",
         { taskIds: Array<string> },
-        Array<{ _id: string; args: any; attempt: number; name: string }>,
+        Array<{ _id: string; args: any; attempt: number; name: string; claimedAt: number }>,
         Name
       >;
       listPending: FunctionReference<
@@ -158,7 +158,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       completeBatch: FunctionReference<
         "mutation",
         "internal",
-        { items: Array<{ result: any; taskId: string }> },
+        { items: Array<{ result: any; taskId: string; claimedAt?: number }> },
         Array<{
           fnHandle: string;
           workId: string;
@@ -241,7 +241,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       failBatch: FunctionReference<
         "mutation",
         "internal",
-        { items: Array<{ error: string; taskId: string }> },
+        { items: Array<{ error: string; taskId: string; claimedAt?: number }> },
         Array<{
           fnHandle: string;
           workId: string;
@@ -256,7 +256,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       releaseClaims: FunctionReference<
         "mutation",
         "internal",
-        { taskIds: Array<string> },
+        { taskIds?: Array<string>; items?: Array<{ taskId: string; claimedAt: number }> },
         any,
         Name
       >;
