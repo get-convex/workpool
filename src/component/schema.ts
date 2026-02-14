@@ -12,6 +12,42 @@ import {
 const segment = v.int64();
 
 export default defineSchema({
+  // ----- Batch execution mode tables -----
+
+  // Batch task queue. Each row is one logical task to be executed by an executor.
+  batchTasks: defineTable({
+    name: v.string(), // handler name in the registry
+    args: v.any(), // serialized args for the handler
+    slot: v.number(), // executor slot (0..maxWorkers-1) for claim partitioning
+    status: v.union(
+      v.literal("pending"),
+      v.literal("claimed"),
+      v.literal("completed"),
+      v.literal("failed"),
+      v.literal("canceled"),
+    ),
+    claimedAt: v.optional(v.number()), // when the executor claimed this task
+    readyAt: v.number(), // earliest time this task can be claimed (for retry backoff)
+    result: v.optional(v.any()),
+    error: v.optional(v.string()),
+    attempt: v.number(), // completed attempts so far
+    onComplete: v.optional(vOnCompleteFnContext),
+    retryBehavior: v.optional(retryBehavior),
+  })
+    .index("by_slot_status_readyAt", ["slot", "status", "readyAt"])
+    .index("by_status_claimedAt", ["status", "claimedAt"]),
+
+  // Singleton configuration for the batch executor pool.
+  batchConfig: defineTable({
+    executorHandle: v.string(), // function handle for the user's executor action
+    maxWorkers: v.number(),
+    activeSlots: v.array(v.number()), // which executor slots are currently running
+    claimTimeoutMs: v.number(),
+    watchdogScheduledAt: v.optional(v.number()), // when the last watchdog was scheduled
+  }),
+
+  // ----- Standard workpool tables -----
+
   // Written from kickLoop, read everywhere.
   globals: defineTable(vConfig),
   // Singleton, only read & written by `main`.

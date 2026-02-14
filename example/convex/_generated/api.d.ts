@@ -8,8 +8,13 @@
  * @module
  */
 
+import type * as batchActions from "../batchActions.js";
 import type * as crons from "../crons.js";
 import type * as example from "../example.js";
+import type * as pipeline from "../pipeline.js";
+import type * as setup from "../setup.js";
+import type * as standardActions from "../standardActions.js";
+import type * as test from "../test.js";
 
 import type {
   ApiFromModules,
@@ -18,8 +23,13 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  batchActions: typeof batchActions;
   crons: typeof crons;
   example: typeof example;
+  pipeline: typeof pipeline;
+  setup: typeof setup;
+  standardActions: typeof standardActions;
+  test: typeof test;
 }>;
 
 /**
@@ -52,4 +62,6 @@ export declare const components: {
   smallPool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"smallPool">;
   bigPool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"bigPool">;
   serializedPool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"serializedPool">;
+  standardPool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"standardPool">;
+  batchPool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"batchPool">;
 };

@@ -59,6 +59,15 @@ export const vOnCompleteValidator = vOnCompleteArgs;
 
 export type WorkpoolComponent = ComponentApi;
 
+// Batch execution mode
+export {
+  BatchWorkpool,
+  type BatchWorkpoolOptions,
+  type BatchTaskId,
+  type BatchTaskStatus,
+  type BatchEnqueueOptions,
+} from "./batch.js";
+
 export class Workpool {
   /**
    * Initializes a Workpool.
