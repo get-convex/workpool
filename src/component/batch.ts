@@ -68,14 +68,18 @@ export const enqueue = mutation({
       retryBehavior: args.retryBehavior,
     });
 
-    // Schedule config setup + executor start as a separate transaction
-    // to avoid OCC conflicts on the batchConfig singleton.
+    // Schedule executor start in a separate transaction to avoid OCC
+    // conflicts on the batchConfig singleton.
     if (args.batchConfig) {
       await ctx.scheduler.runAfter(
         0,
         internal.batch._maybeStartExecutors,
         args.batchConfig,
       );
+    } else {
+      // No batchConfig means the client's configSentThisTx optimization
+      // skipped it. Ensure executors are running from the DB config.
+      await ctx.scheduler.runAfter(0, internal.batch._ensureExecutors, {});
     }
     return taskId;
   },
@@ -117,6 +121,8 @@ export const enqueueBatch = mutation({
         internal.batch._maybeStartExecutors,
         args.batchConfig,
       );
+    } else {
+      await ctx.scheduler.runAfter(0, internal.batch._ensureExecutors, {});
     }
     return ids;
   },
@@ -634,6 +640,49 @@ export const _maybeStartExecutors = internalMutation({
     }
 
     // Schedule watchdog if not recently scheduled (dedup window: 20s)
+    const now = Date.now();
+    if (
+      !config.watchdogScheduledAt ||
+      now - config.watchdogScheduledAt > 20_000
+    ) {
+      await ctx.scheduler.runAfter(30_000, internal.batch._watchdog);
+      patch.watchdogScheduledAt = now;
+    }
+
+    if (Object.keys(patch).length > 0) {
+      await ctx.db.patch(config._id, patch);
+    }
+  },
+});
+
+/**
+ * Lightweight executor check — reads config from DB and starts missing
+ * executors + watchdog. Scheduled from enqueue when batchConfig is not
+ * provided (client-side configSentThisTx optimization).
+ */
+export const _ensureExecutors = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const config = await ctx.db.query("batchConfig").unique();
+    if (!config) return;
+
+    const activeSet = new Set(config.activeSlots);
+    const handle = config.executorHandle as FunctionHandle<"action">;
+    const newSlots = [...config.activeSlots];
+
+    for (let slot = 0; slot < config.maxWorkers; slot++) {
+      if (!activeSet.has(slot)) {
+        await ctx.scheduler.runAfter(0, handle, { slot });
+        newSlots.push(slot);
+      }
+    }
+
+    const patch: Record<string, unknown> = {};
+    if (newSlots.length !== config.activeSlots.length) {
+      patch.activeSlots = newSlots;
+    }
+
+    // Restart watchdog if not recently scheduled
     const now = Date.now();
     if (
       !config.watchdogScheduledAt ||
