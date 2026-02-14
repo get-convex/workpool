@@ -2141,6 +2141,81 @@ describe("batch", () => {
     });
   });
 
+  // ─── Potential bug: enqueue without batchConfig after watchdog stops ────────
+
+  describe("enqueue without batchConfig after all executors finish", () => {
+    it("new task enqueued without batchConfig should still get executors", async () => {
+      // Scenario:
+      // 1. First enqueue with batchConfig → executors start, watchdog starts
+      // 2. All tasks complete → executors call executorDone(false) → activeSlots = []
+      // 3. Watchdog fires, sees no work → stops (doesn't reschedule)
+      // 4. New enqueue WITHOUT batchConfig (simulating configSentThisTx=true)
+      // 5. Executors SHOULD be started for the new task
+
+      // Step 1: Initial enqueue with config
+      await t.mutation(api.batch.enqueue, {
+        name: "first-task", slot: 0, args: {},
+        batchConfig: {
+          executorHandle: "function://test-executor",
+          maxWorkers: 2,
+          claimTimeoutMs: 120_000,
+        },
+      });
+
+      // Flush scheduled _maybeStartExecutors
+      await (t.finishAllScheduledFunctions as any)(() => vi.advanceTimersByTime(1000), 10);
+
+      // Verify executors were started
+      await t.run(async (ctx) => {
+        const config = await ctx.db.query("batchConfig").unique();
+        expect(config!.activeSlots.sort()).toEqual([0, 1]);
+      });
+
+      // Step 2: Claim and complete the task
+      const claimed = await claimBatch(0, 10);
+      expect(claimed).toHaveLength(1);
+      await t.mutation(api.batch.complete, {
+        taskId: claimed[0]._id,
+        result: "done",
+      });
+
+      // Step 3: All executors finish (executorDone with startMore=false)
+      await t.mutation(api.batch.executorDone, { slot: 0, startMore: false });
+      await t.mutation(api.batch.executorDone, { slot: 1, startMore: false });
+
+      // Verify activeSlots is empty
+      await t.run(async (ctx) => {
+        const config = await ctx.db.query("batchConfig").unique();
+        expect(config!.activeSlots).toEqual([]);
+      });
+
+      // Step 4: Watchdog fires and sees no work → stops
+      await t.mutation(internal.batch._watchdog, {});
+
+      // Step 5: New task enqueued WITHOUT batchConfig
+      // (simulates configSentThisTx=true in the BatchWorkpool class)
+      const newTaskId = await t.mutation(api.batch.enqueue, {
+        name: "second-task", slot: 0, args: {},
+        // NO batchConfig!
+      });
+
+      // Verify task exists and is pending
+      await t.run(async (ctx) => {
+        const task = await ctx.db.get(newTaskId);
+        expect(task!.status).toBe("pending");
+      });
+
+      // Flush any scheduled functions
+      await (t.finishAllScheduledFunctions as any)(() => vi.advanceTimersByTime(1000), 10);
+
+      // Executors SHOULD be running to process the new task
+      await t.run(async (ctx) => {
+        const config = await ctx.db.query("batchConfig").unique();
+        expect(config!.activeSlots.length).toBeGreaterThan(0);
+      });
+    });
+  });
+
   describe("resetConfig and resetTasks", () => {
     it("resetConfig clears config and activeSlots", async () => {
       await setupPoolConfig({ activeSlots: [0, 1, 2], maxWorkers: 3 });

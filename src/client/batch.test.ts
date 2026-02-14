@@ -1517,4 +1517,118 @@ describe("_runExecutorLoop", () => {
       expect(tracker.failed[0].error).toContain(hugeError);
     });
   });
+
+  // ─── Potential bug: releaseClaims claimedAt correctness ──────────────────
+
+  describe("releaseClaims passes correct claimedAt at soft deadline", () => {
+    it("claimedAt in releaseClaims matches what claimByIds returned (not 0)", async () => {
+      const slow = deferred();
+      const TASK_CLAIMED_AT = 9999999;
+      let releasedItems: { taskId: string; claimedAt: number }[] = [];
+
+      const deps = makeDeps({
+        ...claimMocks(
+          vi.fn()
+            .mockResolvedValueOnce([
+              { _id: "s1", name: "slow", args: {}, attempt: 0, claimedAt: TASK_CLAIMED_AT },
+              { _id: "s2", name: "slow", args: {}, attempt: 0, claimedAt: TASK_CLAIMED_AT + 1 },
+            ])
+            .mockResolvedValue([]),
+        ),
+        getHandler: () => () => slow.promise,
+        releaseClaims: vi.fn().mockImplementation(async (items: { taskId: string; claimedAt: number }[]) => {
+          releasedItems = items;
+        }),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, SHORT_OPTIONS);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      // Both tasks should have been released with their EXACT claimedAt values
+      expect(releasedItems).toHaveLength(2);
+      const sorted = [...releasedItems].sort((a, b) => a.taskId.localeCompare(b.taskId));
+      expect(sorted[0]).toEqual({ taskId: "s1", claimedAt: TASK_CLAIMED_AT });
+      expect(sorted[1]).toEqual({ taskId: "s2", claimedAt: TASK_CLAIMED_AT + 1 });
+
+      // Critically: claimedAt should NOT be 0 (the fallback value)
+      for (const item of releasedItems) {
+        expect(item.claimedAt).not.toBe(0);
+      }
+
+      slow.resolve();
+    });
+  });
+
+  // ─── Potential bug: non-Node memory pressure ────────────────────────────
+
+  describe("non-Node runtime memory behavior", () => {
+    it("claims tasks even when getHeapUsedBytes returns massive values on non-Node", async () => {
+      const tracker = createTracker();
+      let claimCallCount = 0;
+
+      const deps = makeDeps({
+        ...claimMocks(vi.fn().mockImplementation(async () => {
+          claimCallCount++;
+          if (claimCallCount === 1) {
+            return [
+              { _id: "t1", name: "handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
+              { _id: "t2", name: "handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT },
+            ];
+          }
+          return [];
+        })),
+        getHandler: () => async () => "done",
+        // Simulates extreme memory pressure
+        getHeapUsedBytes: () => 2 * 1024 * 1024 * 1024, // 2 GB
+        isNode: false, // Non-Node runtime (Convex V8 isolate)
+        ...batchMocks(tracker),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, {
+        ...SHORT_OPTIONS,
+        maxHeapMB: 48, // 48 MB limit — way below 2 GB
+      });
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      // BOTH tasks should complete — memory check is skipped on non-Node
+      // because process.memoryUsage() isn't available
+      expect(tracker.completed.sort()).toEqual(["t1", "t2"]);
+    });
+
+    it("memory pressure DOES throttle on Node runtime", async () => {
+      const tracker = createTracker();
+      let claimCallCount = 0;
+
+      const deps = makeDeps({
+        ...claimMocks(vi.fn().mockImplementation(async () => {
+          claimCallCount++;
+          if (claimCallCount <= 5) {
+            return [{ _id: `t${claimCallCount}`, name: "handler", args: {}, attempt: 0, claimedAt: TEST_CLAIMED_AT }];
+          }
+          return [];
+        })),
+        getHandler: () => async () => "done",
+        getHeapUsedBytes: () => 500 * 1024 * 1024, // 500 MB — over limit
+        isNode: true,
+        ...batchMocks(tracker),
+        countPending: vi.fn().mockResolvedValue(0),
+        executorDone: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const loopDone = _runExecutorLoop(deps, {
+        ...SHORT_OPTIONS,
+        maxHeapMB: 100, // 100 MB limit — under 500 MB actual
+      });
+      await vi.advanceTimersByTimeAsync(2_000);
+      await loopDone;
+
+      // On Node, memory pressure should prevent claiming
+      // First claim happens before the check, but subsequent claims are blocked
+      expect(claimCallCount).toBeLessThanOrEqual(2);
+    });
+  });
 });
