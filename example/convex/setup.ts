@@ -1,7 +1,7 @@
 import { Workpool, BatchWorkpool } from "@convex-dev/workpool";
 import { components } from "./_generated/api";
 
-// Standard mode: 1 action per task, maxParallelism 10
+// Standard mode: 1 action per task, maxParallelism 100
 export const standard = new Workpool(components.standardPool, {
   maxParallelism: 100,
   logLevel: "INFO",
