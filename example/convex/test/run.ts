@@ -1,19 +1,13 @@
 import {
-  query,
   internalMutation,
   QueryCtx,
   internalQuery,
 } from "../_generated/server";
 import { v } from "convex/values";
-import { components } from "../_generated/api";
-import { Workpool, vWorkId } from "@convex-dev/workpool";
+import { components, internal } from "../_generated/api";
+import { vWorkId } from "@convex-dev/workpool";
 import { Id } from "../_generated/dataModel";
 import { parse } from "convex-helpers/validators";
-
-// Initialize dynamic workpool without fixed parallelism
-const dynamicWorkpool = new Workpool(components.dynamicWorkpool, {
-  // Don't set maxParallelism or logLevel here - it will be set dynamically
-});
 
 export async function runStatus(ctx: QueryCtx, runId: Id<"runs">) {
   const last = await ctx.db
@@ -27,7 +21,7 @@ export async function runStatus(ctx: QueryCtx, runId: Id<"runs">) {
 // Start a new test run
 export default internalMutation({
   args: {
-    scenario: v.string(),
+    scenario: v.union(v.literal("bigArgs")),
     parameters: v.any(),
   },
   handler: async (ctx, args) => {
@@ -68,6 +62,14 @@ export default internalMutation({
       scenario: args.scenario,
       parameters: args.parameters,
     });
+    await ctx.scheduler.runAfter(
+      0,
+      internal.test.scenarios[args.scenario].start,
+      {
+        runId,
+        parameters: args.parameters,
+      },
+    );
 
     return runId;
   },
@@ -104,15 +106,6 @@ export const status = internalQuery({
     }
     const status = await runStatus(ctx, latestRun._id);
 
-    return {
-      run: {
-        runId: latestRun._id,
-        scenario: latestRun.scenario,
-        parameters: latestRun.parameters,
-        startTime: latestRun.startTime,
-        endTime: latestRun.endTime,
-      },
-      status,
-    };
+    return { run: latestRun, status };
   },
 });
