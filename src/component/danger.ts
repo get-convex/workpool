@@ -27,6 +27,13 @@ export const clearPending = internalMutation({
         await ctx.db.delete(entry._id);
         const work = await ctx.db.get(entry.workId);
         if (work) {
+          // Clean up any large data stored separately
+          if (work.fnArgsId) {
+            await ctx.db.delete(work.fnArgsId);
+          }
+          if (work.contextId) {
+            await ctx.db.delete(work.contextId);
+          }
           await ctx.db.delete(work._id);
         }
       }),

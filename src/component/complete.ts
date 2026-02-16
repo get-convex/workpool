@@ -58,6 +58,15 @@ export async function completeHandler(
       if (!retry) {
         if (work.onComplete) {
           try {
+            // Retrieve large context if stored separately
+            let context = work.onComplete.context;
+            if (context === undefined && work.contextId) {
+              const payload = await ctx.db.get(work.contextId);
+              if (payload) {
+                context = payload.data;
+              }
+            }
+
             const handle = work.onComplete.fnHandle as FunctionHandle<
               "mutation",
               OnCompleteArgs,
@@ -65,7 +74,7 @@ export async function completeHandler(
             >;
             await ctx.runMutation(handle, {
               workId: work._id,
-              context: work.onComplete.context,
+              context,
               result: job.runResult,
             });
             console.debug(`[complete] onComplete for ${job.workId} completed`);
@@ -78,6 +87,17 @@ export async function completeHandler(
           }
         }
         recordCompleted(console, work, job.runResult.kind);
+
+        // Clean up any large data that was stored separately.
+        // NOTE: Deleting large docs counts against read bandwidth (fnArgsSize/contextSize).
+        // TODO: consider async deletion in the future to avoid bandwidth limits.
+        if (work.fnArgsId) {
+          await ctx.db.delete(work.fnArgsId);
+        }
+        if (work.contextId) {
+          await ctx.db.delete(work.contextId);
+        }
+
         // This is the terminating state for work.
         await ctx.db.delete(job.workId);
       }

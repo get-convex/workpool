@@ -63,8 +63,12 @@ export default defineSchema({
     fnHandle: v.string(),
     fnName: v.string(),
     fnArgs: v.any(),
+    fnArgsId: v.optional(v.id("largeData")), // Reference to large args if stored separately
+    fnArgsDocSize: v.optional(v.number()), // Full doc size for bandwidth accounting
     attempts: v.number(), // number of completed attempts
     onComplete: v.optional(vOnCompleteFnContext),
+    contextId: v.optional(v.id("largeData")), // Reference to large context if stored separately
+    contextDocSize: v.optional(v.number()), // Full doc size for bandwidth accounting
     retryBehavior: v.optional(retryBehavior),
     canceled: v.optional(v.boolean()),
   }),
