@@ -1,9 +1,7 @@
 import { internalAction } from "../../_generated/server";
 import { v } from "convex/values";
 import { internal, components } from "../../_generated/api";
-import { Workpool, WorkId } from "@convex-dev/workpool";
-
-const testWorkpool = new Workpool(components.testWorkpool, {});
+import { WorkId, enqueueBatch, enqueue } from "@convex-dev/workpool";
 
 // Helper to generate payload of specified size
 function generatePayload(sizeBytes: number): string {
@@ -69,64 +67,42 @@ export default internalAction({
           onComplete: internal.test.work.markTaskCompleted,
           context: {},
         }
-      : undefined;
+      : {};
 
     let workIds: WorkId[];
+    const taskArgs = Array.from({ length: taskCount }, (_, i) => ({
+      ...baseArgs,
+      taskNum: i,
+    }));
+    const fn =
+      taskType === "action"
+        ? internal.test.work.configurableAction
+        : internal.test.work.configurableMutation;
 
-    if (taskType === "mutation") {
-      const taskArgs = Array.from({ length: taskCount }, (_, i) => ({
-        ...baseArgs,
-        taskNum: i,
-        readWriteData: 0,
-      }));
-      if (useBatchEnqueue) {
-        console.log("Using batch enqueue");
-        workIds = await testWorkpool.enqueueMutationBatch(
-          ctx,
-          internal.test.work.configurableMutation,
-          taskArgs,
-          onCompleteOpts,
-        );
-      } else {
-        console.log("Using individual enqueue");
-        workIds = await Promise.all(
-          taskArgs.map((a) =>
-            testWorkpool.enqueueMutation(
-              ctx,
-              internal.test.work.configurableMutation,
-              a,
-              onCompleteOpts,
-            ),
-          ),
-        );
-      }
+    if (useBatchEnqueue) {
+      console.log("Using batch enqueue");
+      workIds = await enqueueBatch(
+        components.testWorkpool,
+        ctx,
+        taskType,
+        fn,
+        taskArgs,
+        onCompleteOpts,
+      );
     } else {
-      const taskArgs = Array.from({ length: taskCount }, (_, i) => ({
-        ...baseArgs,
-        taskNum: i,
-        durationMs: 100,
-      }));
-      if (useBatchEnqueue) {
-        console.log("Using batch enqueue");
-        workIds = await testWorkpool.enqueueActionBatch(
-          ctx,
-          internal.test.work.configurableAction,
-          taskArgs,
-          onCompleteOpts,
-        );
-      } else {
-        console.log("Using individual enqueue");
-        workIds = await Promise.all(
-          taskArgs.map((a) =>
-            testWorkpool.enqueueAction(
-              ctx,
-              internal.test.work.configurableAction,
-              a,
-              onCompleteOpts,
-            ),
+      console.log("Using individual enqueue");
+      workIds = await Promise.all(
+        taskArgs.map((a) =>
+          enqueue(
+            components.testWorkpool,
+            ctx,
+            taskType,
+            fn,
+            a,
+            onCompleteOpts,
           ),
-        );
-      }
+        ),
+      );
     }
 
     // Track all tasks
