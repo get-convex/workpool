@@ -5,6 +5,7 @@ import {
 } from "../_generated/server";
 import { v } from "convex/values";
 import { Id } from "../_generated/dataModel";
+import { assert } from "convex-helpers";
 
 export async function runStatus(ctx: QueryCtx, runId: Id<"runs">) {
   const last = await ctx.db
@@ -49,6 +50,21 @@ export const start = internalMutation({
     });
 
     return runId;
+  },
+});
+
+export const cancel = internalMutation({
+  args: {
+    runId: v.optional(v.id("runs")),
+  },
+  handler: async (ctx, args) => {
+    const runId =
+      args.runId ?? (await ctx.db.query("runs").order("desc").first())?._id;
+    if (!runId) throw new Error("No run found");
+    const run = await ctx.db.get("runs", runId);
+    assert(run);
+    console.log(`Deleting run ${runId}: ${JSON.stringify(run)}`);
+    await ctx.db.delete("runs", runId);
   },
 });
 
