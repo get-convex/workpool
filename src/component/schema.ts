@@ -63,12 +63,11 @@ export default defineSchema({
     fnHandle: v.string(),
     fnName: v.string(),
     fnArgs: v.any(),
-    fnArgsId: v.optional(v.id("largeData")), // Reference to large args if stored separately
-    fnArgsDocSize: v.optional(v.number()), // Full doc size for bandwidth accounting
+    // Reference to large args/onComplete context if stored separately
+    payloadId: v.optional(v.id("payload")),
+    payloadSize: v.optional(v.number()),
     attempts: v.number(), // number of completed attempts
     onComplete: v.optional(vOnCompleteFnContext),
-    contextId: v.optional(v.id("largeData")), // Reference to large context if stored separately
-    contextDocSize: v.optional(v.number()), // Full doc size for bandwidth accounting
     retryBehavior: v.optional(retryBehavior),
     canceled: v.optional(v.boolean()),
   }),
@@ -98,4 +97,10 @@ export default defineSchema({
   })
     .index("workId", ["workId"])
     .index("segment", ["segment"]),
+
+  // Store large data separately to avoid document size limits
+  payload: defineTable({
+    args: v.optional(v.any()),
+    context: v.optional(v.any()),
+  }),
 });
