@@ -21,152 +21,128 @@ function generatePayload(sizeBytes: number): string {
   return result;
 }
 
-export const start = internalAction({
-  args: {
-    runId: v.id("runs"),
-    parameters: v.object({
-      taskCount: v.optional(v.number()),
-      argSizeBytes: v.optional(v.number()),
-      taskType: v.optional(v.union(v.literal("mutation"), v.literal("action"))),
-      useBatchEnqueue: v.optional(v.boolean()),
-      useOnComplete: v.optional(v.boolean()),
-      maxParallelism: v.optional(v.number()),
-    }),
-  },
+const parameters = {
+  taskCount: v.optional(v.number()),
+  argSizeBytes: v.optional(v.number()),
+  taskType: v.optional(v.union(v.literal("mutation"), v.literal("action"))),
+  useBatchEnqueue: v.optional(v.boolean()),
+  useOnComplete: v.optional(v.boolean()),
+  maxParallelism: v.optional(v.number()),
+};
+
+export default internalAction({
+  args: parameters,
   handler: async (ctx, args) => {
+    const runId = await ctx.runMutation(internal.test.run.start, {
+      scenario: "bigArgs",
+      parameters: args,
+    });
     const {
+      maxParallelism,
       taskCount = 50,
       argSizeBytes = 800_000, // 800KB default
       taskType = "mutation",
       useBatchEnqueue = false,
       useOnComplete = false,
-    } = args.parameters;
+    } = args;
+    if (maxParallelism !== undefined) {
+      await ctx.runMutation(components.testWorkpool.config.update, {
+        maxParallelism: maxParallelism,
+      });
+    }
 
-    console.log(`Starting bigArgs test with ${taskCount} tasks of ${argSizeBytes} bytes each`);
+    console.log(
+      `Starting bigArgs test with ${taskCount} tasks of ${argSizeBytes} bytes each`,
+    );
 
     // Generate the large payload once
     const payload = generatePayload(argSizeBytes);
+    const baseArgs = {
+      payload,
+      returnBytes: 100, // Small return
+      runId,
+      hasOnComplete: useOnComplete,
+    };
 
-    const workIds: WorkId[] = [];
-
-    if (useBatchEnqueue) {
-      // Batch enqueue all tasks at once
-      console.log("Using batch enqueue");
-
-      if (taskType === "mutation") {
-        const taskArgs = [];
-        for (let i = 0; i < taskCount; i++) {
-          taskArgs.push({
-            payload,
-            returnBytes: 100, // Small return
-            taskNum: i,
-            runId: args.runId,
-            hasOnComplete: useOnComplete,
-            readWriteData: 0, // No DB operations for this test
-          });
+    const onCompleteOpts = useOnComplete
+      ? {
+          onComplete: internal.test.work.markTaskCompleted,
+          context: {},
         }
-        const ids = await dynamicWorkpool.enqueueMutationBatch(
+      : undefined;
+
+    let workIds: WorkId[];
+
+    if (taskType === "mutation") {
+      const taskArgs = Array.from({ length: taskCount }, (_, i) => ({
+        ...baseArgs,
+        taskNum: i,
+        readWriteData: 0,
+      }));
+      if (useBatchEnqueue) {
+        console.log("Using batch enqueue");
+        workIds = await testWorkpool.enqueueMutationBatch(
           ctx,
           internal.test.work.configurableMutation,
           taskArgs,
-          useOnComplete ? {
-            onComplete: internal.test.work.markTaskCompleted,
-            context: { runId: args.runId, taskNum: -1 }, // Will be overridden per task
-          } : undefined
+          onCompleteOpts,
         );
-        workIds.push(...ids);
       } else {
-        const taskArgs = [];
-        for (let i = 0; i < taskCount; i++) {
-          taskArgs.push({
-            payload,
-            returnBytes: 100, // Small return
-            taskNum: i,
-            runId: args.runId,
-            hasOnComplete: useOnComplete,
-            durationMs: 100, // Short duration
-          });
-        }
-        const ids = await dynamicWorkpool.enqueueActionBatch(
+        console.log("Using individual enqueue");
+        workIds = await Promise.all(
+          taskArgs.map((a) =>
+            testWorkpool.enqueueMutation(
+              ctx,
+              internal.test.work.configurableMutation,
+              a,
+              onCompleteOpts,
+            ),
+          ),
+        );
+      }
+    } else {
+      const taskArgs = Array.from({ length: taskCount }, (_, i) => ({
+        ...baseArgs,
+        taskNum: i,
+        durationMs: 100,
+      }));
+      if (useBatchEnqueue) {
+        console.log("Using batch enqueue");
+        workIds = await testWorkpool.enqueueActionBatch(
           ctx,
           internal.test.work.configurableAction,
           taskArgs,
-          useOnComplete ? {
-            onComplete: internal.test.work.markTaskCompleted,
-            context: { runId: args.runId, taskNum: -1 }, // Will be overridden per task
-          } : undefined
+          onCompleteOpts,
         );
-        workIds.push(...ids);
-      }
-    } else {
-      // Enqueue tasks individually
-      console.log("Using individual enqueue");
-
-      for (let i = 0; i < taskCount; i++) {
-        const baseArgs = {
-          payload,
-          returnBytes: 100, // Small return
-          taskNum: i,
-          runId: args.runId,
-          hasOnComplete: useOnComplete,
-        };
-
-        let workId: WorkId;
-        if (taskType === "mutation") {
-          workId = await dynamicWorkpool.enqueueMutation(
-            ctx,
-            internal.test.work.configurableMutation,
-            {
-              ...baseArgs,
-              readWriteData: 0, // No DB operations for this test
-            },
-            useOnComplete ? {
-              onComplete: internal.test.work.markTaskCompleted,
-              context: { runId: args.runId, taskNum: i },
-            } : undefined
-          );
-        } else {
-          workId = await dynamicWorkpool.enqueueAction(
-            ctx,
-            internal.test.work.configurableAction,
-            {
-              ...baseArgs,
-              durationMs: 100, // Short duration
-            },
-            useOnComplete ? {
-              onComplete: internal.test.work.markTaskCompleted,
-              context: { runId: args.runId, taskNum: i },
-            } : undefined
-          );
-        }
-
-        workIds.push(workId);
-
-        // Track the task
-        await ctx.runMutation(internal.test.run.trackTask, {
-          runId: args.runId,
-          taskNum: i,
-          workId,
-          type: taskType,
-          hasOnComplete: useOnComplete,
-        });
+      } else {
+        console.log("Using individual enqueue");
+        workIds = await Promise.all(
+          taskArgs.map((a) =>
+            testWorkpool.enqueueAction(
+              ctx,
+              internal.test.work.configurableAction,
+              a,
+              onCompleteOpts,
+            ),
+          ),
+        );
       }
     }
 
-    // If using batch enqueue, track all tasks now
-    if (useBatchEnqueue) {
-      for (let i = 0; i < workIds.length; i++) {
-        await ctx.runMutation(internal.test.run.trackTask, {
-          runId: args.runId,
-          taskNum: i,
-          workId: workIds[i],
-          type: taskType,
-          hasOnComplete: useOnComplete,
-        });
-      }
-    }
+    // Track all tasks
+    await ctx.runMutation(internal.test.work.trackTaskBatch, {
+      tasks: workIds.map((workId, i) => ({
+        runId,
+        taskNum: i,
+        workId,
+        type: taskType,
+        hasOnComplete: useOnComplete,
+      })),
+    });
 
-    console.log(`Enqueued ${workIds.length} tasks with ${argSizeBytes} byte payloads`);
+    console.log(
+      `Enqueued ${workIds.length} tasks with ${argSizeBytes} byte payloads`,
+    );
     return { workIds, taskCount, argSizeBytes };
   },
 });

@@ -4,10 +4,7 @@ import {
   internalQuery,
 } from "../_generated/server";
 import { v } from "convex/values";
-import { components, internal } from "../_generated/api";
-import { vWorkId } from "@convex-dev/workpool";
 import { Id } from "../_generated/dataModel";
-import { parse } from "convex-helpers/validators";
 
 export async function runStatus(ctx: QueryCtx, runId: Id<"runs">) {
   const last = await ctx.db
@@ -19,9 +16,9 @@ export async function runStatus(ctx: QueryCtx, runId: Id<"runs">) {
 }
 
 // Start a new test run
-export default internalMutation({
+export const start = internalMutation({
   args: {
-    scenario: v.union(v.literal("bigArgs")),
+    scenario: v.string(),
     parameters: v.any(),
   },
   handler: async (ctx, args) => {
@@ -44,55 +41,14 @@ export default internalMutation({
       }
     }
 
-    const { maxParallelism } = parse(
-      v.object({
-        maxParallelism: v.optional(v.number()),
-      }),
-      args.parameters,
-    );
-    if (maxParallelism !== undefined) {
-      await ctx.runMutation(components.dynamicWorkpool.config.update, {
-        maxParallelism,
-      });
-    }
-
     // Create new run
     const runId = await ctx.db.insert("runs", {
       startTime: Date.now(),
       scenario: args.scenario,
       parameters: args.parameters,
     });
-    await ctx.scheduler.runAfter(
-      0,
-      internal.test.scenarios[args.scenario].start,
-      {
-        runId,
-        parameters: args.parameters,
-      },
-    );
 
     return runId;
-  },
-});
-
-// Track a new task
-export const trackTask = internalMutation({
-  args: {
-    runId: v.id("runs"),
-    taskNum: v.number(),
-    workId: vWorkId,
-    type: v.union(v.literal("mutation"), v.literal("action")),
-    hasOnComplete: v.boolean(),
-  },
-  handler: async (ctx, args) => {
-    await ctx.db.insert("tasks", {
-      runId: args.runId,
-      taskNum: args.taskNum,
-      workId: args.workId,
-      type: args.type,
-      status: "pending",
-      hasOnComplete: args.hasOnComplete,
-    });
   },
 });
 

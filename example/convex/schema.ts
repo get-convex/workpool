@@ -28,5 +28,7 @@ export default defineSchema({
       v.literal("running"),
     ),
     hasOnComplete: v.boolean(),
-  }).index("runId_status_taskNum", ["runId", "status", "taskNum"]),
+  })
+    .index("runId_status_taskNum", ["runId", "status", "taskNum"])
+    .index("workId", ["workId"]),
 });
