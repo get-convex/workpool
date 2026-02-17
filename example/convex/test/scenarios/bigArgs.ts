@@ -24,7 +24,6 @@ const parameters = {
   argSizeBytes: v.optional(v.number()),
   taskType: v.optional(v.union(v.literal("mutation"), v.literal("action"))),
   useBatchEnqueue: v.optional(v.boolean()),
-  useOnComplete: v.optional(v.boolean()),
   maxParallelism: v.optional(v.number()),
 };
 
@@ -36,18 +35,11 @@ export default internalAction({
       parameters: args,
     });
     const {
-      maxParallelism,
       taskCount = 50,
       argSizeBytes = 800_000, // 800KB default
       taskType = "mutation",
       useBatchEnqueue = false,
-      useOnComplete = false,
     } = args;
-    if (maxParallelism !== undefined) {
-      await ctx.runMutation(components.testWorkpool.config.update, {
-        maxParallelism: maxParallelism,
-      });
-    }
 
     console.log(
       `Starting bigArgs test with ${taskCount} tasks of ${argSizeBytes} bytes each`,
@@ -59,21 +51,15 @@ export default internalAction({
       payload,
       returnBytes: 100, // Small return
       runId,
-      hasOnComplete: useOnComplete,
     };
 
-    const onCompleteOpts = useOnComplete
-      ? {
-          onComplete: internal.test.work.markTaskCompleted,
-          context: {},
-        }
-      : {};
+    const onCompleteOpts = {
+      onComplete: internal.test.work.markTaskCompleted,
+      context: { runId, type: taskType },
+    };
 
     let workIds: WorkId[];
-    const taskArgs = Array.from({ length: taskCount }, (_, i) => ({
-      ...baseArgs,
-      taskNum: i,
-    }));
+    const taskArgs = Array(taskCount).fill(baseArgs);
     const fn =
       taskType === "action"
         ? internal.test.work.configurableAction
@@ -104,17 +90,6 @@ export default internalAction({
         ),
       );
     }
-
-    // Track all tasks
-    await ctx.runMutation(internal.test.work.trackTaskBatch, {
-      tasks: workIds.map((workId, i) => ({
-        runId,
-        taskNum: i,
-        workId,
-        type: taskType,
-        hasOnComplete: useOnComplete,
-      })),
-    });
 
     console.log(
       `Enqueued ${workIds.length} tasks with ${argSizeBytes} byte payloads`,

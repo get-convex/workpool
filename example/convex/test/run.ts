@@ -6,14 +6,24 @@ import {
 import { v } from "convex/values";
 import { Id } from "../_generated/dataModel";
 import { assert } from "convex-helpers";
+import { components } from "../_generated/api";
 
-export async function runStatus(ctx: QueryCtx, runId: Id<"runs">) {
-  const last = await ctx.db
+export async function runStatus(
+  ctx: QueryCtx,
+  run: { _id: Id<"runs">; taskCount?: number },
+) {
+  const completedTasks = await ctx.db
     .query("tasks")
-    .withIndex("runId_status_taskNum", (q) => q.eq("runId", runId))
-    .order("desc")
-    .first();
-  return last?.status;
+    .withIndex("runId", (q) => q.eq("runId", run._id))
+    .collect();
+  const completedCount = completedTasks.length;
+  if (run.taskCount === undefined) {
+    return "pending";
+  }
+  if (completedCount < run.taskCount) {
+    return "running";
+  }
+  return "completed";
 }
 
 // Start a new test run
@@ -28,9 +38,9 @@ export const start = internalMutation({
 
     if (latestRun) {
       // Check if there are any in-flight tasks
-      const status = await runStatus(ctx, latestRun._id);
+      const status = await runStatus(ctx, latestRun);
 
-      if (status && ["running", "pending"].includes(status)) {
+      if (["running", "pending"].includes(status)) {
         throw new Error(
           `Cannot start new run: previous run ${latestRun.scenario} is ${status} (started at ${new Date(latestRun.startTime).toISOString()})`,
         );
@@ -41,12 +51,18 @@ export const start = internalMutation({
         );
       }
     }
+    if (args.parameters.maxParallelism !== undefined) {
+      await ctx.runMutation(components.testWorkpool.config.update, {
+        maxParallelism: args.parameters.maxParallelism,
+      });
+    }
 
     // Create new run
     const runId = await ctx.db.insert("runs", {
       startTime: Date.now(),
       scenario: args.scenario,
       parameters: args.parameters,
+      taskCount: args.parameters.taskCount,
     });
 
     return runId;
@@ -76,7 +92,7 @@ export const status = internalQuery({
     if (!latestRun) {
       return null;
     }
-    const status = await runStatus(ctx, latestRun._id);
+    const status = await runStatus(ctx, latestRun);
 
     return { run: latestRun, status };
   },
