@@ -58,5 +58,5 @@ export declare const components: {
   smallPool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"smallPool">;
   bigPool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"bigPool">;
   serializedPool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"serializedPool">;
-  dynamicWorkpool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"dynamicWorkpool">;
+  testWorkpool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"testWorkpool">;
 };

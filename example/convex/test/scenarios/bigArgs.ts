@@ -3,7 +3,7 @@ import { v } from "convex/values";
 import { internal, components } from "../../_generated/api";
 import { Workpool, WorkId } from "@convex-dev/workpool";
 
-const dynamicWorkpool = new Workpool(components.dynamicWorkpool, {});
+const testWorkpool = new Workpool(components.testWorkpool, {});
 
 // Helper to generate payload of specified size
 function generatePayload(sizeBytes: number): string {
