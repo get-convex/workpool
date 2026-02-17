@@ -31,6 +31,7 @@ import { getOrUpdateGlobals } from "./config.js";
 
 const INLINE_METADATA_THRESHOLD = 8_000; // 8KB threshold
 const MAX_DOC_SIZE = 1_000_000; // Some buffer for 1MiB actual limit
+const PAYLOAD_DOC_OVERHEAD = 78; // Size of { args: null, context: null }
 
 const itemArgs = {
   fnHandle: v.string(),
@@ -72,8 +73,9 @@ async function enqueueHandler(
   }
 
   let contextSize = 0;
-  if (workArgs.onComplete?.context !== undefined) {
-    contextSize = getConvexSize(workArgs.onComplete.context);
+  const context = workArgs.onComplete?.context;
+  if (context !== undefined) {
+    contextSize = getConvexSize(context);
     if (contextSize > MAX_DOC_SIZE) {
       throw new Error(
         `OnComplete context for function ${workArgs.fnName} too large: ${contextSize} bytes (max: ${MAX_DOC_SIZE} bytes)`,
@@ -88,24 +90,24 @@ async function enqueueHandler(
 
   if (fnArgsSize >= INLINE_METADATA_THRESHOLD) {
     // Args are large, store separately
-    const payloadDoc = { data: workArgs.fnArgs };
-    workItem.fnArgsId = await ctx.db.insert("payload", payloadDoc);
-    workItem.fnArgsSize = fnArgsSize;
+    const payloadDoc: { args: Record<string, any>; context?: unknown } = {
+      args: workArgs.fnArgs,
+    };
+    workItem.payloadSize = fnArgsSize + PAYLOAD_DOC_OVERHEAD;
     delete workItem.fnArgs;
-
     if (contextSize >= INLINE_METADATA_THRESHOLD) {
-      // Context is also large, store separately
-      const contextDoc = { data: workArgs.onComplete!.context };
-      workItem.contextId = await ctx.db.insert("payload", contextDoc);
-      workItem.contextSize = contextSize;
+      // Context is also too big to inline
+      payloadDoc.context = context;
+      workItem.payloadSize += contextSize;
       delete workItem.onComplete!.context;
     }
+    workItem.payloadId = await ctx.db.insert("payload", payloadDoc);
   } else if (fnArgsSize + contextSize >= INLINE_METADATA_THRESHOLD) {
-    // Keep args inline, store context separately
-    const contextDoc = { data: workArgs.onComplete!.context };
-    workItem.contextId = await ctx.db.insert("payload", contextDoc);
-    workItem.contextSize = contextSize;
+    // Args are small enough, but combined with context it's too big.
+    // Store just context in this case.
+    workItem.payloadId = await ctx.db.insert("payload", { context });
     delete workItem.onComplete!.context;
+    workItem.payloadSize = contextSize + PAYLOAD_DOC_OVERHEAD;
   }
 
   // Store the work item

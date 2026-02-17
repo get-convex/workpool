@@ -60,10 +60,10 @@ export async function completeHandler(
           try {
             // Retrieve large context if stored separately
             let context = work.onComplete.context;
-            if (context === undefined && work.contextId) {
-              const payload = await ctx.db.get(work.contextId);
+            if (context === undefined && work.payloadId) {
+              const payload = await ctx.db.get(work.payloadId);
               if (payload) {
-                context = payload.data;
+                context = payload.context;
               }
             }
 
@@ -89,13 +89,9 @@ export async function completeHandler(
         recordCompleted(console, work, job.runResult.kind);
 
         // Clean up any large data that was stored separately.
-        // NOTE: Deleting large docs counts against read bandwidth (fnArgsSize/contextSize).
         // TODO: consider async deletion in the future to avoid bandwidth limits.
-        if (work.fnArgsId) {
-          await ctx.db.delete(work.fnArgsId);
-        }
-        if (work.contextId) {
-          await ctx.db.delete(work.contextId);
+        if (work.payloadId) {
+          await ctx.db.delete(work.payloadId);
         }
 
         // This is the terminating state for work.
