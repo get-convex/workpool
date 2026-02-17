@@ -68,7 +68,7 @@ export const configurableMutation = internalMutation({
 // Configurable action that simulates long-running operations
 export const configurableAction = internalAction({
   args: {
-    durationMs: v.number(), // How long to run
+    durationMs: v.optional(v.number()), // How long to run
     returnBytes: v.number(), // Size of return value
     payload: v.any(), // Separate payload argument
     taskNum: v.number(), // Task number for tracking
@@ -83,7 +83,9 @@ export const configurableAction = internalAction({
     });
 
     // Simulate work for specified duration
-    await new Promise((resolve) => setTimeout(resolve, args.durationMs));
+    await new Promise((resolve) =>
+      setTimeout(resolve, args.durationMs ?? Math.random() * 1000),
+    );
 
     const ret = generateData(args.returnBytes);
     // If no onComplete handler, mark task as done
