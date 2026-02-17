@@ -1,6 +1,6 @@
 import { type Infer, v } from "convex/values";
 import { internalMutation, type MutationCtx } from "./_generated/server.js";
-import { completeArgs, completeHandler } from "./complete.js";
+import { internal } from "./_generated/api.js";
 import { createLogger } from "./logging.js";
 
 const recoveryArgs = v.object({
@@ -41,7 +41,6 @@ export async function recoveryHandler(
 ) {
   const globals = await ctx.db.query("globals").unique();
   const console = createLogger(globals?.logLevel);
-  const toComplete: Infer<typeof completeArgs.fields.jobs> = [];
   for (let i = 0; i < jobs.length; i++) {
     const job = jobs[i];
     const preamble = `[recovery] Scheduled job ${job.scheduledId} for work ${job.workId}`;
@@ -68,10 +67,14 @@ export async function recoveryHandler(
     const scheduled = await ctx.db.system.get(job.scheduledId);
     if (scheduled === null) {
       console.warn(`${preamble} not found in _scheduled_functions`);
-      toComplete.push({
-        workId: job.workId,
-        runResult: { kind: "failed", error: `Scheduled job not found` },
-        attempt: job.attempt,
+      await ctx.scheduler.runAfter(0, internal.complete.complete, {
+        jobs: [
+          {
+            workId: job.workId,
+            runResult: { kind: "failed", error: `Scheduled job not found` },
+            attempt: job.attempt,
+          },
+        ],
       });
       continue;
     }
@@ -80,25 +83,30 @@ export async function recoveryHandler(
     switch (scheduled.state.kind) {
       case "failed": {
         console.debug(`${preamble} failed and detected in recovery`);
-        toComplete.push({
-          workId: job.workId,
-          runResult: scheduled.state,
-          attempt: job.attempt,
+        await ctx.scheduler.runAfter(0, internal.complete.complete, {
+          jobs: [
+            {
+              workId: job.workId,
+              runResult: scheduled.state,
+              attempt: job.attempt,
+            },
+          ],
         });
         break;
       }
       case "canceled": {
         console.debug(`${preamble} was canceled and detected in recovery`);
-        toComplete.push({
-          workId: job.workId,
-          runResult: { kind: "failed", error: "Canceled via scheduler" },
-          attempt: job.attempt,
+        await ctx.scheduler.runAfter(0, internal.complete.complete, {
+          jobs: [
+            {
+              workId: job.workId,
+              runResult: { kind: "failed", error: "Canceled via scheduler" },
+              attempt: job.attempt,
+            },
+          ],
         });
         break;
       }
     }
-  }
-  if (toComplete.length > 0) {
-    await completeHandler(ctx, { jobs: toComplete });
   }
 }
