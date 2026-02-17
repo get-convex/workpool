@@ -29,17 +29,26 @@ const parameters = {
 
 export default internalAction({
   args: parameters,
-  handler: async (ctx, args) => {
-    const runId = await ctx.runMutation(internal.test.run.start, {
-      scenario: "bigArgs",
-      parameters: args,
-    });
-    const {
+  handler: async (
+    ctx,
+    {
       taskCount = 50,
       argSizeBytes = 800_000, // 800KB default
       taskType = "mutation",
       useBatchEnqueue = false,
-    } = args;
+      maxParallelism = 50,
+    },
+  ) => {
+    const runId = await ctx.runMutation(internal.test.run.start, {
+      scenario: "bigArgs",
+      parameters: {
+        taskCount,
+        argSizeBytes,
+        taskType,
+        useBatchEnqueue,
+        maxParallelism,
+      },
+    });
 
     console.log(
       `Starting bigArgs test with ${taskCount} tasks of ${argSizeBytes} bytes each`,
