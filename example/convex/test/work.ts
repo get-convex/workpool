@@ -1,5 +1,5 @@
 import { internalMutation, internalAction } from "../_generated/server";
-import { v } from "convex/values";
+import { v, DefaultFunctionArgs } from "convex/values";
 import { internal, components } from "../_generated/api";
 import {
   vOnCompleteArgs,
@@ -119,7 +119,7 @@ export const markTaskCompletedWithContext = internalMutation({
 export type TaskType = "mutation" | "action";
 
 // Re-export WorkId for convenience
-export { WorkId };
+export type { WorkId };
 
 /**
  * Helper function to enqueue tasks with either batch or individual enqueueing.
@@ -131,7 +131,7 @@ export { WorkId };
  * @param options - Configuration options for enqueueing tasks
  * @returns Array of work IDs for the enqueued tasks
  */
-export async function enqueueTasks<T>(options: {
+export async function enqueueTasks<T extends DefaultFunctionArgs>(options: {
   ctx: ActionCtx;
   taskArgs: T[];
   taskType: TaskType;
