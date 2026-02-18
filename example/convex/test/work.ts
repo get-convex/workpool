@@ -1,5 +1,6 @@
 import { internalMutation, internalAction } from "../_generated/server";
-import { v, DefaultFunctionArgs } from "convex/values";
+import { v } from "convex/values";
+import { DefaultFunctionArgs } from "convex/server";
 import { internal, components } from "../_generated/api";
 import {
   vOnCompleteArgs,
