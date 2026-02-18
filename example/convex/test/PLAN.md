@@ -57,7 +57,18 @@ arguments
 - Task types: Both mutations and actions
 - Concurrent tasks: Configurable
 
-### 3. Data Pressure (`scenarios/dataPressure.ts`)
+### 3. Big Context (`scenarios/bigContext.ts`)
+
+**Purpose**: Test handling of large data in onComplete context variables
+
+**Test Parameters**:
+
+- Context sizes: 100KB, 500KB, 800KB (default)
+- Task types: Both mutations and actions
+- Enqueue methods: Batch or individual
+- Configurable parallelism
+
+### 4. Data Pressure (`scenarios/dataPressure.ts`)
 
 **Purpose**: Stress test database read/write operations
 
@@ -66,7 +77,7 @@ arguments
 - Read/write sizes: 15MB (configurable)
 - Concurrent operations: 50 (default)
 
-### 4. Long Running (`scenarios/longRunning.ts`)
+### 5. Long Running (`scenarios/longRunning.ts`)
 
 **Purpose**: Test action timeout handling and long-duration task management
 
@@ -75,7 +86,7 @@ arguments
 - Durations: 5 minutes (configurable)
 - Concurrent long tasks: 10 (configurable)
 
-### 5. Self Scheduling (`scenarios/selfScheduling.ts`)
+### 6. Self Scheduling (`scenarios/selfScheduling.ts`)
 
 **Purpose**: Test recursive task scheduling via onComplete handlers
 
@@ -92,7 +103,7 @@ arguments
 1. **Start Test Run**: Start a new test run
 
 ```sh
-npx convex run test/run '{ scenario: "bigArguments", parameters: { maxParallelism: 20 } }'
+npx convex run test/run '{ scenario: "bigArgs", parameters: { maxParallelism: 20 } }'
 ```
 
 2. **Monitor Progress**: Check status periodically
