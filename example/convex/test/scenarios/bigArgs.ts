@@ -1,23 +1,7 @@
 import { internalAction } from "../../_generated/server";
 import { v } from "convex/values";
-import { internal, components } from "../../_generated/api";
-import { WorkId, enqueueBatch, enqueue } from "@convex-dev/workpool";
-
-// Helper to generate payload of specified size
-function generatePayload(sizeBytes: number): string {
-  let result = "";
-  const chunk = "0123456789"; // 10 bytes
-  const numChunks = Math.floor(sizeBytes / 10);
-  for (let i = 0; i < numChunks; i++) {
-    result += chunk;
-  }
-  // Add remaining bytes
-  const remaining = sizeBytes % 10;
-  if (remaining > 0) {
-    result += chunk.substring(0, remaining);
-  }
-  return result;
-}
+import { internal } from "../../_generated/api";
+import { generateData, enqueueTasks } from "../work";
 
 const parameters = {
   taskCount: v.optional(v.number()),
@@ -54,51 +38,24 @@ export default internalAction({
       `Starting bigArgs test with ${taskCount} tasks of ${argSizeBytes} bytes each`,
     );
 
-    // Generate the large payload once
-    const payload = generatePayload(argSizeBytes);
+    // Generate the large payload once using shared generateData
+    const payload = generateData(argSizeBytes);
     const baseArgs = {
       payload,
       returnBytes: 100, // Small return
       runId,
     };
 
-    const onCompleteOpts = {
-      onComplete: internal.test.work.markTaskCompleted,
-      context: { runId, type: taskType },
-    };
-
-    let workIds: WorkId[];
     const taskArgs = Array(taskCount).fill(baseArgs);
-    const fn =
-      taskType === "action"
-        ? internal.test.work.configurableAction
-        : internal.test.work.configurableMutation;
 
-    if (useBatchEnqueue) {
-      console.log("Using batch enqueue");
-      workIds = await enqueueBatch(
-        components.testWorkpool,
-        ctx,
-        taskType,
-        fn,
-        taskArgs,
-        onCompleteOpts,
-      );
-    } else {
-      console.log("Using individual enqueue");
-      workIds = await Promise.all(
-        taskArgs.map((a) =>
-          enqueue(
-            components.testWorkpool,
-            ctx,
-            taskType,
-            fn,
-            a,
-            onCompleteOpts,
-          ),
-        ),
-      );
-    }
+    // Use shared enqueueTasks helper
+    const workIds = await enqueueTasks({
+      ctx,
+      runId,
+      taskArgs,
+      taskType,
+      useBatchEnqueue,
+    });
 
     console.log(
       `Enqueued ${workIds.length} tasks with ${argSizeBytes} byte payloads`,
