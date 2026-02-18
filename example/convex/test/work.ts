@@ -118,44 +118,28 @@ export const markTaskCompletedWithContext = internalMutation({
  */
 export type TaskType = "mutation" | "action";
 
-/**
- * Options for enqueueing tasks
- */
-export interface EnqueueTasksOptions<T> {
-  ctx: ActionCtx;
-  runId: ReturnType<typeof v.id<"runs">> extends { type: infer U } ? U : never;
-  taskArgs: T[];
-  taskType: TaskType;
-  useBatchEnqueue?: boolean;
-}
+// Re-export WorkId for convenience
+export { WorkId };
 
 /**
  * Helper function to enqueue tasks with either batch or individual enqueueing.
  * This is shared across all test scenarios for consistent task enqueueing behavior.
  *
+ * Note: This function accepts fn and onCompleteOpts as parameters to avoid
+ * circular type references when scenarios import from this module.
+ *
  * @param options - Configuration options for enqueueing tasks
  * @returns Array of work IDs for the enqueued tasks
  */
-export async function enqueueTasks<
-  T extends { runId: string; returnBytes: number },
->(options: {
+export async function enqueueTasks<T>(options: {
   ctx: ActionCtx;
-  runId: string;
   taskArgs: T[];
   taskType: TaskType;
+  fn: Parameters<typeof enqueue>[3];
+  onCompleteOpts: Parameters<typeof enqueue>[5];
   useBatchEnqueue?: boolean;
 }): Promise<WorkId[]> {
-  const { ctx, runId, taskArgs, taskType, useBatchEnqueue = false } = options;
-
-  const onCompleteOpts = {
-    onComplete: internal.test.work.markTaskCompleted,
-    context: { runId, type: taskType },
-  };
-
-  const fn =
-    taskType === "action"
-      ? internal.test.work.configurableAction
-      : internal.test.work.configurableMutation;
+  const { ctx, taskArgs, taskType, fn, onCompleteOpts, useBatchEnqueue = false } = options;
 
   let workIds: WorkId[];
 

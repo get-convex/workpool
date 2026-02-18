@@ -1,7 +1,9 @@
 import { internalAction } from "../../_generated/server";
 import { v } from "convex/values";
 import { internal } from "../../_generated/api";
-import { enqueueTasks } from "../work";
+import { enqueueTasks, TaskType } from "../work";
+import { Id } from "../../_generated/dataModel";
+import { WorkId } from "@convex-dev/workpool";
 
 /**
  * Big Return Types Scenario
@@ -30,8 +32,8 @@ export default internalAction({
       useBatchEnqueue = false,
       maxParallelism = 50,
     },
-  ) => {
-    const runId = await ctx.runMutation(internal.test.run.start, {
+  ): Promise<{ workIds: WorkId[]; taskCount: number; returnSizeBytes: number }> => {
+    const runId: Id<"runs"> = await ctx.runMutation(internal.test.run.start, {
       scenario: "bigReturnTypes",
       parameters: {
         taskCount,
@@ -55,12 +57,24 @@ export default internalAction({
 
     const taskArgs = Array(taskCount).fill(baseArgs);
 
+    // Select the appropriate function based on task type
+    const fn =
+      taskType === "action"
+        ? internal.test.work.configurableAction
+        : internal.test.work.configurableMutation;
+
+    const onCompleteOpts = {
+      onComplete: internal.test.work.markTaskCompleted,
+      context: { runId, type: taskType as TaskType },
+    };
+
     // Use shared enqueueTasks helper
     const workIds = await enqueueTasks({
       ctx,
-      runId,
       taskArgs,
       taskType,
+      fn,
+      onCompleteOpts,
       useBatchEnqueue,
     });
 

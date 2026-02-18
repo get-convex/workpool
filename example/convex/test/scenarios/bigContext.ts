@@ -1,8 +1,9 @@
 import { internalAction } from "../../_generated/server";
 import { v } from "convex/values";
-import { internal, components } from "../../_generated/api";
-import { generateData } from "../work";
-import { WorkId, enqueueBatch, enqueue } from "@convex-dev/workpool";
+import { internal } from "../../_generated/api";
+import { generateData, enqueueTasks, TaskType } from "../work";
+import { Id } from "../../_generated/dataModel";
+import { WorkId } from "@convex-dev/workpool";
 
 /**
  * Big Context Scenario
@@ -32,8 +33,8 @@ export default internalAction({
       useBatchEnqueue = false,
       maxParallelism = 50,
     },
-  ) => {
-    const runId = await ctx.runMutation(internal.test.run.start, {
+  ): Promise<{ workIds: WorkId[]; taskCount: number; contextSizeBytes: number }> => {
+    const runId: Id<"runs"> = await ctx.runMutation(internal.test.run.start, {
       scenario: "bigContext",
       parameters: {
         taskCount,
@@ -58,43 +59,33 @@ export default internalAction({
       runId,
     };
 
-    // Large context data in onComplete options
-    const onCompleteOpts = {
-      onComplete: internal.test.work.markTaskCompletedWithContext,
-      context: {
-        runId,
-        type: taskType,
-        largeData: largeContextData, // Large data in context
-      },
-    };
-
     const taskArgs = Array(taskCount).fill(baseArgs);
 
+    // Select the appropriate function based on task type
     const fn =
       taskType === "action"
         ? internal.test.work.configurableAction
         : internal.test.work.configurableMutation;
 
-    let workIds: WorkId[];
+    // Large context data in onComplete options
+    const onCompleteOpts = {
+      onComplete: internal.test.work.markTaskCompletedWithContext,
+      context: {
+        runId,
+        type: taskType as TaskType,
+        largeData: largeContextData, // Large data in context
+      },
+    };
 
-    if (useBatchEnqueue) {
-      console.log("Using batch enqueue");
-      workIds = await enqueueBatch(
-        components.testWorkpool,
-        ctx,
-        taskType,
-        fn,
-        taskArgs,
-        onCompleteOpts,
-      );
-    } else {
-      console.log("Using individual enqueue");
-      workIds = await Promise.all(
-        taskArgs.map((a) =>
-          enqueue(components.testWorkpool, ctx, taskType, fn, a, onCompleteOpts),
-        ),
-      );
-    }
+    // Use shared enqueueTasks helper
+    const workIds = await enqueueTasks({
+      ctx,
+      taskArgs,
+      taskType,
+      fn,
+      onCompleteOpts,
+      useBatchEnqueue,
+    });
 
     console.log(
       `Enqueued ${workIds.length} tasks with ${contextSizeBytes} byte context data`,
