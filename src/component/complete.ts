@@ -53,6 +53,9 @@ export async function completeHandler(
       }),
     )
   ).filter((a) => a !== null);
+  if (jobAndWorks.length === 0) {
+    return;
+  }
   const MAX_BATCH_SIZE = 2_000_000; // combined job / work / payload size
 
   // Create batches based on size
