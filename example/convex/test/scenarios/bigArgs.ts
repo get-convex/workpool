@@ -9,7 +9,7 @@ const parameters = {
   taskCount: v.optional(v.number()),
   argSizeBytes: v.optional(v.number()),
   taskType: v.optional(v.union(v.literal("mutation"), v.literal("action"))),
-  useBatchEnqueue: v.optional(v.boolean()),
+  batchEnqueue: v.optional(v.boolean()),
   maxParallelism: v.optional(v.number()),
 };
 
@@ -21,17 +21,21 @@ export default internalAction({
       taskCount = 50,
       argSizeBytes = 800_000, // 800KB default
       taskType = "mutation",
-      useBatchEnqueue = false,
+      batchEnqueue = false,
       maxParallelism = 50,
     },
-  ): Promise<{ workIds: WorkId[]; taskCount: number; argSizeBytes: number }> => {
+  ): Promise<{
+    workIds: WorkId[];
+    taskCount: number;
+    argSizeBytes: number;
+  }> => {
     const runId: Id<"runs"> = await ctx.runMutation(internal.test.run.start, {
       scenario: "bigArgs",
       parameters: {
         taskCount,
         argSizeBytes,
         taskType,
-        useBatchEnqueue,
+        batchEnqueue,
         maxParallelism,
       },
     });
@@ -68,7 +72,7 @@ export default internalAction({
       taskType,
       fn,
       onCompleteOpts,
-      useBatchEnqueue,
+      batchEnqueue,
     });
 
     console.log(

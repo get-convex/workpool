@@ -142,7 +142,7 @@ export async function enqueueTasks<T extends DefaultFunctionArgs>(options: {
   taskType: TaskType;
   fn: Parameters<typeof enqueue>[3];
   onCompleteOpts: Parameters<typeof enqueue>[5];
-  useBatchEnqueue?: boolean;
+  batchEnqueue?: boolean;
 }): Promise<WorkId[]> {
   const {
     ctx,
@@ -150,12 +150,12 @@ export async function enqueueTasks<T extends DefaultFunctionArgs>(options: {
     taskType,
     fn,
     onCompleteOpts,
-    useBatchEnqueue = false,
+    batchEnqueue = false,
   } = options;
 
   let workIds: WorkId[];
 
-  if (useBatchEnqueue) {
+  if (batchEnqueue) {
     console.log("Using batch enqueue");
     workIds = await enqueueBatch(
       components.testWorkpool,
