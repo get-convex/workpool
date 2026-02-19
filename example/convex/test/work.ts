@@ -16,12 +16,16 @@ import { ActionCtx } from "../_generated/server";
  * Uses 10-character chunks for efficient string building.
  */
 export function generateData(len: number): string {
-  let result = "";
-  const chunk = "0123456789"; // 10 bytes
+  const chunk = ".........."; // 10 bytes
   const numChunks = Math.floor(len / 10);
-  for (let i = 0; i < numChunks; i++) {
-    result += chunk;
+  const chunks = Array(numChunks).fill(chunk);
+  if (len % 10) {
+    chunks.push(chunk.substring(0, len % 10));
   }
+  for (let i = 100; i <= numChunks; i += 100) {
+    chunks[i - 1] = (i / 100).toString().padStart(8, ".") + "KB";
+  }
+  let result = chunks.join("");
   // Add remaining bytes for exact length
   const remaining = len % 10;
   if (remaining > 0) {
@@ -140,7 +144,14 @@ export async function enqueueTasks<T extends DefaultFunctionArgs>(options: {
   onCompleteOpts: Parameters<typeof enqueue>[5];
   useBatchEnqueue?: boolean;
 }): Promise<WorkId[]> {
-  const { ctx, taskArgs, taskType, fn, onCompleteOpts, useBatchEnqueue = false } = options;
+  const {
+    ctx,
+    taskArgs,
+    taskType,
+    fn,
+    onCompleteOpts,
+    useBatchEnqueue = false,
+  } = options;
 
   let workIds: WorkId[];
 
