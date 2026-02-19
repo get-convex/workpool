@@ -27,12 +27,16 @@ export default internalAction({
     ctx,
     {
       taskCount = 50,
-      returnSizeBytes = 100_000, // 100KB default return size
+      returnSizeBytes = 10_000_000, // 10MB
       taskType = "mutation",
       useBatchEnqueue = false,
       maxParallelism = 50,
     },
-  ): Promise<{ workIds: WorkId[]; taskCount: number; returnSizeBytes: number }> => {
+  ): Promise<{
+    workIds: WorkId[];
+    taskCount: number;
+    returnSizeBytes: number;
+  }> => {
     const runId: Id<"runs"> = await ctx.runMutation(internal.test.run.start, {
       scenario: "bigReturnTypes",
       parameters: {
