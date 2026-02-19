@@ -1,11 +1,13 @@
 import type { FunctionHandle } from "convex/server";
-import { type Infer, v } from "convex/values";
+import { getConvexSize, type Infer, v } from "convex/values";
 import type { Id } from "./_generated/dataModel.js";
+import { internal } from "./_generated/api.js";
 import { internalMutation, type MutationCtx } from "./_generated/server.js";
 import { kickMainLoop } from "./kick.js";
 import { createLogger } from "./logging.js";
 import { type OnCompleteArgs, type RunResult, vResult } from "./shared.js";
 import { recordCompleted } from "./stats.js";
+import { assert } from "convex-helpers";
 
 export type CompleteJob = Infer<typeof completeArgs.fields.jobs.element>;
 
@@ -24,22 +26,80 @@ export async function completeHandler(
 ) {
   const globals = await ctx.db.query("globals").unique();
   const console = createLogger(globals?.logLevel);
+  if (args.jobs.length === 0) {
+    console.warn("Trying to complete 0 jobs");
+    return;
+  }
   const pendingCompletions: {
     runResult: RunResult;
     workId: Id<"work">;
     retry: boolean;
   }[] = [];
+  const jobAndWorks = (
+    await Promise.all(
+      args.jobs.map(async (job) => {
+        const work = await ctx.db.get(job.workId);
+        if (!work) {
+          console.warn(
+            `[complete] ${job.workId} is done, but its work is gone`,
+          );
+          return null;
+        }
+        if (work.attempts !== job.attempt) {
+          console.warn(`[complete] ${job.workId} mismatched attempt number`);
+          return null;
+        }
+        return { job, work };
+      }),
+    )
+  ).filter((a) => a !== null);
+  if (jobAndWorks.length === 0) {
+    return;
+  }
+  const MAX_BATCH_SIZE = 2_000_000; // combined job / work / payload size
+
+  // Create batches based on size
+  const batches: (typeof jobAndWorks)[] = [];
+  let currentBatch: typeof jobAndWorks = [];
+  let currentBatchSize = 0;
+
+  for (const item of jobAndWorks) {
+    const itemSize =
+      getConvexSize(item.job) +
+      getConvexSize(item.work) +
+      (item.work.payloadSize ?? 0);
+
+    // If adding this item would exceed the limit, start a new batch
+    if (
+      currentBatch.length > 0 &&
+      currentBatchSize + itemSize > MAX_BATCH_SIZE
+    ) {
+      batches.push(currentBatch);
+      currentBatch = [];
+      currentBatchSize = 0;
+    }
+
+    currentBatch.push(item);
+    currentBatchSize += itemSize;
+  }
+
+  // Add the last batch if it has items
+  if (currentBatch.length > 0) {
+    batches.push(currentBatch);
+  }
+
+  // Schedule all batches after the first one
+  for (let i = 1; i < batches.length; i++) {
+    await ctx.scheduler.runAfter(0, internal.complete.complete, {
+      jobs: batches[i]!.map(({ job }) => job),
+    });
+  }
+
+  const ourBatch = batches[0];
+  assert(ourBatch);
+
   await Promise.all(
-    args.jobs.map(async (job) => {
-      const work = await ctx.db.get(job.workId);
-      if (!work) {
-        console.warn(`[complete] ${job.workId} is done, but its work is gone`);
-        return;
-      }
-      if (work.attempts !== job.attempt) {
-        console.warn(`[complete] ${job.workId} mismatched attempt number`);
-        return;
-      }
+    ourBatch.map(async ({ work, job }) => {
       work.attempts++;
       await ctx.db.patch(work._id, { attempts: work.attempts });
       const pendingCompletion = await ctx.db
@@ -58,6 +118,15 @@ export async function completeHandler(
       if (!retry) {
         if (work.onComplete) {
           try {
+            // Retrieve large context if stored separately
+            let context = work.onComplete.context;
+            if (context === undefined && work.payloadId) {
+              const payload = await ctx.db.get(work.payloadId);
+              if (payload) {
+                context = payload.context;
+              }
+            }
+
             const handle = work.onComplete.fnHandle as FunctionHandle<
               "mutation",
               OnCompleteArgs,
@@ -65,7 +134,7 @@ export async function completeHandler(
             >;
             await ctx.runMutation(handle, {
               workId: work._id,
-              context: work.onComplete.context,
+              context,
               result: job.runResult,
             });
             console.debug(`[complete] onComplete for ${job.workId} completed`);
@@ -78,6 +147,13 @@ export async function completeHandler(
           }
         }
         recordCompleted(console, work, job.runResult.kind);
+
+        // Clean up any large data that was stored separately.
+        // TODO: consider async deletion in the future to avoid bandwidth limits.
+        if (work.payloadId) {
+          await ctx.db.delete(work.payloadId);
+        }
+
         // This is the terminating state for work.
         await ctx.db.delete(job.workId);
       }

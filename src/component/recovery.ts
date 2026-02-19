@@ -1,7 +1,7 @@
 import { type Infer, v } from "convex/values";
 import { internalMutation, type MutationCtx } from "./_generated/server.js";
-import { completeArgs, completeHandler } from "./complete.js";
 import { createLogger } from "./logging.js";
+import { type CompleteJob, completeHandler } from "./complete.js";
 
 const recoveryArgs = v.object({
   jobs: v.array(
@@ -41,7 +41,7 @@ export async function recoveryHandler(
 ) {
   const globals = await ctx.db.query("globals").unique();
   const console = createLogger(globals?.logLevel);
-  const toComplete: Infer<typeof completeArgs.fields.jobs> = [];
+  const completionJobs: CompleteJob[] = [];
   for (let i = 0; i < jobs.length; i++) {
     const job = jobs[i];
     const preamble = `[recovery] Scheduled job ${job.scheduledId} for work ${job.workId}`;
@@ -68,7 +68,7 @@ export async function recoveryHandler(
     const scheduled = await ctx.db.system.get(job.scheduledId);
     if (scheduled === null) {
       console.warn(`${preamble} not found in _scheduled_functions`);
-      toComplete.push({
+      completionJobs.push({
         workId: job.workId,
         runResult: { kind: "failed", error: `Scheduled job not found` },
         attempt: job.attempt,
@@ -80,7 +80,7 @@ export async function recoveryHandler(
     switch (scheduled.state.kind) {
       case "failed": {
         console.debug(`${preamble} failed and detected in recovery`);
-        toComplete.push({
+        completionJobs.push({
           workId: job.workId,
           runResult: scheduled.state,
           attempt: job.attempt,
@@ -89,7 +89,7 @@ export async function recoveryHandler(
       }
       case "canceled": {
         console.debug(`${preamble} was canceled and detected in recovery`);
-        toComplete.push({
+        completionJobs.push({
           workId: job.workId,
           runResult: { kind: "failed", error: "Canceled via scheduler" },
           attempt: job.attempt,
@@ -98,7 +98,7 @@ export async function recoveryHandler(
       }
     }
   }
-  if (toComplete.length > 0) {
-    await completeHandler(ctx, { jobs: toComplete });
+  if (completionJobs.length > 0) {
+    await completeHandler(ctx, { jobs: completionJobs });
   }
 }

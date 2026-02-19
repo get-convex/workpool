@@ -1,6 +1,7 @@
-import { type ObjectType, v } from "convex/values";
+import { type ObjectType, v, getConvexSize } from "convex/values";
+import type { WithoutSystemFields } from "convex/server";
 import { api } from "./_generated/api.js";
-import type { Id } from "./_generated/dataModel.js";
+import { type Doc, type Id } from "./_generated/dataModel.js";
 import {
   mutation,
   type MutationCtx,
@@ -27,6 +28,10 @@ import {
 } from "./shared.js";
 import { recordEnqueued } from "./stats.js";
 import { getOrUpdateGlobals } from "./config.js";
+
+const INLINE_METADATA_THRESHOLD = 8_000; // 8KB threshold
+const MAX_DOC_SIZE = 1_000_000; // Some buffer for 1MiB actual limit
+const PAYLOAD_DOC_OVERHEAD = 78; // Size of { args: null, context: null }
 
 const itemArgs = {
   fnHandle: v.string(),
@@ -59,10 +64,55 @@ async function enqueueHandler(
   { runAt, ...workArgs }: ObjectType<typeof itemArgs>,
 ) {
   runAt = boundScheduledTime(runAt, console);
-  const workId = await ctx.db.insert("work", {
+
+  const fnArgsSize = getConvexSize(workArgs.fnArgs);
+  if (fnArgsSize > MAX_DOC_SIZE) {
+    throw new Error(
+      `Function arguments for function ${workArgs.fnName} too large: ${fnArgsSize} bytes (max: ${MAX_DOC_SIZE} bytes)`,
+    );
+  }
+
+  let contextSize = 0;
+  const context = workArgs.onComplete?.context;
+  if (context !== undefined) {
+    contextSize = getConvexSize(context);
+    if (contextSize > MAX_DOC_SIZE) {
+      throw new Error(
+        `OnComplete context for function ${workArgs.fnName} too large: ${contextSize} bytes (max: ${MAX_DOC_SIZE} bytes)`,
+      );
+    }
+  }
+
+  const workItem: WithoutSystemFields<Doc<"work">> = {
     ...workArgs,
     attempts: 0,
-  });
+  };
+
+  if (fnArgsSize >= INLINE_METADATA_THRESHOLD) {
+    // Args are large, store separately
+    const payloadDoc: { args: Record<string, any>; context?: unknown } = {
+      args: workArgs.fnArgs,
+    };
+    workItem.payloadSize = fnArgsSize + PAYLOAD_DOC_OVERHEAD;
+    delete workItem.fnArgs;
+    if (contextSize >= INLINE_METADATA_THRESHOLD) {
+      // Context is also too big to inline
+      payloadDoc.context = context;
+      workItem.payloadSize += contextSize;
+      delete workItem.onComplete!.context;
+    }
+    workItem.payloadId = await ctx.db.insert("payload", payloadDoc);
+  } else if (fnArgsSize + contextSize >= INLINE_METADATA_THRESHOLD) {
+    // Args are small enough, but combined with context it's too big.
+    // Store just context in this case.
+    workItem.payloadId = await ctx.db.insert("payload", { context });
+    delete workItem.onComplete!.context;
+    workItem.payloadSize = contextSize + PAYLOAD_DOC_OVERHEAD;
+  }
+
+  // Store the work item
+  const workId = await ctx.db.insert("work", workItem);
+
   await ctx.db.insert("pendingStart", {
     workId,
     segment: max(toSegment(runAt), kickSegment),
