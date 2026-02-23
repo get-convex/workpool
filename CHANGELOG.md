@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.2
+
+- Adds forwards-compatible schema for upcoming args storage in "payloads"
+- Renames "recover" to "healthcheck"
+- Fix report generation when maxParallelism is 0
+
 ## 0.3.1
 
 - Only warn if the limit is set to >100
