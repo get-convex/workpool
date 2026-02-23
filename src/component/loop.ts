@@ -561,7 +561,12 @@ async function beginWork(
     throw new Error("work not found");
   }
   recordStarted(console, work, lagMs);
-  const { attempts: attempt, fnHandle, fnArgs } = work;
+  let fnArgs = work.fnArgs;
+  if (fnArgs === undefined && work.payloadId) {
+    const payload = await ctx.db.get(work.payloadId);
+    fnArgs = payload?.args ?? {};
+  }
+  const { attempts: attempt, fnHandle } = work;
   const args = { workId, fnHandle, fnArgs, logLevel, attempt };
   if (work.fnType === "action") {
     return ctx.scheduler.runAfter(0, internal.worker.runActionWrapper, args);

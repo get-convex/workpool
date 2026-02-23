@@ -58,6 +58,13 @@ export async function completeHandler(
       if (!retry) {
         if (work.onComplete) {
           try {
+            let context = work.onComplete.context;
+            if (context === undefined && work.payloadId) {
+              const payload = await ctx.db.get(work.payloadId);
+              if (payload) {
+                context = payload.context;
+              }
+            }
             const handle = work.onComplete.fnHandle as FunctionHandle<
               "mutation",
               OnCompleteArgs,
@@ -65,7 +72,7 @@ export async function completeHandler(
             >;
             await ctx.runMutation(handle, {
               workId: work._id,
-              context: work.onComplete.context,
+              context,
               result: job.runResult,
             });
             console.debug(`[complete] onComplete for ${job.workId} completed`);
@@ -78,6 +85,9 @@ export async function completeHandler(
           }
         }
         recordCompleted(console, work, job.runResult.kind);
+        if (work.payloadId) {
+          await ctx.db.delete(work.payloadId);
+        }
         // This is the terminating state for work.
         await ctx.db.delete(job.workId);
       }

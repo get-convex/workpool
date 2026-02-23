@@ -27,6 +27,9 @@ export const clearPending = internalMutation({
         await ctx.db.delete(entry._id);
         const work = await ctx.db.get(entry.workId);
         if (work) {
+          if (work.payloadId) {
+            await ctx.db.delete(work.payloadId);
+          }
           await ctx.db.delete(work._id);
         }
       }),
@@ -79,8 +82,11 @@ export const clearOldWork = internalMutation({
         if (pendingCancelation) {
           await ctx.db.delete(pendingCancelation._id);
         }
+        if (entry.payloadId) {
+          await ctx.db.delete(entry.payloadId);
+        }
         console.debug(
-          `cleared ${entry.fnName}: ${entry.fnArgs} (${Object.entries({
+          `cleared ${entry.fnName}: ${entry.fnArgs ?? "(payload)"} (${Object.entries({
             pendingStart,
             pendingCompletion,
             pendingCancelation,
