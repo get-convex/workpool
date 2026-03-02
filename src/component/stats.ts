@@ -38,11 +38,13 @@ export function recordStarted(
   console: Logger,
   work: Doc<"work">,
   lagMs: number,
+  scheduledFunctionId: Id<"_scheduled_functions">,
 ) {
   console.event("started", {
     workId: work._id,
     fnName: work.fnName,
     enqueuedAt: work._creationTime,
+    scheduledFunctionId,
     startedAt: Date.now(),
     startLag: lagMs,
   });
