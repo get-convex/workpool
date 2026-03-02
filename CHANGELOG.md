@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1
+
+- Logs the scheduled function ID in the "started" event for better debugging of
+  delayed / slow executions.
+
 ## 0.4.0
 
 - Stores args & onComplete.context separately in "payloads" when they are
