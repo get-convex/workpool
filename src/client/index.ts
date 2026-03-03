@@ -12,9 +12,11 @@ import {
   type RegisteredMutation,
 } from "convex/server";
 import {
+  getConvexSize,
   type Infer,
   v,
   type Validator,
+  type Value,
   type VAny,
   type VString,
 } from "convex/values";
@@ -559,15 +561,49 @@ export async function enqueueBatch<
   },
 ): Promise<WorkId[]> {
   const { config, ...defaults } = await enqueueArgs(fn, options);
-  const ids = await ctx.runMutation(component.lib.enqueueBatch, {
-    items: fnArgsArray.map((fnArgs) => ({
+  const batches = [];
+  const MAX_BATCH_SIZE = 8_000_000;
+  let currentBatch = [];
+  let currentBatchSize = 0;
+
+  for (const fnArgs of fnArgsArray) {
+    const item = {
       ...defaults,
       fnArgs,
       fnType,
-    })),
-    config,
-  });
-  return ids as WorkId[];
+    };
+    const itemSize = getConvexSize(item as Value);
+
+    // If adding this item would exceed the limit, start a new batch
+    if (
+      currentBatch.length > 0 &&
+      currentBatchSize + itemSize > MAX_BATCH_SIZE
+    ) {
+      batches.push({ items: currentBatch });
+      currentBatch = [];
+      currentBatchSize = 0;
+    }
+
+    currentBatch.push(item);
+    currentBatchSize += itemSize;
+  }
+
+  // Add the last batch if it has items
+  if (currentBatch.length > 0) {
+    batches.push({ items: currentBatch });
+  }
+
+  // Process all batches and collect IDs
+  const allIds: WorkId[] = [];
+  for (const batch of batches) {
+    const ids = await ctx.runMutation(component.lib.enqueueBatch, {
+      items: batch.items,
+      config,
+    });
+    allIds.push(...(ids as WorkId[]));
+  }
+
+  return allIds;
 }
 
 export async function enqueue<

@@ -565,19 +565,29 @@ async function beginWork(
   if (!work) {
     throw new Error("work not found");
   }
-  recordStarted(console, work, lagMs);
-  const { attempts: attempt, fnHandle, fnArgs } = work;
-  const args = { workId, fnHandle, fnArgs, logLevel, attempt };
+  const { attempts: attempt, fnHandle, fnArgs, payloadId } = work;
+  const args = { workId, fnHandle, fnArgs, payloadId, logLevel, attempt };
+  let scheduleId;
   if (work.fnType === "action") {
-    return ctx.scheduler.runAfter(0, internal.worker.runActionWrapper, args);
+    scheduleId = await ctx.scheduler.runAfter(
+      0,
+      internal.worker.runActionWrapper,
+      args,
+    );
   } else if (work.fnType === "mutation" || work.fnType === "query") {
-    return ctx.scheduler.runAfter(0, internal.worker.runMutationWrapper, {
-      ...args,
-      fnType: work.fnType,
-    });
+    scheduleId = await ctx.scheduler.runAfter(
+      0,
+      internal.worker.runMutationWrapper,
+      {
+        ...args,
+        fnType: work.fnType,
+      },
+    );
   } else {
     throw new Error(`Unexpected fnType ${work.fnType}`);
   }
+  recordStarted(console, work, lagMs, scheduleId);
+  return scheduleId;
 }
 
 /**

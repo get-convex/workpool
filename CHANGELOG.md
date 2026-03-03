@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.1
+
+- Logs the scheduled function ID in the "started" event for better debugging of
+  delayed / slow executions.
+
+## 0.4.0
+
+- Stores args & onComplete.context separately in "payloads" when they are
+  > 8kb, and enforces < 1MB for args+context storage.
+- Breaks up batch enqueue calls based on args & context sizes.
+- Iterates through completions, recovery, cancelation, etc. to avoid reading too
+  much data.
+- Lazily loads args before executing functions, if they were >8kb.
+- Note: the schema is backwards-compatible, but if you want to go back to an
+  older version of the code, you'll need to either use 0.3.2 or clear out any
+  work items that are using "payloads"
+
+## 0.3.2
+
+- Adds forwards-compatible schema for upcoming args storage in "payloads"
+- Renames "recover" to "healthcheck"
+- Fix report generation when maxParallelism is 0
+
 ## 0.3.1
 
 - Only warn if the limit is set to >100

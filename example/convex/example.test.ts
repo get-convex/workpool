@@ -40,7 +40,7 @@ describe("workpool", () => {
   });
 
   test("enqueueQuery executes successfully", async () => {
-    const id = await t.mutation(api.example.enqueueOneQuery, { add: 42 });
+    const id = await t.mutation(api.example.enqueueOneQuery, {});
     expect(await t.query(api.example.status, { id })).toEqual({
       state: "pending",
       previousAttempts: 0,
