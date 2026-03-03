@@ -24,6 +24,7 @@ import {
 import { generateReport, recordCompleted, recordStarted } from "./stats.js";
 
 const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
+const RECOVERY_BATCH_SIZE = 50;
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 const RECOVERY_THRESHOLD_MS = 5 * MINUTE; // attempt to recover jobs this old.
@@ -491,8 +492,9 @@ async function handleRecovery(
     )
   ).flatMap((r) => (r ? [r] : []));
   state.running = state.running.filter((r) => !missing.has(r.workId));
-  if (jobs.length) {
-    await ctx.scheduler.runAfter(0, internal.recovery.recover, { jobs });
+  for (let i = 0; i < jobs.length; i += RECOVERY_BATCH_SIZE) {
+    const batch = jobs.slice(i, i + RECOVERY_BATCH_SIZE);
+    await ctx.scheduler.runAfter(0, internal.recovery.recover, { jobs: batch });
   }
 }
 
