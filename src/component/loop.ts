@@ -84,9 +84,8 @@ export const main = internalMutation({
       state.lastRecovery = segment;
     } else if (segment - state.lastRecovery >= RECOVERY_PERIOD_SEGMENTS) {
       // Otherwise schedule recovery for any old jobs.
-      const hasMore = await handleRecovery(ctx, state, console);
-      // If there are more old jobs than we could process, run again immediately.
-      state.lastRecovery = hasMore ? 0n : segment;
+      await handleRecovery(ctx, state, console);
+      state.lastRecovery = segment;
     }
 
     // Read pendingStart up to max capacity. Update the config, and incomingSegmentCursor.
@@ -476,14 +475,12 @@ async function handleRecovery(
 ) {
   const missing = new Set<Id<"work">>();
   const oldEnoughToConsider = Date.now() - RECOVERY_THRESHOLD_MS;
-  // Only consider a batch of old jobs per loop iteration to stay under read limits.
-  const candidates = state.running.filter(
-    (r) => r.started < oldEnoughToConsider,
-  );
-  const batch = candidates.slice(0, RECOVERY_BATCH_SIZE);
   const jobs = (
     await Promise.all(
-      batch.map(async (r) => {
+      state.running.map(async (r) => {
+        if (r.started >= oldEnoughToConsider) {
+          return null;
+        }
         const work = await ctx.db.get(r.workId);
         if (!work) {
           missing.add(r.workId);
@@ -495,10 +492,10 @@ async function handleRecovery(
     )
   ).flatMap((r) => (r ? [r] : []));
   state.running = state.running.filter((r) => !missing.has(r.workId));
-  if (jobs.length) {
-    await ctx.scheduler.runAfter(0, internal.recovery.recover, { jobs });
+  for (let i = 0; i < jobs.length; i += RECOVERY_BATCH_SIZE) {
+    const batch = jobs.slice(i, i + RECOVERY_BATCH_SIZE);
+    await ctx.scheduler.runAfter(0, internal.recovery.recover, { jobs: batch });
   }
-  return candidates.length > RECOVERY_BATCH_SIZE;
 }
 
 async function handleStart(
