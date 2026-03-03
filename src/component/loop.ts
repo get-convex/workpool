@@ -24,6 +24,7 @@ import {
 import { generateReport, recordCompleted, recordStarted } from "./stats.js";
 
 const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
+const RECOVERY_BATCH_SIZE = 10;
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 const RECOVERY_THRESHOLD_MS = 5 * MINUTE; // attempt to recover jobs this old.
@@ -474,12 +475,14 @@ async function handleRecovery(
 ) {
   const missing = new Set<Id<"work">>();
   const oldEnoughToConsider = Date.now() - RECOVERY_THRESHOLD_MS;
+  // Only consider a batch of old jobs per loop iteration to stay under read limits.
+  const candidates = state.running.filter(
+    (r) => r.started < oldEnoughToConsider,
+  );
+  const batch = candidates.slice(0, RECOVERY_BATCH_SIZE);
   const jobs = (
     await Promise.all(
-      state.running.map(async (r) => {
-        if (r.started >= oldEnoughToConsider) {
-          return null;
-        }
+      batch.map(async (r) => {
         const work = await ctx.db.get(r.workId);
         if (!work) {
           missing.add(r.workId);
