@@ -24,7 +24,7 @@ import {
 import { generateReport, recordCompleted, recordStarted } from "./stats.js";
 
 const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
-const RECOVERY_BATCH_SIZE = 50;
+const RECOVERY_BATCH_SIZE = 8;
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 const RECOVERY_THRESHOLD_MS = 5 * MINUTE; // attempt to recover jobs this old.
