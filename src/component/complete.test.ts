@@ -252,9 +252,12 @@ describe("complete", () => {
           maxParallelism: 10,
           logLevel: "WARN",
         },
-        onComplete: {
-          fnHandle: "testOnComplete",
-          context: { someContext: "value" },
+        onCompleteHandlers: {
+          kind: "onComplete",
+          onComplete: {
+            fnHandle: "testOnComplete",
+            context: { someContext: "value" },
+          },
         },
       });
 
@@ -283,6 +286,67 @@ describe("complete", () => {
             workId,
             context: { someContext: "value" },
             result: { kind: "success", returnValue: "test result" },
+          }),
+        );
+      });
+    });
+
+    const handlerTypes = [{
+      handler: "onSuccess" as const,
+      kind: "success" as const,
+    }]
+
+    it.each(handlerTypes)("should call the correct onComplete handler", async ({handler, kind}) => {
+      // Create a spy on runMutation
+      const runMutationSpy = vi.fn();
+
+      const testHandle = `${kind}Handle`;
+
+      // Enqueue a work item with a onComplete handler
+      const workId = await t.mutation(api.lib.enqueue, {
+        fnHandle: "testHandle",
+        fnName: "testFunction",
+        fnArgs: { test: "data" },
+        fnType: "mutation",
+        runAt: Date.now(),
+        config: {
+          maxParallelism: 10,
+          logLevel: "WARN",
+        },
+        onCompleteHandlers: {
+          kind: "not onComplete",
+          [handler]: {
+            fnHandle: testHandle,
+            context: { someContext: "value" },
+          },
+        },
+      });
+
+      // Simulate a successful job completion with a spy on runMutation
+      await t.run(async (ctx) => {
+        // Create a modified context with a spy on runMutation
+        const spyCtx = {
+          ...ctx,
+          runMutation: runMutationSpy,
+        };
+
+        await completeHandler(spyCtx, {
+          jobs: [
+            {
+              workId,
+              runResult: { kind, returnValue: "test result" },
+              attempt: 0,
+            },
+          ],
+        });
+
+        // Verify onComplete was called with the right arguments
+        expect(runMutationSpy).toHaveBeenCalledWith(
+          testHandle,
+          expect.objectContaining({
+            workId,
+            context: { someContext: "value" },
+            result: { kind, returnValue: "test result" },
           }),
         );
       });

@@ -3,9 +3,9 @@ import { v } from "convex/values";
 import {
   fnType,
   vConfig,
-  vOnCompleteFnContext,
   retryBehavior,
   vResult,
+  vOnCompleteHandlers,
 } from "./shared.js";
 
 // Represents a slice of time to process work.
@@ -67,7 +67,7 @@ export default defineSchema({
     payloadId: v.optional(v.id("payload")),
     payloadSize: v.optional(v.number()),
     attempts: v.number(), // number of completed attempts
-    onComplete: v.optional(vOnCompleteFnContext),
+    onCompleteHandlers: v.optional(vOnCompleteHandlers),
     retryBehavior: v.optional(retryBehavior),
     canceled: v.optional(v.boolean()),
   }),

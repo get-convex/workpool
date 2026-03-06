@@ -1,4 +1,4 @@
-import { type ObjectType, v, getConvexSize } from "convex/values";
+import { type ObjectType, v, getConvexSize, type Infer } from "convex/values";
 import type { WithoutSystemFields } from "convex/server";
 import { api } from "./_generated/api.js";
 import { type Doc, type Id } from "./_generated/dataModel.js";
@@ -21,10 +21,10 @@ import {
   fnType,
   getNextSegment,
   max,
-  vOnCompleteFnContext,
   retryBehavior,
   status as statusValidator,
   toSegment,
+  vOnCompleteHandlers,
 } from "./shared.js";
 import { recordEnqueued } from "./stats.js";
 import { getOrUpdateGlobals } from "./config.js";
@@ -40,7 +40,7 @@ const itemArgs = {
   fnType,
   runAt: v.number(),
   // TODO: annotation?
-  onComplete: v.optional(vOnCompleteFnContext),
+  onCompleteHandlers: v.optional(vOnCompleteHandlers),
   retryBehavior: v.optional(retryBehavior),
 };
 const enqueueArgs = {
@@ -73,7 +73,7 @@ async function enqueueHandler(
   }
 
   let contextSize = 0;
-  const context = workArgs.onComplete?.context;
+  const context = getContext(workArgs.onCompleteHandlers);
   if (context !== undefined) {
     contextSize = getConvexSize(context);
     if (contextSize > MAX_DOC_SIZE) {
@@ -88,6 +88,15 @@ async function enqueueHandler(
     attempts: 0,
   };
 
+  const deleteContext = () => {
+    if (workItem.onCompleteHandlers?.kind === "onComplete") {
+      delete workItem.onCompleteHandlers.onComplete!.context;
+    } else {
+      // TODO: how do we do this when success, failure, and cancel all have handlers?
+      delete workItem.onCompleteHandlers?.onSuccess!.context;
+    }
+  };
+
   if (fnArgsSize >= INLINE_METADATA_THRESHOLD) {
     // Args are large, store separately
     const payloadDoc: { args: Record<string, any>; context?: unknown } = {
@@ -99,14 +108,14 @@ async function enqueueHandler(
       // Context is also too big to inline
       payloadDoc.context = context;
       workItem.payloadSize += contextSize;
-      delete workItem.onComplete!.context;
+      deleteContext();
     }
     workItem.payloadId = await ctx.db.insert("payload", payloadDoc);
   } else if (fnArgsSize + contextSize >= INLINE_METADATA_THRESHOLD) {
     // Args are small enough, but combined with context it's too big.
     // Store just context in this case.
     workItem.payloadId = await ctx.db.insert("payload", { context });
-    delete workItem.onComplete!.context;
+    deleteContext();
     workItem.payloadSize = contextSize + PAYLOAD_DOC_OVERHEAD;
   }
 
@@ -259,6 +268,14 @@ async function shouldCancelWorkItem(
     return false;
   }
   return true;
+}
+
+function getContext(
+  onCompleteHandlers: Infer<typeof vOnCompleteHandlers> | undefined,
+) {
+  return onCompleteHandlers?.kind === "onComplete"
+    ? onCompleteHandlers.onComplete?.context
+    : onCompleteHandlers?.onSuccess?.context;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
