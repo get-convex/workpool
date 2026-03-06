@@ -122,12 +122,8 @@ export const main = internalMutation({
 });
 
 export const updateRunStatus = internalMutation({
-  args: {
-    generation: v.int64(),
-    segment: v.int64(),
-    idleSince: v.optional(v.number()),
-  },
-  handler: async (ctx, { generation, segment, idleSince }) => {
+  args: { generation: v.int64(), segment: v.int64() },
+  handler: async (ctx, { generation, segment }) => {
     const globals = await getGlobals(ctx);
     const console = createLogger(globals.logLevel);
     const maxParallelism = globals.maxParallelism;
@@ -197,15 +193,18 @@ export const updateRunStatus = internalMutation({
       return;
     }
 
-    // Cooldown: don't transition out of "running" until idle for 5 seconds.
-    const now = Date.now();
-    const cooldownStart = idleSince ?? now;
-    if (now - cooldownStart < 5 * SECOND) {
-      await ctx.scheduler.runAfter(250, internal.loop.updateRunStatus, {
-        generation,
-        segment,
-        idleSince: cooldownStart,
-      });
+    // Cooldown: if any cursor was active within 5 seconds, stay running.
+    const { incoming, completion, cancelation } = state.segmentCursors;
+    const latestCursor = fromSegment(
+      max(incoming, max(completion, cancelation)),
+    );
+    if (Date.now() - latestCursor < 5 * SECOND) {
+      const nextSeg = getNextSegment();
+      await ctx.scheduler.runAt(
+        boundScheduledTime(fromSegment(nextSeg), console),
+        internal.loop.main,
+        { generation, segment: nextSeg },
+      );
       return;
     }
 

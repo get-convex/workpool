@@ -376,11 +376,13 @@ describe("loop", () => {
         segment: getNextSegment(),
       });
 
+      // Advance clock past the 5s cooldown so cursors are stale
+      vi.setSystemTime(Date.now() + 6000);
+
       // Run updateRunStatus to transition to scheduled
       await t.mutation(internal.loop.updateRunStatus, {
         generation: 2n,
         segment: getNextSegment(),
-        idleSince: 0,
       });
 
       // Verify state transition to scheduled
@@ -428,7 +430,6 @@ describe("loop", () => {
       await t.mutation(internal.loop.updateRunStatus, {
         generation: 1n,
         segment,
-        idleSince: 0,
       });
 
       // Verify state transition to scheduled with saturated=true
@@ -532,11 +533,13 @@ describe("loop", () => {
       // Run main loop again to process the completion
       await t.mutation(internal.loop.main, { generation: 2n, segment });
 
+      // Advance clock past the 5s cooldown so cursors are stale
+      vi.setSystemTime(Date.now() + 6000);
+
       // Run updateRunStatus to transition to idle
       await t.mutation(internal.loop.updateRunStatus, {
         generation: 3n,
         segment,
-        idleSince: 0,
       });
 
       // Verify state transition to idle
@@ -905,11 +908,10 @@ describe("loop", () => {
         });
       });
 
-      // Call updateRunStatus with idleSince bypassing cooldown
+      // Call updateRunStatus
       await t.mutation(internal.loop.updateRunStatus, {
         generation: 1n,
         segment: 1n,
-        idleSince: 0,
       });
 
       // Verify idle state was set
@@ -961,11 +963,10 @@ describe("loop", () => {
         });
       });
 
-      // Call updateRunStatus with idleSince bypassing cooldown
+      // Call updateRunStatus
       await t.mutation(internal.loop.updateRunStatus, {
         generation: 1n,
         segment: 1n,
-        idleSince: 0,
       });
 
       // Verify scheduled state was set with saturated flag
