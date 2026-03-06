@@ -20,6 +20,7 @@ import {
   getNextSegment,
   toSegment,
 } from "./shared.js";
+import { STATUS_COOLDOWN } from "./loop.js";
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -376,6 +377,9 @@ describe("loop", () => {
         segment: getNextSegment(),
       });
 
+      // Advance clock past the 5s cooldown so cursors are stale
+      vi.setSystemTime(Date.now() + STATUS_COOLDOWN);
+
       // Run updateRunStatus to transition to scheduled
       await t.mutation(internal.loop.updateRunStatus, {
         generation: 2n,
@@ -529,6 +533,9 @@ describe("loop", () => {
 
       // Run main loop again to process the completion
       await t.mutation(internal.loop.main, { generation: 2n, segment });
+
+      // Advance clock past the 5s cooldown so cursors are stale
+      vi.setSystemTime(Date.now() + STATUS_COOLDOWN);
 
       // Run updateRunStatus to transition to idle
       await t.mutation(internal.loop.updateRunStatus, {
