@@ -354,6 +354,86 @@ describe("complete", () => {
       });
     });
 
+    const callbackTypes = [
+      {
+        callback: "onSuccessHandle" as const,
+        runResult: { kind: "success", returnValue: "test result" },
+      } as const,
+      {
+        callback: "onFailureHandle" as const,
+        runResult: {
+          kind: "failed",
+          error: "error result",
+        },
+      } as const,
+      {
+        callback: "onCancelHandle" as const,
+        runResult: {
+          kind: "canceled",
+        },
+      } as const,
+    ];
+
+    it.each(callbackTypes)(
+      "should call the correct byOutcome callback",
+      async ({ callback, runResult }) => {
+        // Create a spy on runMutation
+        const runMutationSpy = vi.fn();
+
+        const testHandle = `${runResult.kind}Handle`;
+
+        // Use a large context string (>8000 chars) to force payload storage
+        const largeContext = { data: "x".repeat(9000) };
+
+        // Enqueue a work item with a byOutcome onComplete handler
+        const workId = await t.mutation(api.lib.enqueue, {
+          fnHandle: "testHandle",
+          fnName: "testFunction",
+          fnArgs: { test: "data" },
+          fnType: "mutation",
+          runAt: Date.now(),
+          config: {
+            maxParallelism: 10,
+            logLevel: "WARN",
+          },
+          onComplete: {
+            kind: "byOutcome",
+            [callback]: testHandle,
+            context: largeContext,
+          },
+        });
+
+        // Simulate a job completion with a spy on runMutation
+        await t.run(async (ctx) => {
+          // Create a modified context with a spy on runMutation
+          const spyCtx = {
+            ...ctx,
+            runMutation: runMutationSpy,
+          };
+
+          await completeHandler(spyCtx, {
+            jobs: [
+              {
+                workId,
+                runResult,
+                attempt: 0,
+              },
+            ],
+          });
+
+          // Verify the callback was called with the right arguments
+          expect(runMutationSpy).toHaveBeenCalledWith(
+            testHandle,
+            expect.objectContaining({
+              workId,
+              context: largeContext,
+              result: runResult,
+            }),
+          );
+        });
+      },
+    );
+
     it("should handle multiple jobs in a single call", async () => {
       // Enqueue multiple work items
       const workId1 = await t.mutation(api.lib.enqueue, {
