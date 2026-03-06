@@ -441,6 +441,8 @@ export type EnqueueOptions = {
        * Note: this is advisory only. It may run later.
        */
       runAt?: number;
+
+      runAfter?: never;
     }
   | {
       /**
@@ -449,6 +451,8 @@ export type EnqueueOptions = {
        * Note: this is advisory only. It may run later.
        */
       runAfter?: number;
+
+      runAt?: never;
     }
 );
 
