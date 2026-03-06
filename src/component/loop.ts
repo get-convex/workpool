@@ -635,6 +635,10 @@ async function beginWorkBatch(
         logLevel,
         attempt: work.attempts,
         fnType: "mutation",
+        hasOnSuccess: Boolean(
+          work.onComplete?.kind === "byOutcome" &&
+          work.onComplete.onSuccessHandle,
+        ),
       },
     );
     recordStarted(console, work, lagMs, scheduledId);
