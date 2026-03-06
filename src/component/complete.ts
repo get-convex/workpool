@@ -1,6 +1,6 @@
 import type { FunctionHandle } from "convex/server";
 import { getConvexSize, type Infer, v } from "convex/values";
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc, Id } from "./_generated/dataModel.js";
 import { internal } from "./_generated/api.js";
 import { internalMutation, type MutationCtx } from "./_generated/server.js";
 import { kickMainLoop } from "./kick.js";
@@ -124,10 +124,11 @@ export async function completeHandler(
         work.attempts < maxAttempts;
       if (!retry) {
         let scheduledId = undefined;
-        if (work.onComplete) {
+        const fnHandle = getOnCompleteHandle(work.onComplete, job.runResult);
+        if (fnHandle) {
           try {
             // Retrieve large context if stored separately
-            let context = work.onComplete.context;
+            let context = work.onComplete?.context;
             if (context === undefined && work.payloadId) {
               const payload = await ctx.db.get("payload", work.payloadId);
               if (payload) {
@@ -135,7 +136,7 @@ export async function completeHandler(
               }
             }
 
-            const handle = work.onComplete.fnHandle as FunctionHandle<
+            const handle = fnHandle as FunctionHandle<
               "mutation",
               OnCompleteArgs,
               void
@@ -145,7 +146,9 @@ export async function completeHandler(
               context,
               result: job.runResult,
             };
-            if (job.runOnCompleteInline) {
+            const runHandlerInline =
+              job.runOnCompleteInline || work.onComplete?.kind === "byOutcome";
+            if (runHandlerInline) {
               try {
                 await ctx.runMutation(handle, onCompleteArgs);
               } catch (e) {
@@ -210,6 +213,28 @@ export async function completeHandler(
         }),
       ),
     );
+  }
+}
+
+function getOnCompleteHandle(
+  onComplete: Doc<"work">["onComplete"],
+  jobResult: RunResult,
+): string | undefined {
+  if (!onComplete) {
+    return undefined;
+  }
+  if (onComplete.kind === "byOutcome") {
+    switch (jobResult.kind) {
+      case "success":
+        return onComplete.onSuccessHandle;
+      case "failed":
+        return onComplete.onFailureHandle;
+      case "canceled":
+        return onComplete.onCancelHandle;
+    }
+  } else {
+    // kind === "all" or undefined
+    return onComplete.fnHandle;
   }
 }
 

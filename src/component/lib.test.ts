@@ -267,6 +267,105 @@ describe("lib", () => {
     });
   });
 
+  describe("large context storage", () => {
+    const largeString = "x".repeat(9000);
+
+    it("should store large onComplete context in payload", async () => {
+      const id = await t.mutation(api.lib.enqueue, {
+        fnHandle: "testHandle",
+        fnName: "testFunction",
+        fnArgs: { small: true },
+        fnType: "mutation",
+        runAt: Date.now(),
+        onComplete: { fnHandle: "completeHandle", context: largeString },
+        config: {
+          maxParallelism: 10,
+          logLevel: "WARN",
+        },
+      });
+
+      await t.run(async (ctx) => {
+        const work = await ctx.db.get(id);
+        expect(work).toBeDefined();
+        assert(work);
+        expect(work.payloadId).toBeDefined();
+        // Context should be stripped from inline work item
+        expect(work.onComplete?.context).toBeUndefined();
+
+        // Payload document should contain the context
+        assert(work.payloadId);
+        const payload = await ctx.db.get(work.payloadId);
+        expect(payload).toBeDefined();
+        assert(payload);
+        expect(payload.context).toBe(largeString);
+      });
+    });
+
+    it("should store large byOutcome context in payload", async () => {
+      const id = await t.mutation(api.lib.enqueue, {
+        fnHandle: "testHandle",
+        fnName: "testFunction",
+        fnArgs: { small: true },
+        fnType: "mutation",
+        runAt: Date.now(),
+        onComplete: {
+          kind: "byOutcome",
+          onSuccessHandle: "successHandle",
+          onFailureHandle: "failureHandle",
+          onCancelHandle: "cancelHandle",
+          context: largeString,
+        },
+        config: {
+          maxParallelism: 10,
+          logLevel: "WARN",
+        },
+      });
+
+      await t.run(async (ctx) => {
+        const work = await ctx.db.get(id);
+        expect(work).toBeDefined();
+        assert(work);
+        expect(work.payloadId).toBeDefined();
+        // Context should be stripped from inline work item
+        expect(work.onComplete?.context).toBeUndefined();
+
+        // Payload document should contain the context
+        assert(work.payloadId);
+        const payload = await ctx.db.get(work.payloadId);
+        expect(payload).toBeDefined();
+        assert(payload);
+        expect(payload.context).toBe(largeString);
+      });
+    });
+
+    it("should keep small context inline without creating payload", async () => {
+      const id = await t.mutation(api.lib.enqueue, {
+        fnHandle: "testHandle",
+        fnName: "testFunction",
+        fnArgs: { small: true },
+        fnType: "mutation",
+        runAt: Date.now(),
+        onComplete: { fnHandle: "completeHandle", context: { key: "value" } },
+        config: {
+          maxParallelism: 10,
+          logLevel: "WARN",
+        },
+      });
+
+      await t.run(async (ctx) => {
+        const work = await ctx.db.get(id);
+        expect(work).toBeDefined();
+        assert(work);
+        expect(work.payloadId).toBeUndefined();
+        expect(work.onComplete?.context).toEqual({ key: "value" });
+
+        // No payload documents should exist
+        const payloads = await ctx.db.query("payload").collect();
+        expect(payloads).toHaveLength(0);
+      });
+    });
+  });
+
   describe("status", () => {
     it("should return finished state for non-existent work", async () => {
       const id = await t.mutation(api.lib.enqueue, {
