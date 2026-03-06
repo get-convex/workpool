@@ -122,8 +122,12 @@ export const main = internalMutation({
 });
 
 export const updateRunStatus = internalMutation({
-  args: { generation: v.int64(), segment: v.int64() },
-  handler: async (ctx, { generation, segment }) => {
+  args: {
+    generation: v.int64(),
+    segment: v.int64(),
+    idleSince: v.optional(v.number()),
+  },
+  handler: async (ctx, { generation, segment, idleSince }) => {
     const globals = await getGlobals(ctx);
     const console = createLogger(globals.logLevel);
     const maxParallelism = globals.maxParallelism;
@@ -189,6 +193,18 @@ export const updateRunStatus = internalMutation({
       await ctx.scheduler.runAfter(0, internal.loop.main, {
         generation,
         segment: getCurrentSegment(),
+      });
+      return;
+    }
+
+    // Cooldown: don't transition out of "running" until idle for 5 seconds.
+    const now = Date.now();
+    const cooldownStart = idleSince ?? now;
+    if (now - cooldownStart < 5 * SECOND) {
+      await ctx.scheduler.runAfter(250, internal.loop.updateRunStatus, {
+        generation,
+        segment,
+        idleSince: cooldownStart,
       });
       return;
     }

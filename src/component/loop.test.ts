@@ -380,6 +380,7 @@ describe("loop", () => {
       await t.mutation(internal.loop.updateRunStatus, {
         generation: 2n,
         segment: getNextSegment(),
+        idleSince: 0,
       });
 
       // Verify state transition to scheduled
@@ -427,6 +428,7 @@ describe("loop", () => {
       await t.mutation(internal.loop.updateRunStatus, {
         generation: 1n,
         segment,
+        idleSince: 0,
       });
 
       // Verify state transition to scheduled with saturated=true
@@ -534,6 +536,7 @@ describe("loop", () => {
       await t.mutation(internal.loop.updateRunStatus, {
         generation: 3n,
         segment,
+        idleSince: 0,
       });
 
       // Verify state transition to idle
@@ -902,10 +905,11 @@ describe("loop", () => {
         });
       });
 
-      // Call updateRunStatus
+      // Call updateRunStatus with idleSince bypassing cooldown
       await t.mutation(internal.loop.updateRunStatus, {
         generation: 1n,
         segment: 1n,
+        idleSince: 0,
       });
 
       // Verify idle state was set
@@ -957,10 +961,11 @@ describe("loop", () => {
         });
       });
 
-      // Call updateRunStatus
+      // Call updateRunStatus with idleSince bypassing cooldown
       await t.mutation(internal.loop.updateRunStatus, {
         generation: 1n,
         segment: 1n,
+        idleSince: 0,
       });
 
       // Verify scheduled state was set with saturated flag
