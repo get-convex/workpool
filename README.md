@@ -294,11 +294,11 @@ You can override the retry behavior per-call with the `retry` option.
 If you don't specify a `maxParallelism` as a Class-level option, you can specify
 it at runtime by calling
 `ctx.runMutation(components.myWorkpool.config.update, { maxParallelism: 20 })`
-(you can also call the function with `npx convex run` or the dashboard)
-This can be useful for dynamic scaling of the workpool, and also setting it to 0
-to pause work. If specified on the Workpool class, it will update on each call
-to enqueue or cancel. Tip: you can create the Workpool class at runtime based on
-a dynamic value, such as an environment variable.
+(you can also call the function with `npx convex run` or the dashboard) This can
+be useful for dynamic scaling of the workpool, and also setting it to 0 to pause
+work. If specified on the Workpool class, it will update on each call to enqueue
+or cancel. Tip: you can create the Workpool class at runtime based on a dynamic
+value, such as an environment variable.
 
 ### Options for enqueueing work
 
