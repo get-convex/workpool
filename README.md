@@ -102,7 +102,7 @@ const sendEmailReliablyWithRetries = mutation({
 });
 
 export const emailSent = internalMutation({
-  args: vOnCompleteValidator(
+  args: vOnCompleteArgs(
     v.object({ emailType: v.string(), userId: v.id("users") }),
   ),
   handler: async (ctx, { workId, context, result }) => {
@@ -144,6 +144,52 @@ export const emailSent = pool.defineOnComplete<DataModel>({
     // ...
   },
 });
+```
+
+If you need to define a separate mutation to run in the same transaction as the
+job, you can use the `onSuccess` option instead of `onComplete`. You can then
+define mutations for `onFailure` and `onCancel`. Note that unlike `onSuccess`,
+the `onFailure` and `onCancel` handlers will run in a separate transaction.
+
+You can pass the same `onComplete` mutation into the `onSuccess`, `onFailure`,
+and `onCancel` mutations.
+
+```ts
+await pool.enqueueAction(
+  ctx,
+  internal.email.checkStatus,
+  { userId },
+  {
+    onSuccess: internal.email.handleEmailStatus,
+    onFailure: internal.email.handleEmailStatus,
+    onCancel: internal.email.handleEmailStatus,
+    context: { emailLogId },
+  },
+);
+```
+
+You can also define separate mutations for each case:
+
+```ts
+export const emailSentSuccess = internalMutation({
+  args: vOnSuccessArgs(
+    v.object({ emailType: v.string(), userId: v.id("users") }),
+  ),
+  handler: async (ctx, { workId, context, result }) => {
+    // result.kind === "success"
+    console.log(result.returnValue);
+  },
+});
+
+await pool.enqueueAction(
+  ctx,
+  internal.email.checkStatus,
+  { userId },
+  {
+    onSuccess: internal.email.emailSentSuccess,
+    // etc.
+  },
+);
 ```
 
 ### Idempotency
@@ -309,7 +355,17 @@ options include:
   set to `true`, it will use the `defaultRetryBehavior`. If it's set to a custom
   config, it will use that (and do retries).
 - `onComplete`: A mutation to run after the function finishes.
-- `context`: Any data you want to pass to the `onComplete` mutation.
+- `onSuccess`: A mutation to run after the function finishes successfully. Runs
+  in the same transaction as the function, so ensure that onSuccess does not
+  cause the overall transaction to exceed transaction limits. Cannot be used
+  with `onComplete`, but you write one `onComplete` handler and use it for all
+  of `onSuccess`, `onFailure`, and `onCancel`.
+- `onFailure`: A mutation to run after the function finishes with a failure.
+  Cannot be used with `onComplete`.
+- `onCancel`: A mutation to run after the function is canceled. Cannot be used
+  with `onComplete`.
+- `context`: Any data you want to pass to the `onComplete`, `onSuccess`,
+  `onFailure`, and `onCancel` mutations.
 - `runAt` and `runAfter`: Similar to `ctx.scheduler.run*`, allows you to
   schedule the work to run later. By default it's immediate.
 
