@@ -197,8 +197,11 @@ function getOnCompleteHandler(
       case "success":
         return onCompleteHandlers.onSuccess;
       case "failed":
+        return onCompleteHandlers.onFailure;
       case "canceled":
-      // TODO
+        return onCompleteHandlers.onCancel;
+      default:
+        jobResult satisfies never;
     }
   }
 }

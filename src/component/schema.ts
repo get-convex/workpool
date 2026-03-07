@@ -101,6 +101,18 @@ export default defineSchema({
   // Store large data separately to avoid document size limits
   payload: defineTable({
     args: v.optional(v.record(v.string(), v.any())),
-    context: v.optional(v.any()),
+    handlerContext: v.optional(v.union(
+      // TODO: extract the kind out to a shared validator and reuse in work
+      v.object({
+        kind: v.literal("onComplete"),
+        onCompleteContext: v.optional(v.any())
+      }),
+      v.object({
+        kind: v.literal("not onComplete"),
+        onSuccessContext: v.optional(v.any()),
+        onFailureContext: v.optional(v.any()),
+        onCancelContext: v.optional(v.any())
+      }),
+    )),
   }),
 });

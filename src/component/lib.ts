@@ -94,6 +94,8 @@ async function enqueueHandler(
     } else {
       // TODO: how do we do this when success, failure, and cancel all have handlers?
       delete workItem.onCompleteHandlers?.onSuccess!.context;
+      delete workItem.onCompleteHandlers?.onFailure!.context;
+      delete workItem.onCompleteHandlers?.onCancel!.context;
     }
   };
 
@@ -273,9 +275,10 @@ async function shouldCancelWorkItem(
 function getContext(
   onCompleteHandlers: Infer<typeof vOnCompleteHandlers> | undefined,
 ) {
-  return onCompleteHandlers?.kind === "onComplete"
-    ? onCompleteHandlers.onComplete?.context
-    : onCompleteHandlers?.onSuccess?.context;
+  if (onCompleteHandlers?.kind === "onComplete") {
+    return onCompleteHandlers.onComplete?.context;
+  }
+  onCompleteHandlers?.onSuccess?.context;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars

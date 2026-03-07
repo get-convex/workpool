@@ -30,6 +30,8 @@ import {
   type OnCompleteArgs as SharedOnCompleteArgs,
   type Status,
   type SuccessResult,
+  vCancelResult,
+  vFailureResult,
   vResult,
   vSuccessResult,
 } from "../component/shared.js";
@@ -349,6 +351,52 @@ export class Workpool {
       handler,
     });
   }
+
+  defineOnFailure<
+    DataModel extends GenericDataModel,
+    V extends Validator<any, any, any> = VAny<any, "optional">,
+  >({
+    context,
+    handler,
+  }: {
+    context?: V;
+    handler: (
+      ctx: GenericMutationCtx<DataModel>,
+      args: {
+        workId: WorkId;
+        context: Infer<V>;
+        result: SuccessResult;
+      },
+    ) => Promise<void>;
+  }): RegisteredMutation<"internal", OnFailureArgs, null> {
+    return internalMutationGeneric({
+      args: vOnFailureArgs(context),
+      handler,
+    });
+  }
+
+  defineOnCancel<
+    DataModel extends GenericDataModel,
+    V extends Validator<any, any, any> = VAny<any, "optional">,
+  >({
+    context,
+    handler,
+  }: {
+    context?: V;
+    handler: (
+      ctx: GenericMutationCtx<DataModel>,
+      args: {
+        workId: WorkId;
+        context: Infer<V>;
+        result: SuccessResult;
+      },
+    ) => Promise<void>;
+  }): RegisteredMutation<"internal", OnCancelArgs, null> {
+    return internalMutationGeneric({
+      args: vOnCancelArgs(context),
+      handler,
+    });
+  }
 }
 
 /**
@@ -385,6 +433,25 @@ export function vOnSuccessArgs<
   });
 }
 
+export function vOnFailureArgs<
+  V extends Validator<any, "required", any> = VAny,
+>(context?: V) {
+  return v.object({
+    workId: vWorkId,
+    context: (context ?? v.optional(v.any())) as V,
+    result: vFailureResult,
+  });
+}
+
+export function vOnCancelArgs<
+  V extends Validator<any, "required", any> = VAny,
+>(context?: V) {
+  return v.object({
+    workId: vWorkId,
+    context: (context ?? v.optional(v.any())) as V,
+    result: vCancelResult,
+  });
+}
 export type RetryOption = {
   /** Whether to retry the action if it fails.
    * If false, the action won’t be retried.
@@ -519,6 +586,14 @@ export type OnCompleteArgs = {
 
 export type OnSuccessArgs = OnCompleteArgs & {
   result: RunResult & { kind: "success" };
+};
+
+export type OnFailureArgs = OnCompleteArgs & {
+  result: RunResult & { kind: "failed" };
+};
+
+export type OnCancelArgs = OnCompleteArgs & {
+  result: RunResult & { kind: "canceled" };
 };
 
 // ensure OnCompleteArgs satisfies SharedOnCompleteArgs
