@@ -1033,10 +1033,13 @@ describe("loop", () => {
       const workId = await t.run<Id<"work">>(async (ctx) => {
         const workId = await makeDummyWork(ctx, {
           attempts: 0,
-          onComplete: {
-            // TODO: make this a real handle
-            fnHandle: "onComplete_handle",
-            context: { data: "test" },
+          onCompleteHandlers: {
+            kind: "onComplete",
+            onComplete: {
+              // TODO: make this a real handle
+              fnHandle: "onComplete_handle",
+              context: { data: "test" },
+            },
           },
         });
         return workId;

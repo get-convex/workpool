@@ -29,7 +29,9 @@ import {
   type RunResult,
   type OnCompleteArgs as SharedOnCompleteArgs,
   type Status,
+  type SuccessResult,
   vResult,
+  vSuccessResult,
 } from "../component/shared.js";
 import {
   type RunMutationCtx,
@@ -324,6 +326,29 @@ export class Workpool {
       handler,
     });
   }
+
+  defineOnSuccess<
+    DataModel extends GenericDataModel,
+    V extends Validator<any, any, any> = VAny<any, "optional">,
+  >({
+    context,
+    handler,
+  }: {
+    context?: V;
+    handler: (
+      ctx: GenericMutationCtx<DataModel>,
+      args: {
+        workId: WorkId;
+        context: Infer<V>;
+        result: SuccessResult;
+      },
+    ) => Promise<void>;
+  }): RegisteredMutation<"internal", OnSuccessArgs, null> {
+    return internalMutationGeneric({
+      args: vOnSuccessArgs(context),
+      handler,
+    });
+  }
 }
 
 /**
@@ -347,6 +372,16 @@ export function vOnCompleteArgs<
     workId: vWorkId,
     context: (context ?? v.optional(v.any())) as V,
     result: vResult,
+  });
+}
+
+export function vOnSuccessArgs<
+  V extends Validator<any, "required", any> = VAny,
+>(context?: V) {
+  return v.object({
+    workId: vWorkId,
+    context: (context ?? v.optional(v.any())) as V,
+    result: vSuccessResult,
   });
 }
 
@@ -400,35 +435,6 @@ export type EnqueueOptions = {
    */
   name?: string;
   /**
-   * A mutation to run after the function succeeds, fails, or is canceled.
-   * The context type is for your use, feel free to provide a validator for it.
-   * e.g.
-   * ```ts
-   * export const completion = workpool.defineOnComplete({
-   *   context: v.string(),
-   *   handler: async (ctx, {workId, context, result}) => {
-   *     // context has been validated as a string
-   *     // ... do something with the result
-   *   },
-   * });
-   * ```
-   * or more manually:
-   * ```ts
-   * export const completion = internalMutation({
-   *  args: vOnCompleteArgs(v.string()),
-   *  handler: async (ctx, args) => {
-   *    console.log(args.result, "Got Context back -> ", args.context, Date.now() - args.context);
-   *  },
-   * });
-   * ```
-   */
-  onComplete?: FunctionReference<
-    "mutation",
-    FunctionVisibility,
-    OnCompleteArgs
-  > | null;
-
-  /**
    * A context object to pass to the `onComplete` mutation.
    * Useful for passing data from the enqueue site to the onComplete site.
    */
@@ -450,7 +456,50 @@ export type EnqueueOptions = {
        */
       runAfter?: number;
     }
-);
+) &
+  (
+    | {
+        onComplete?: never;
+
+        onSuccess?: FunctionReference<
+          "mutation",
+          FunctionVisibility,
+          OnSuccessArgs
+        > | null;
+      }
+    | {
+        onSuccess?: never;
+
+        /**
+         * A mutation to run after the function succeeds, fails, or is canceled.
+         * The context type is for your use, feel free to provide a validator for it.
+         * e.g.
+         * ```ts
+         * export const completion = workpool.defineOnComplete({
+         *   context: v.string(),
+         *   handler: async (ctx, {workId, context, result}) => {
+         *     // context has been validated as a string
+         *     // ... do something with the result
+         *   },
+         * });
+         * ```
+         * or more manually:
+         * ```ts
+         * export const completion = internalMutation({
+         *  args: vOnCompleteArgs(v.string()),
+         *  handler: async (ctx, args) => {
+         *    console.log(args.result, "Got Context back -> ", args.context, Date.now() - args.context);
+         *  },
+         * });
+         * ```
+         */
+        onComplete?: FunctionReference<
+          "mutation",
+          FunctionVisibility,
+          OnCompleteArgs
+        > | null;
+      }
+  );
 
 export type OnCompleteArgs = {
   /**
@@ -466,6 +515,10 @@ export type OnCompleteArgs = {
    * The result of the run that completed.
    */
   result: RunResult;
+};
+
+export type OnSuccessArgs = OnCompleteArgs & {
+  result: RunResult & { kind: "success" };
 };
 
 // ensure OnCompleteArgs satisfies SharedOnCompleteArgs
@@ -506,12 +559,24 @@ async function enqueueArgs(
   return {
     fnHandle,
     fnName,
-    onComplete: opts?.onComplete
+    onCompleteHandlers: opts?.onComplete
       ? {
-          fnHandle: await createFunctionHandle(opts.onComplete),
-          context: opts.context,
+          kind: "onComplete",
+          onComplete: {
+            fnHandle: await createFunctionHandle(opts.onComplete),
+            context: opts.context,
+          },
         }
-      : undefined,
+      : // TODO: this needs to be reworked for onFailure and onCancel
+        opts?.onSuccess
+        ? {
+            kind: "not onComplete",
+            onSuccess: {
+              fnHandle: await createFunctionHandle(opts.onSuccess),
+              context: opts.context,
+            },
+          }
+        : undefined,
     runAt: getRunAt(opts),
     retryBehavior: opts?.retryBehavior,
     config: {

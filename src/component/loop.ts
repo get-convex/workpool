@@ -562,8 +562,8 @@ async function beginWork(
   if (!work) {
     throw new Error("work not found");
   }
-  const { attempts: attempt, fnHandle, fnArgs, payloadId } = work;
-  const args = { workId, fnHandle, fnArgs, payloadId, logLevel, attempt };
+  const { attempts: attempt, fnHandle, fnArgs, payloadId, onCompleteHandlers } = work;
+  const args = { workId, fnHandle, fnArgs, payloadId, logLevel, attempt, onCompleteHandlerKind: onCompleteHandlers?.kind };
   let scheduleId;
   if (work.fnType === "action") {
     scheduleId = await ctx.scheduler.runAfter(

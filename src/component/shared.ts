@@ -2,6 +2,7 @@ import type { Infer } from "convex/values";
 
 import { v } from "convex/values";
 import { type Logger, logLevel } from "./logging.js";
+import { literals } from "convex-helpers/validators";
 
 export const fnType = v.union(
   v.literal("action"),
@@ -70,11 +71,13 @@ export const DEFAULT_RETRY_BEHAVIOR: RetryBehavior = {
 // This ensures that the type satisfies the schema.
 const _ = {} as RetryBehavior satisfies Infer<typeof retryBehavior>;
 
+export const vSuccessResult = v.object({
+  kind: v.literal("success"),
+  returnValue: v.any(),
+});
+
 export const vResult = v.union(
-  v.object({
-    kind: v.literal("success"),
-    returnValue: v.any(),
-  }),
+  vSuccessResult,
   v.object({
     kind: v.literal("failed"),
     error: v.string(),
@@ -84,11 +87,26 @@ export const vResult = v.union(
   }),
 );
 export type RunResult = Infer<typeof vResult>;
+export type SuccessResult = Infer<typeof vSuccessResult>;
 
 export const vOnCompleteFnContext = v.object({
   fnHandle: v.string(), // mutation
   context: v.optional(v.any()),
 });
+
+// TODO: better name for the kind
+export const vOnCompleteHandlers = v.union(
+  v.object({
+    kind: v.literal("onComplete"),
+    onComplete: v.optional(vOnCompleteFnContext),
+  }),
+  v.object({
+    kind: v.literal("not onComplete"),
+    onSuccess: v.optional(vOnCompleteFnContext),
+  }),
+);
+
+export const vOnCompleteHandlerKinds = literals(...vOnCompleteHandlers.members.map(member => member.fields.kind.value));
 
 export type OnCompleteArgs = {
   /**

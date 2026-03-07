@@ -12,12 +12,14 @@ import {
   internalQuery,
 } from "./_generated/server.js";
 import { createLogger, logLevel } from "./logging.js";
-import type { RunResult } from "./shared.js";
+import { vOnCompleteHandlerKinds, type RunResult } from "./shared.js";
 import { assert } from "convex-helpers";
+import { completeHandler } from "./complete.js";
 
 export const runMutationWrapper = internalMutation({
   args: {
     workId: v.id("work"),
+    onCompleteHandlerKind: v.optional(vOnCompleteHandlerKinds),
     fnHandle: v.string(),
     payloadId: v.optional(v.id("payload")),
     fnArgs: v.optional(v.record(v.string(), v.any())),
@@ -42,11 +44,24 @@ export const runMutationWrapper = internalMutation({
         : ctx.runMutation(args.fnHandle as FunctionHandle<"mutation">, fnArgs));
       // NOTE: we could run the `saveResult` handler here, or call `ctx.runMutation`,
       // but we want the mutation to be a separate transaction to reduce the window for OCCs.
-      await ctx.scheduler.runAfter(0, internal.complete.complete, {
-        jobs: [
-          { workId, runResult: { kind: "success", returnValue }, attempt },
-        ],
-      });
+      if (args.onCompleteHandlerKind === "not onComplete") {
+        // Run the onSuccess handler in the same mutation
+        await completeHandler(ctx, {
+          jobs: [
+            {
+              runResult: { kind: "success", returnValue },
+              workId,
+              attempt,
+            },
+          ],
+        });
+      } else {
+        await ctx.scheduler.runAfter(0, internal.complete.complete, {
+          jobs: [
+            { workId, runResult: { kind: "success", returnValue }, attempt },
+          ],
+        });
+      }
     } catch (e: unknown) {
       console.error(e);
       const runResult = { kind: "failed" as const, error: formatError(e) };
@@ -67,6 +82,7 @@ function formatError(e: unknown) {
 export const runActionWrapper = internalAction({
   args: {
     workId: v.id("work"),
+    onCompleteHandlerKind: v.optional(vOnCompleteHandlerKinds),
     fnHandle: v.string(),
     fnArgs: v.optional(v.record(v.string(), v.any())),
     payloadId: v.optional(v.id("payload")),
@@ -91,6 +107,17 @@ export const runActionWrapper = internalAction({
       // NOTE: we could run `ctx.runMutation`, but we want to guarantee execution,
       // and `ctx.scheduler.runAfter` won't OCC.
       const runResult: RunResult = { kind: "success", returnValue };
+      if (args.onCompleteHandlerKind === "not onComplete") {
+        try {
+          // Attempt to run the onSuccess handler now
+          await ctx.runMutation(internal.complete.complete, {
+            jobs: [{ workId, runResult, attempt }],
+          })
+          return;
+        } catch {
+          // Fall through and schedule complete instead
+        }
+      }
       await ctx.scheduler.runAfter(0, internal.complete.complete, {
         jobs: [{ workId, runResult, attempt }],
       });
