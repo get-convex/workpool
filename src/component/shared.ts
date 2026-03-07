@@ -76,15 +76,19 @@ export const vSuccessResult = v.object({
   returnValue: v.any(),
 });
 
+export const vFailureResult = v.object({
+  kind: v.literal("failed"),
+  error: v.string()
+});
+
+export const vCancelResult = v.object({
+  kind: v.literal("canceled"),
+});
+
 export const vResult = v.union(
   vSuccessResult,
-  v.object({
-    kind: v.literal("failed"),
-    error: v.string(),
-  }),
-  v.object({
-    kind: v.literal("canceled"),
-  }),
+  vFailureResult,
+  vCancelResult
 );
 export type RunResult = Infer<typeof vResult>;
 export type SuccessResult = Infer<typeof vSuccessResult>;
@@ -103,6 +107,8 @@ export const vOnCompleteHandlers = v.union(
   v.object({
     kind: v.literal("not onComplete"),
     onSuccess: v.optional(vOnCompleteFnContext),
+    onFailure: v.optional(vOnCompleteFnContext),
+    onCancel: v.optional(vOnCompleteFnContext),
   }),
 );
 
