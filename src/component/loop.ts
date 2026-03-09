@@ -203,7 +203,7 @@ export const updateRunStatus = internalMutation({
       const nextSeg = getNextSegment();
       await ctx.scheduler.runAt(
         boundScheduledTime(fromSegment(nextSeg), console),
-        internal.loop.main,
+        internal.loop.updateRunStatus,
         { generation, segment: nextSeg },
       );
       return;
