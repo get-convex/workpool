@@ -400,8 +400,14 @@ async function handleCompletions(
           console.warn(`[main] ${c.workId} is gone, but trying to complete`);
           return;
         }
-        const retried = await rescheduleJob(ctx, work, console);
+        const retried = await rescheduleJob(
+          ctx,
+          work,
+          console,
+          c.runResult.kind === "stuckInScheduler",
+        );
         if (retried) {
+          // TODO: we probably want a separate report entry for stuckInScheduler retries
           state.report.retries++;
           recordCompleted(console, work, "retrying", undefined);
         } else {
@@ -619,6 +625,7 @@ async function rescheduleJob(
   ctx: MutationCtx,
   work: Doc<"work">,
   console: Logger,
+  wasStuckInScheduler: boolean,
 ): Promise<boolean> {
   const pendingCancelation = await ctx.db
     .query("pendingCancelation")
@@ -632,7 +639,14 @@ async function rescheduleJob(
   if (work.canceled) {
     return false;
   }
-  if (!work.retryBehavior) {
+  let backoffMs: number;
+  if (wasStuckInScheduler) {
+    backoffMs = 0;
+  } else if (work.retryBehavior) {
+    backoffMs =
+      work.retryBehavior.initialBackoffMs *
+      Math.pow(work.retryBehavior.base, work.attempts - 1);
+  } else {
     console.warn(`[main] ${work._id} has no retryBehavior so not retrying`);
     return false;
   }
@@ -645,9 +659,6 @@ async function rescheduleJob(
     console.error(`[main] ${work._id} already in pendingStart so not retrying`);
     return false;
   }
-  const backoffMs =
-    work.retryBehavior.initialBackoffMs *
-    Math.pow(work.retryBehavior.base, work.attempts - 1);
   const nextAttempt = withJitter(backoffMs);
   const startTime = boundScheduledTime(Date.now() + nextAttempt, console);
   const segment = toSegment(startTime);

@@ -354,6 +354,119 @@ describe("recovery", () => {
       });
     });
 
+    it("should handle pending scheduled mutations", async () => {
+      // Create work and scheduled function
+      let workId: Id<"work">;
+      let scheduledId: Id<"_scheduled_functions">;
+
+      await t.run(async (ctx) => {
+        workId = await makeDummyWork(ctx, { fnType: "mutation" });
+        scheduledId = await makeDummyScheduledFunction(ctx, workId);
+      });
+
+      // Run recovery with mocked system.get
+      await t.run(async (ctx) => {
+        // Mock the system.get to return a pending state
+        ctx.db.system.get = patchedSystemGet(ctx.db, {
+          [scheduledId]: {
+            _id: scheduledId,
+            _creationTime: Date.now(),
+            name: "internal/worker.runMutationWrapper",
+            args: [
+              {
+                workId,
+                fnHandle: "test_handle",
+                fnArgs: {},
+                logLevel: "WARN",
+                attempt: 0,
+              },
+            ],
+            scheduledTime: Date.now(),
+            state: {
+              kind: "pending",
+            },
+          },
+        });
+
+        await recoveryHandler(ctx, {
+          jobs: [
+            {
+              scheduledId,
+              workId,
+              attempt: 0,
+              started: Date.now(),
+            },
+          ],
+        });
+      });
+
+      // Verify pendingCompletion was created with stuckInScheduler
+      await t.run(async (ctx) => {
+        const pendingCompletions = await ctx.db
+          .query("pendingCompletion")
+          .withIndex("workId", (q) => q.eq("workId", workId))
+          .collect();
+        expect(pendingCompletions).toHaveLength(1);
+        expect(pendingCompletions[0].runResult.kind).toBe("stuckInScheduler");
+      });
+    });
+
+    it("should not process pending scheduled actions", async () => {
+      // Create work and scheduled function
+      let workId: Id<"work">;
+      let scheduledId: Id<"_scheduled_functions">;
+
+      await t.run(async (ctx) => {
+        workId = await makeDummyWork(ctx);
+        scheduledId = await makeDummyScheduledFunction(ctx, workId);
+      });
+
+      // Run recovery with mocked system.get
+      await t.run(async (ctx) => {
+        // Mock the system.get to return a pending state
+        ctx.db.system.get = patchedSystemGet(ctx.db, {
+          [scheduledId]: {
+            _id: scheduledId,
+            _creationTime: Date.now(),
+            name: "internal/worker.runActionWrapper",
+            args: [
+              {
+                workId,
+                fnHandle: "test_handle",
+                fnArgs: {},
+                logLevel: "WARN",
+                attempt: 0,
+              },
+            ],
+            scheduledTime: Date.now(),
+            state: {
+              kind: "pending",
+            },
+          },
+        });
+
+        await recoveryHandler(ctx, {
+          jobs: [
+            {
+              scheduledId,
+              workId,
+              attempt: 0,
+              started: Date.now(),
+            },
+          ],
+        });
+      });
+
+      // Verify no pendingCompletion was created
+      await t.run(async (ctx) => {
+        const pendingCompletions = await ctx.db
+          .query("pendingCompletion")
+          .withIndex("workId", (q) => q.eq("workId", workId))
+          .collect();
+        expect(pendingCompletions).toHaveLength(0);
+      });
+    });
+
     it("should handle multiple jobs in a single call", async () => {
       // Create multiple work items and scheduled functions
       let workId1: Id<"work">;
@@ -472,7 +585,7 @@ describe("recovery", () => {
 
       // Run recovery with mocked system.get
       await t.run(async (ctx) => {
-        // Mock the system.get to return a pending state
+        // Mock the system.get to return a inProgress state
         ctx.db.system.get = patchedSystemGet(ctx.db, {
           [scheduledId]: {
             _id: scheduledId,
@@ -489,7 +602,7 @@ describe("recovery", () => {
             ],
             scheduledTime: Date.now(),
             state: {
-              kind: "pending",
+              kind: "inProgress",
             },
           },
         });
