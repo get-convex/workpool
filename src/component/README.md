@@ -30,6 +30,7 @@ flowchart LR
     pendingStart --> workerRunning["worker running"]
     workerRunning -->|worker finished| complete
     workerRunning --> |recovery| complete
+    workerRunning --> |recovery| pendingStart
     successfulCancel["AND"]@{shape: delay} --> |canceled| complete
     pendingStart --> successfulCancel
     pendingCancelation --> successfulCancel
@@ -40,6 +41,8 @@ Notably:
 - The pending\* states are written by outside sources.
 - The main loop federates changes to/from "running"
 - Canceling only impacts pending and retrying jobs.
+- If a job gets stuck in the scheduler, we cancel it and move it back to
+  pendingStart to free up the slot for other work.
 
 ## Loop state machine
 
