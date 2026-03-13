@@ -11,6 +11,7 @@ import {
   vWorkId,
   Workpool,
   vOnCompleteArgs,
+  vOnSuccessArgs,
 } from "@convex-dev/workpool";
 import { v } from "convex/values";
 import { createLogger } from "../../src/component/logging";
@@ -287,6 +288,15 @@ export const complete = internalMutation({
   },
 });
 
+// Define an onSuccess mutation.
+export const success = internalMutation({
+  args: vOnSuccessArgs(v.number()),
+  handler: async (ctx, args) => {
+    console.warn("onSuccess delay", Date.now() - args.result.returnValue);
+    console.warn("total", (Date.now() - args.context) / 1000);
+  },
+});
+
 export const singleLatency = internalMutation({
   args: {},
   handler: async (ctx, _args) => {
@@ -298,6 +308,24 @@ export const singleLatency = internalMutation({
       {
         context: started,
         onComplete: internal.example.complete,
+      },
+    );
+  },
+});
+
+export const singleLatencyOnSuccess = internalMutation({
+  args: {},
+  handler: async (ctx, _args) => {
+    const started = Date.now();
+    await bigPool.enqueueMutation(
+      ctx,
+      internal.example.noop,
+      { started },
+      {
+        context: started,
+        onSuccess: internal.example.success,
+        onFailure: internal.example.complete,
+        onCancel: internal.example.complete,
       },
     );
   },

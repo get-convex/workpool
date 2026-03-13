@@ -57,6 +57,7 @@ describe("recovery", () => {
       fnArgs: {},
       logLevel: "WARN",
       attempt: 0,
+      hasOnSuccess: false,
     });
   }
 

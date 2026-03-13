@@ -1,6 +1,6 @@
 import type { FunctionHandle } from "convex/server";
 import { getConvexSize, type Infer, v } from "convex/values";
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc, Id } from "./_generated/dataModel.js";
 import { internal } from "./_generated/api.js";
 import { internalMutation, type MutationCtx } from "./_generated/server.js";
 import { kickMainLoop } from "./kick.js";
@@ -116,10 +116,11 @@ export async function completeHandler(
         !!maxAttempts &&
         work.attempts < maxAttempts;
       if (!retry) {
-        if (work.onComplete) {
+        const fnHandle = getOnCompleteHandle(work.onComplete, job.runResult);
+        if (fnHandle) {
           try {
             // Retrieve large context if stored separately
-            let context = work.onComplete.context;
+            let context = work.onComplete?.context;
             if (context === undefined && work.payloadId) {
               const payload = await ctx.db.get(work.payloadId);
               if (payload) {
@@ -127,7 +128,7 @@ export async function completeHandler(
               }
             }
 
-            const handle = work.onComplete.fnHandle as FunctionHandle<
+            const handle = fnHandle as FunctionHandle<
               "mutation",
               OnCompleteArgs,
               void
@@ -176,6 +177,28 @@ export async function completeHandler(
         }),
       ),
     );
+  }
+}
+
+function getOnCompleteHandle(
+  onComplete: Doc<"work">["onComplete"],
+  jobResult: RunResult,
+): string | undefined {
+  if (!onComplete) {
+    return undefined;
+  }
+  if (onComplete.kind === "byOutcome") {
+    switch (jobResult.kind) {
+      case "success":
+        return onComplete.onSuccessHandle;
+      case "failed":
+        return onComplete.onFailureHandle;
+      case "canceled":
+        return onComplete.onCancelHandle;
+    }
+  } else {
+    // kind === "all" or undefined
+    return onComplete.fnHandle;
   }
 }
 

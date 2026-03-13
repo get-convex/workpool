@@ -14,6 +14,7 @@ import {
 import { createLogger, logLevel } from "./logging.js";
 import type { RunResult } from "./shared.js";
 import { assert } from "convex-helpers";
+import { completeHandler } from "./complete.js";
 
 export const runMutationWrapper = internalMutation({
   args: {
@@ -24,6 +25,7 @@ export const runMutationWrapper = internalMutation({
     fnType: v.union(v.literal("query"), v.literal("mutation")),
     logLevel,
     attempt: v.number(),
+    hasOnSuccess: v.optional(v.boolean()),
   },
   handler: async (ctx, { workId, attempt, ...args }) => {
     const console = createLogger(args.logLevel);
@@ -42,11 +44,24 @@ export const runMutationWrapper = internalMutation({
         : ctx.runMutation(args.fnHandle as FunctionHandle<"mutation">, fnArgs));
       // NOTE: we could run the `saveResult` handler here, or call `ctx.runMutation`,
       // but we want the mutation to be a separate transaction to reduce the window for OCCs.
-      await ctx.scheduler.runAfter(0, internal.complete.complete, {
-        jobs: [
-          { workId, runResult: { kind: "success", returnValue }, attempt },
-        ],
-      });
+      if (args.hasOnSuccess) {
+        // Run the onSuccess callback in the same mutation
+        await completeHandler(ctx, {
+          jobs: [
+            {
+              runResult: { kind: "success", returnValue },
+              workId,
+              attempt,
+            },
+          ],
+        });
+      } else {
+        await ctx.scheduler.runAfter(0, internal.complete.complete, {
+          jobs: [
+            { workId, runResult: { kind: "success", returnValue }, attempt },
+          ],
+        });
+      }
     } catch (e: unknown) {
       console.error(e);
       const runResult = { kind: "failed" as const, error: formatError(e) };
@@ -72,6 +87,7 @@ export const runActionWrapper = internalAction({
     payloadId: v.optional(v.id("payload")),
     logLevel,
     attempt: v.number(),
+    hasOnSuccess: v.optional(v.boolean()),
   },
   handler: async (ctx, { workId, attempt, ...args }) => {
     const console = createLogger(args.logLevel);
@@ -91,6 +107,17 @@ export const runActionWrapper = internalAction({
       // NOTE: we could run `ctx.runMutation`, but we want to guarantee execution,
       // and `ctx.scheduler.runAfter` won't OCC.
       const runResult: RunResult = { kind: "success", returnValue };
+      if (args.hasOnSuccess) {
+        try {
+          // Attempt to run the onSuccess callback now
+          await ctx.runMutation(internal.complete.complete, {
+            jobs: [{ workId, runResult, attempt }],
+          });
+          return;
+        } catch {
+          // Fall through and schedule complete instead
+        }
+      }
       await ctx.scheduler.runAfter(0, internal.complete.complete, {
         jobs: [{ workId, runResult, attempt }],
       });

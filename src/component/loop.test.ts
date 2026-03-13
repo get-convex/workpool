@@ -71,6 +71,7 @@ describe("loop", () => {
       fnArgs: {},
       logLevel: "WARN",
       attempt: 0,
+      hasOnSuccess: false,
     });
   }
 
