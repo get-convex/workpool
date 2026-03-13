@@ -42,6 +42,12 @@ export async function kickMainLoop(
       );
       return next;
     }
+    if (source === "complete" && !runStatus.state.saturated) {
+      console.debug(
+        `[${source}] main is not saturated, so kicking for completion isn't necessary`,
+      );
+      return next;
+    }
     if (runStatus.state.segment <= toSegment(Date.now() + SECOND)) {
       console.debug(
         `[${source}] main is scheduled to run soon enough, so we don't need to kick it`,
