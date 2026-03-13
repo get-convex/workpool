@@ -80,6 +80,8 @@ export const markTaskCompleted = internalMutation({
     v.object({
       runId: v.id("runs"),
       type: v.union(v.literal("mutation"), v.literal("action")),
+      enqueuedAt: v.optional(v.number()),
+      wave: v.optional(v.number()),
     }),
   ),
   handler: async (ctx, args) => {
@@ -88,6 +90,8 @@ export const markTaskCompleted = internalMutation({
       workId: args.workId,
       type: args.context.type,
       endTime: Date.now(),
+      enqueuedAt: args.context.enqueuedAt,
+      wave: args.context.wave,
     });
   },
 });

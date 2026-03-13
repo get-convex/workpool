@@ -97,3 +97,84 @@ export const status = internalQuery({
     return { run: latestRun, status };
   },
 });
+
+function percentile(sorted: number[], p: number): number {
+  const idx = Math.ceil((p / 100) * sorted.length) - 1;
+  return sorted[Math.max(0, idx)];
+}
+
+// Get metrics for the latest run
+export const metrics = internalQuery({
+  handler: async (ctx) => {
+    const run = await ctx.db.query("runs").order("desc").first();
+    if (!run) return null;
+
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("runId", (q) => q.eq("runId", run._id))
+      .collect();
+
+    const status = await runStatus(ctx, run);
+    const completedCount = tasks.length;
+    const taskCount = run.taskCount ?? 0;
+
+    // Per-task latency (enqueue → onComplete)
+    const latencies = tasks
+      .filter((t) => t.enqueuedAt !== undefined)
+      .map((t) => t.endTime - t.enqueuedAt!)
+      .sort((a, b) => a - b);
+
+    // Per-wave breakdown
+    const waveMap = new Map<number, { count: number; latencies: number[] }>();
+    for (const t of tasks) {
+      if (t.wave === undefined) continue;
+      let entry = waveMap.get(t.wave);
+      if (!entry) {
+        entry = { count: 0, latencies: [] };
+        waveMap.set(t.wave, entry);
+      }
+      entry.count++;
+      if (t.enqueuedAt !== undefined) {
+        entry.latencies.push(t.endTime - t.enqueuedAt);
+      }
+    }
+    const waves = [...waveMap.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([wave, { count, latencies: lats }]) => {
+        lats.sort((a, b) => a - b);
+        return {
+          wave,
+          count,
+          ...(lats.length > 0 && {
+            p50: percentile(lats, 50),
+            p99: percentile(lats, 99),
+          }),
+        };
+      });
+
+    // Total duration
+    const endTimes = tasks.map((t) => t.endTime);
+    const lastEndTime = endTimes.length ? Math.max(...endTimes) : undefined;
+    const totalDurationMs = lastEndTime
+      ? lastEndTime - run.startTime
+      : undefined;
+
+    return {
+      status,
+      scenario: run.scenario,
+      parameters: run.parameters,
+      completedCount,
+      taskCount,
+      ...(totalDurationMs !== undefined && { totalDurationMs }),
+      ...(latencies.length > 0 && {
+        latency: {
+          p50: percentile(latencies, 50),
+          p95: percentile(latencies, 95),
+          p99: percentile(latencies, 99),
+          max: latencies[latencies.length - 1],
+        },
+      }),
+      ...(waves.length > 0 && { waves }),
+    };
+  },
+});
