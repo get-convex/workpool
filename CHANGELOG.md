@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.3-alpha.0
+
+- Cools down status changes in the workpool so it stays running and polls for 5s
+  in 100ms increments to avoid conflicts
+- Doesn't kick the main loop from completion unless it's scheduled & saturated
+
 ## 0.4.2
 
 - Schedules recovery in batches when there are many old jobs in flight

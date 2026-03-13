@@ -29,6 +29,7 @@ const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 const RECOVERY_THRESHOLD_MS = 5 * MINUTE; // attempt to recover jobs this old.
 export const RECOVERY_PERIOD_SEGMENTS = toSegment(1 * MINUTE); // how often to check.
+export const STATUS_COOLDOWN = 5 * SECOND;
 const CURSOR_BUFFER_SEGMENTS = toSegment(30 * SECOND); // buffer for cursor updates.
 export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
   generation: 0n,
@@ -190,6 +191,21 @@ export const updateRunStatus = internalMutation({
         generation,
         segment: getCurrentSegment(),
       });
+      return;
+    }
+
+    // Cooldown: if any cursor was active within 5 seconds, stay running.
+    const { incoming, completion, cancelation } = state.segmentCursors;
+    const latestCursor = fromSegment(
+      max(incoming, max(completion, cancelation)),
+    );
+    if (Date.now() - latestCursor < STATUS_COOLDOWN) {
+      const nextSeg = getNextSegment();
+      await ctx.scheduler.runAt(
+        boundScheduledTime(fromSegment(nextSeg), console),
+        internal.loop.updateRunStatus,
+        { generation, segment: nextSeg },
+      );
       return;
     }
 
@@ -380,7 +396,7 @@ async function handleCompletions(
         const retried = await rescheduleJob(ctx, work, console);
         if (retried) {
           state.report.retries++;
-          recordCompleted(console, work, "retrying");
+          recordCompleted(console, work, "retrying", undefined);
         } else {
           // We don't retry if it's been canceled in the mean time.
           state.report.canceled++;
