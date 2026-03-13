@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.3-alpha.1
+
+- Attempts to first run the completion handler inline in runActionWrapper to log
+  errors, and then schedule it if it fails.
+
 ## 0.4.3-alpha.0
 
 - Cools down status changes in the workpool so it stays running and polls for 5s
