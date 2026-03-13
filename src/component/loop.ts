@@ -396,7 +396,7 @@ async function handleCompletions(
         const retried = await rescheduleJob(ctx, work, console);
         if (retried) {
           state.report.retries++;
-          recordCompleted(console, work, "retrying");
+          recordCompleted(console, work, "retrying", undefined);
         } else {
           // We don't retry if it's been canceled in the mean time.
           state.report.canceled++;
