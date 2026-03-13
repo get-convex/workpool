@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.2
+
+- Schedules recovery in batches when there are many old jobs in flight
+
 ## 0.4.1
 
 - Logs the scheduled function ID in the "started" event for better debugging of
