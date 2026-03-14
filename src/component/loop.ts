@@ -474,6 +474,7 @@ async function handleRecovery(
   console: Logger,
 ) {
   const missing = new Set<Id<"work">>();
+  const stuckInScheduler = new Set<Id<"work">>();
   const oldEnoughToConsider = Date.now() - RECOVERY_THRESHOLD_MS;
   const jobs = (
     await Promise.all(
@@ -487,11 +488,34 @@ async function handleRecovery(
           console.error(`[main] ${r.workId} already gone (skipping recovery)`);
           return null;
         }
+        const scheduled = await ctx.db.system.get(r.scheduledId);
+        if (scheduled?.state.kind === "pending") {
+          // The task is stuck in the scheduler
+          await ctx.scheduler.cancel(scheduled._id);
+          stuckInScheduler.add(r.workId);
+          if (work.canceled) {
+            console.warn(
+              `[main] ${r.workId} stuck in scheduler and canceled, completing`,
+            );
+            return { ...r, attempt: work.attempts };
+          }
+          await ctx.db.insert("pendingStart", {
+            workId: r.workId,
+            // Retry immediately
+            segment: getCurrentSegment(),
+          });
+          console.warn(
+            `[main] ${r.workId} stuck in scheduler, rescheduling`,
+          );
+          return null;
+        }
         return { ...r, attempt: work.attempts };
       }),
     )
   ).flatMap((r) => (r ? [r] : []));
-  state.running = state.running.filter((r) => !missing.has(r.workId));
+  state.running = state.running.filter(
+    (r) => !missing.has(r.workId) && !stuckInScheduler.has(r.workId),
+  );
   for (let i = 0; i < jobs.length; i += RECOVERY_BATCH_SIZE) {
     const batch = jobs.slice(i, i + RECOVERY_BATCH_SIZE);
     await ctx.scheduler.runAfter(0, internal.recovery.recover, { jobs: batch });

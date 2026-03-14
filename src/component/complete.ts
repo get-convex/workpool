@@ -113,6 +113,7 @@ export async function completeHandler(
       const maxAttempts = work.retryBehavior?.maxAttempts;
       const retry =
         job.runResult.kind === "failed" &&
+        !work.canceled &&
         !!maxAttempts &&
         work.attempts < maxAttempts;
       if (!retry) {
