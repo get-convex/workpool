@@ -17,6 +17,8 @@ export const completeArgs = v.object({
       runResult: vResult,
       workId: v.id("work"),
       attempt: v.number(),
+      // TODO: need to be careful about removing this field later
+      runOnCompleteInline: v.optional(v.boolean()),
     }),
   ),
 });
@@ -133,12 +135,34 @@ export async function completeHandler(
               OnCompleteArgs,
               void
             >;
-            scheduledId = await ctx.scheduler.runAfter(0, handle, {
+            const onCompleteArgs = {
               workId: work._id,
               context,
               result: job.runResult,
-            });
-            console.debug(`[complete] onComplete for ${job.workId} scheduled`);
+            };
+            if (job.runOnCompleteInline) {
+              try {
+                await ctx.runMutation(handle, onCompleteArgs);
+              } catch (e) {
+                console.error(
+                  `[complete] caught error while running onComplete inline for ${job.workId}, scheduling instead: ${e}`,
+                );
+                scheduledId = await ctx.scheduler.runAfter(
+                  0,
+                  handle,
+                  onCompleteArgs,
+                );
+              }
+            } else {
+              scheduledId = await ctx.scheduler.runAfter(
+                0,
+                handle,
+                onCompleteArgs,
+              );
+              console.debug(
+                `[complete] onComplete for ${job.workId} scheduled`,
+              );
+            }
           } catch (e) {
             console.error(
               `[complete] error running onComplete for ${job.workId}`,

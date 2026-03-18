@@ -276,6 +276,14 @@ export const noop = internalMutation({
   },
 });
 
+export const noopAction = internalAction({
+  args: { started: v.number() },
+  handler: async (ctx, args) => {
+    console.warn(`lag: ${Date.now() - args.started}`);
+    return Date.now();
+  },
+});
+
 // Another way to define the onComplete mutation.
 export const complete = internalMutation({
   args: vOnCompleteArgs(v.number()),
@@ -284,6 +292,32 @@ export const complete = internalMutation({
       console.warn("onComplete delay", Date.now() - args.result.returnValue);
     }
     console.warn("total", (Date.now() - args.context) / 1000);
+  },
+});
+
+export const completeFail = internalMutation({
+  args: vOnCompleteArgs(v.number()),
+  handler: async (ctx) => {
+    console.info("completeFail");
+    for (let i = 0; i < 16000; i++) {
+      await ctx.db.insert("data", { data: i });
+    }
+  },
+});
+
+export const enqueueFailingOnComplete = internalMutation({
+  args: {},
+  handler: async (ctx, _args) => {
+    const started = Date.now();
+    await bigPool.enqueueAction(
+      ctx,
+      internal.example.noopAction,
+      { started },
+      {
+        context: started,
+        onComplete: internal.example.completeFail,
+      },
+    );
   },
 });
 
