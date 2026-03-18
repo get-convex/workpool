@@ -1176,7 +1176,10 @@ describe("loop", () => {
       // Enqueue wave 2 while the loop is still warm
       await t.run(async (ctx) => {
         const workId2 = await makeDummyWork(ctx);
-        await ctx.db.insert("pendingStart", { workId: workId2, segment: segment2 });
+        await ctx.db.insert("pendingStart", {
+          workId: workId2,
+          segment: segment2,
+        });
       });
 
       // The scheduled main from cooldown should pick up wave 2

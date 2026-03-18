@@ -136,7 +136,10 @@ export default internalAction({
     const pollStart = Date.now();
     let metrics: Record<string, unknown> | null = null;
     while (Date.now() - pollStart < timeout) {
-      metrics = await ctx.runQuery(internal.test.run.metrics) as Record<string, unknown> | null;
+      metrics = (await ctx.runQuery(internal.test.run.metrics)) as Record<
+        string,
+        unknown
+      > | null;
       if (metrics && metrics.status === "completed") break;
       await new Promise((resolve) => setTimeout(resolve, pollInterval));
     }
@@ -156,8 +159,12 @@ export default internalAction({
     }
 
     // Log results
-    const latency = metrics!.latency as { p50: number; p95: number; p99: number; max: number } | undefined;
-    const waves = metrics!.waves as Array<{ wave: number; count: number; p50?: number; p99?: number }> | undefined;
+    const latency = metrics!.latency as
+      | { p50: number; p95: number; p99: number; max: number }
+      | undefined;
+    const waves = metrics!.waves as
+      | Array<{ wave: number; count: number; p50?: number; p99?: number }>
+      | undefined;
 
     console.log(`\n=== burstyBatches results ===`);
     console.log(`Total duration: ${metrics!.totalDurationMs}ms`);
@@ -173,7 +180,9 @@ export default internalAction({
         console.log(
           `  wave ${w.wave}: ${w.count} done, ` +
             `enqueue=${timing?.enqueueMs ?? "?"}ms` +
-            (w.p50 !== undefined ? ` latency p50=${w.p50}ms p99=${w.p99}ms` : ""),
+            (w.p50 !== undefined
+              ? ` latency p50=${w.p50}ms p99=${w.p99}ms`
+              : ""),
         );
       }
     }
