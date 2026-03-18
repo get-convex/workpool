@@ -11,7 +11,7 @@ import { assert } from "convex-helpers";
 
 export type CompleteJob = Infer<typeof completeArgs.fields.jobs.element>;
 
-export const completeArgs = v.object({
+const completeArgs = v.object({
   jobs: v.array(
     v.object({
       runResult: vResult,
