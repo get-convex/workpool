@@ -72,7 +72,7 @@
   "devDependencies": {
     "@edge-runtime/vm": "5.0.0",
     "@eslint/eslintrc": "3.3.3",
-    "@eslint/js": "9.39.2",
+    "@eslint/js": "10.0.1",
     "@types/node": "24.10.11",
     "@types/react": "19.2.13",
     "@types/react-dom": "19.2.3",
@@ -83,8 +83,8 @@
     "convex-helpers": "0.1.111",
     "convex-test": "0.0.41",
     "cpy-cli": "7.0.0",
-    "eslint": "9.39.2",
-    "eslint-plugin-react-hooks": "7.0.1",
+    "eslint": "10.0.2",
+    "eslint-plugin-react-hooks": "7.1.0-canary-3f0b9e61-20260317",
     "eslint-plugin-react-refresh": "0.5.0",
     "globals": "17.3.0",
     "npm-run-all2": "8.0.4",
@@ -94,7 +94,7 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "typescript": "5.9.3",
-    "typescript-eslint": "8.54.0",
+    "typescript-eslint": "8.56.1",
     "vite": "7.3.1",
     "vitest": "4.0.18"
   },
