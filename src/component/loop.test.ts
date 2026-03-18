@@ -16,7 +16,6 @@ import { DEFAULT_LOG_LEVEL } from "./logging.js";
 import schema from "./schema.js";
 import {
   DEFAULT_MAX_PARALLELISM,
-  fromSegment,
   getCurrentSegment,
   getNextSegment,
   toSegment,
@@ -1204,7 +1203,6 @@ describe("loop", () => {
       const TASKS_PER_WAVE = 3;
       const WAVE_GAP_MS = 1000; // 1s between waves, well within 5s cooldown
 
-      const segment = getNextSegment();
       await t.run(async (ctx) => {
         await insertInternalState(ctx);
         await ctx.db.insert("runStatus", { state: { kind: "running" } });
