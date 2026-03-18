@@ -25,11 +25,13 @@ import { generateReport, recordCompleted, recordStarted } from "./stats.js";
 
 const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
 const RECOVERY_BATCH_SIZE = 32;
-const SECOND = 1000;
+const MS = 1;
+const SECOND = 1000 * MS;
 const MINUTE = 60 * SECOND;
 const RECOVERY_THRESHOLD_MS = 5 * MINUTE; // attempt to recover jobs this old.
 export const RECOVERY_PERIOD_SEGMENTS = toSegment(1 * MINUTE); // how often to check.
-export const STATUS_COOLDOWN = 5 * SECOND;
+export const STATUS_COOLDOWN = 2 * SECOND;
+export const COOLDOWN_CHECK_INTERVAL = 200 * MS;
 const CURSOR_BUFFER_SEGMENTS = toSegment(30 * SECOND); // buffer for cursor updates.
 export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
   generation: 0n,
@@ -200,11 +202,16 @@ export const updateRunStatus = internalMutation({
       max(incoming, max(completion, cancelation)),
     );
     if (Date.now() - latestCursor < STATUS_COOLDOWN) {
-      const nextSeg = getNextSegment();
+      const remaining = STATUS_COOLDOWN - (Date.now() - latestCursor);
+      console.debug(
+        `[updateRunStatus] cooldown: ${remaining}ms remaining, checking again in ${COOLDOWN_CHECK_INTERVAL}ms`,
+      );
+      const checkAt = Date.now() + COOLDOWN_CHECK_INTERVAL;
+      const checkSegment = toSegment(checkAt);
       await ctx.scheduler.runAt(
-        boundScheduledTime(fromSegment(nextSeg), console),
+        boundScheduledTime(checkAt, console),
         internal.loop.updateRunStatus,
-        { generation, segment: nextSeg },
+        { generation, segment: checkSegment },
       );
       return;
     }
