@@ -116,6 +116,7 @@ export async function completeHandler(
         !!maxAttempts &&
         work.attempts < maxAttempts;
       if (!retry) {
+        let scheduledId = undefined;
         if (work.onComplete) {
           try {
             // Retrieve large context if stored separately
@@ -132,12 +133,12 @@ export async function completeHandler(
               OnCompleteArgs,
               void
             >;
-            await ctx.runMutation(handle, {
+            scheduledId = await ctx.scheduler.runAfter(0, handle, {
               workId: work._id,
               context,
               result: job.runResult,
             });
-            console.debug(`[complete] onComplete for ${job.workId} completed`);
+            console.debug(`[complete] onComplete for ${job.workId} scheduled`);
           } catch (e) {
             console.error(
               `[complete] error running onComplete for ${job.workId}`,
@@ -146,7 +147,7 @@ export async function completeHandler(
             // TODO: store failures in a table for later debugging
           }
         }
-        recordCompleted(console, work, job.runResult.kind);
+        recordCompleted(console, work, job.runResult.kind, scheduledId);
 
         // Clean up any large data that was stored separately.
         // TODO: consider async deletion in the future to avoid bandwidth limits.

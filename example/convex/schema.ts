@@ -19,5 +19,7 @@ export default defineSchema({
     workId: vWorkId,
     type: v.union(v.literal("mutation"), v.literal("action")),
     endTime: v.number(),
+    enqueuedAt: v.optional(v.number()),
+    wave: v.optional(v.number()),
   }).index("runId", ["runId"]),
 });

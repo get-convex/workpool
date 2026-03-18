@@ -16,10 +16,12 @@ import { DEFAULT_LOG_LEVEL } from "./logging.js";
 import schema from "./schema.js";
 import {
   DEFAULT_MAX_PARALLELISM,
+  fromSegment,
   getCurrentSegment,
   getNextSegment,
   toSegment,
 } from "./shared.js";
+import { STATUS_COOLDOWN } from "./loop.js";
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -376,6 +378,9 @@ describe("loop", () => {
         segment: getNextSegment(),
       });
 
+      // Advance clock past the 5s cooldown so cursors are stale
+      vi.setSystemTime(Date.now() + STATUS_COOLDOWN + 1000);
+
       // Run updateRunStatus to transition to scheduled
       await t.mutation(internal.loop.updateRunStatus, {
         generation: 2n,
@@ -529,6 +534,9 @@ describe("loop", () => {
 
       // Run main loop again to process the completion
       await t.mutation(internal.loop.main, { generation: 2n, segment });
+
+      // Advance clock past the 5s cooldown so cursors are stale
+      vi.setSystemTime(Date.now() + STATUS_COOLDOWN + 1000);
 
       // Run updateRunStatus to transition to idle
       await t.mutation(internal.loop.updateRunStatus, {
@@ -1078,6 +1086,203 @@ describe("loop", () => {
       });
 
       // No error should be thrown
+    });
+  });
+
+  describe("status cooldown", () => {
+    it("should stay running within the cooldown window", async () => {
+      const segment = getNextSegment();
+      await t.run(async (ctx) => {
+        await insertInternalState(ctx);
+        await ctx.db.insert("runStatus", { state: { kind: "running" } });
+
+        const workId = await makeDummyWork(ctx);
+        await ctx.db.insert("pendingStart", { workId, segment });
+      });
+
+      // Process the work
+      await t.mutation(internal.loop.main, { generation: 1n, segment });
+
+      // Advance less than the cooldown
+      vi.setSystemTime(Date.now() + STATUS_COOLDOWN - 1000);
+
+      // updateRunStatus should schedule main again (staying running)
+      await t.mutation(internal.loop.updateRunStatus, {
+        generation: 2n,
+        segment,
+      });
+
+      // runStatus should still be "running" — no transition
+      await t.run(async (ctx) => {
+        const runStatus = await ctx.db.query("runStatus").unique();
+        assert(runStatus);
+        expect(runStatus.state.kind).toBe("running");
+      });
+    });
+
+    it("should transition after the cooldown expires", async () => {
+      const segment = getNextSegment();
+      await t.run(async (ctx) => {
+        await insertInternalState(ctx);
+        await ctx.db.insert("runStatus", { state: { kind: "running" } });
+
+        const workId = await makeDummyWork(ctx);
+        await ctx.db.insert("pendingStart", { workId, segment });
+      });
+
+      // Process the work
+      await t.mutation(internal.loop.main, { generation: 1n, segment });
+
+      // Advance past the cooldown
+      vi.setSystemTime(Date.now() + STATUS_COOLDOWN + 1000);
+
+      // Now it should transition
+      await t.mutation(internal.loop.updateRunStatus, {
+        generation: 2n,
+        segment,
+      });
+
+      await t.run(async (ctx) => {
+        const runStatus = await ctx.db.query("runStatus").unique();
+        assert(runStatus);
+        // Should have transitioned out of running (to scheduled or idle)
+        expect(runStatus.state.kind).not.toBe("running");
+      });
+    });
+
+    it("should pick up new work arriving during cooldown without a kick", async () => {
+      const segment = getNextSegment();
+      await t.run(async (ctx) => {
+        await insertInternalState(ctx);
+        await ctx.db.insert("runStatus", { state: { kind: "running" } });
+
+        const workId = await makeDummyWork(ctx);
+        await ctx.db.insert("pendingStart", { workId, segment });
+      });
+
+      // Process wave 1
+      await t.mutation(internal.loop.main, { generation: 1n, segment });
+
+      // Advance 1 second (within cooldown)
+      vi.setSystemTime(Date.now() + 1000);
+      const segment2 = getNextSegment();
+
+      // updateRunStatus during cooldown — schedules main for next segment
+      await t.mutation(internal.loop.updateRunStatus, {
+        generation: 2n,
+        segment,
+      });
+
+      // Enqueue wave 2 while the loop is still warm
+      await t.run(async (ctx) => {
+        const workId2 = await makeDummyWork(ctx);
+        await ctx.db.insert("pendingStart", {
+          workId: workId2,
+          segment: segment2,
+        });
+      });
+
+      // The scheduled main from cooldown should pick up wave 2
+      await t.mutation(internal.loop.main, {
+        generation: 2n,
+        segment: segment2,
+      });
+
+      // Verify both items processed
+      await t.run(async (ctx) => {
+        const state = await ctx.db.query("internalState").unique();
+        assert(state);
+        expect(state.running).toHaveLength(2);
+        // pendingStart should be empty
+        const pending = await ctx.db.query("pendingStart").collect();
+        expect(pending).toHaveLength(0);
+      });
+    });
+
+    it("bursty throughput: multiple waves processed without going idle", async () => {
+      const WAVE_COUNT = 3;
+      const TASKS_PER_WAVE = 3;
+      const WAVE_GAP_MS = 1000; // 1s between waves, well within 5s cooldown
+
+      const segment = getNextSegment();
+      await t.run(async (ctx) => {
+        await insertInternalState(ctx);
+        await ctx.db.insert("runStatus", { state: { kind: "running" } });
+      });
+
+      let generation = 1n;
+      const statusChecks: string[] = [];
+
+      for (let wave = 0; wave < WAVE_COUNT; wave++) {
+        if (wave > 0) {
+          // Advance time between waves (within cooldown)
+          vi.setSystemTime(Date.now() + WAVE_GAP_MS);
+        }
+
+        const waveSeg = getNextSegment();
+
+        // Enqueue tasks for this wave
+        await t.run(async (ctx) => {
+          for (let i = 0; i < TASKS_PER_WAVE; i++) {
+            const workId = await makeDummyWork(ctx);
+            await ctx.db.insert("pendingStart", { workId, segment: waveSeg });
+          }
+        });
+
+        // Run main to process the wave
+        await t.mutation(internal.loop.main, {
+          generation,
+          segment: waveSeg,
+        });
+        generation++;
+
+        // Check status after updateRunStatus
+        await t.mutation(internal.loop.updateRunStatus, {
+          generation,
+          segment: waveSeg,
+        });
+
+        const status = await t.run(async (ctx) => {
+          const runStatus = await ctx.db.query("runStatus").unique();
+          assert(runStatus);
+          return runStatus.state.kind;
+        });
+        statusChecks.push(status);
+
+        // If main was scheduled by cooldown, run it to advance generation
+        if (status === "running") {
+          // The cooldown scheduled main for next segment — run it so
+          // generation stays consistent for the next wave.
+          const nextSeg = getNextSegment();
+          await t.mutation(internal.loop.main, {
+            generation,
+            segment: nextSeg,
+          });
+          generation++;
+        }
+      }
+
+      // During the cooldown window, every wave should see "running"
+      for (let i = 0; i < WAVE_COUNT; i++) {
+        expect(statusChecks[i]).toBe("running");
+      }
+
+      // After the cooldown expires, updateRunStatus should transition.
+      // Don't run main again — that would refresh the cursors.
+      vi.setSystemTime(Date.now() + STATUS_COOLDOWN + 1000);
+
+      await t.mutation(internal.loop.updateRunStatus, {
+        generation,
+        segment: getNextSegment(),
+      });
+
+      const finalStatus = await t.run(async (ctx) => {
+        const runStatus = await ctx.db.query("runStatus").unique();
+        assert(runStatus);
+        return runStatus.state.kind;
+      });
+      // Should have transitioned out of running
+      expect(finalStatus).not.toBe("running");
     });
   });
 });
