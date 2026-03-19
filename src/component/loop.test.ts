@@ -89,6 +89,7 @@ describe("loop", () => {
         failed: 0,
         retries: 0,
         canceled: 0,
+        conflicted: 0,
         lastReportTs: Date.now(),
       },
       running: [],

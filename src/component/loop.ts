@@ -43,6 +43,7 @@ export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
     failed: 0,
     retries: 0,
     canceled: 0,
+    conflicted: 0,
     lastReportTs: 0,
   },
   running: [],
@@ -111,6 +112,7 @@ export const main = internalMutation({
         failed: 0,
         retries: 0,
         canceled: 0,
+        conflicted: 0,
         lastReportTs,
       };
     }
@@ -400,15 +402,19 @@ async function handleCompletions(
           console.warn(`[main] ${c.workId} is gone, but trying to complete`);
           return;
         }
+        const wasStuckInScheduler = c.runResult.kind === "stuckInScheduler";
         const retried = await rescheduleJob(
           ctx,
           work,
           console,
-          c.runResult.kind === "stuckInScheduler",
+          wasStuckInScheduler,
         );
         if (retried) {
-          // TODO: we probably want a separate report entry for stuckInScheduler retries
-          state.report.retries++;
+          if (wasStuckInScheduler) {
+            state.report.conflicted = (state.report.conflicted ?? 0) + 1;
+          } else {
+            state.report.retries++;
+          }
           recordCompleted(console, work, "retrying", undefined);
         } else {
           // We don't retry if it's been canceled in the mean time.
