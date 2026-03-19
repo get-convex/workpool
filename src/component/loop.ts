@@ -28,7 +28,8 @@ const RECOVERY_BATCH_SIZE = 32;
 const MS = 1;
 const SECOND = 1000 * MS;
 const MINUTE = 60 * SECOND;
-const RECOVERY_THRESHOLD_MS = 5 * MINUTE; // attempt to recover jobs this old.
+const ACTION_RECOVERY_THRESHOLD_MS = 5 * MINUTE; // attempt to recover jobs this old.
+const MUTATION_RECOVERY_THRESHOLD_MS = 1 * MINUTE; // attempt to recover jobs this old.
 export const RECOVERY_PERIOD_SEGMENTS = toSegment(1 * MINUTE); // how often to check.
 export const STATUS_COOLDOWN = 2 * SECOND;
 export const COOLDOWN_CHECK_INTERVAL = 200 * MS;
@@ -509,17 +510,30 @@ async function handleRecovery(
   console: Logger,
 ) {
   const missing = new Set<Id<"work">>();
-  const oldEnoughToConsider = Date.now() - RECOVERY_THRESHOLD_MS;
+  const actionOldEnoughToConsider = Date.now() - ACTION_RECOVERY_THRESHOLD_MS;
+  const mutationOldEnoughToConsider =
+    Date.now() - MUTATION_RECOVERY_THRESHOLD_MS;
   const jobs = (
     await Promise.all(
       state.running.map(async (r) => {
-        if (r.started >= oldEnoughToConsider) {
+        if (
+          r.started >=
+          Math.max(actionOldEnoughToConsider, mutationOldEnoughToConsider)
+        ) {
+          // Avoid getting the work if possible
           return null;
         }
         const work = await ctx.db.get(r.workId);
         if (!work) {
           missing.add(r.workId);
           console.error(`[main] ${r.workId} already gone (skipping recovery)`);
+          return null;
+        }
+        const oldEnoughToConsider =
+          work.fnType === "action"
+            ? actionOldEnoughToConsider
+            : mutationOldEnoughToConsider;
+        if (r.started >= oldEnoughToConsider) {
           return null;
         }
         return { ...r, attempt: work.attempts };
