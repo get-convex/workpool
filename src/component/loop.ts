@@ -413,10 +413,11 @@ async function handleCompletions(
         if (retried) {
           if (wasStuckInScheduler) {
             state.report.conflicted = (state.report.conflicted ?? 0) + 1;
+            recordCompleted(console, work, "retrying conflicted", undefined);
           } else {
             state.report.retries++;
+            recordCompleted(console, work, "retrying", undefined);
           }
-          recordCompleted(console, work, "retrying", undefined);
         } else {
           // We don't retry if it's been canceled in the mean time.
           state.report.canceled++;

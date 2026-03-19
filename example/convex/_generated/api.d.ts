@@ -15,6 +15,7 @@ import type * as test_scenarios_bigArgs from "../test/scenarios/bigArgs.js";
 import type * as test_scenarios_bigContext from "../test/scenarios/bigContext.js";
 import type * as test_scenarios_bigReturnTypes from "../test/scenarios/bigReturnTypes.js";
 import type * as test_scenarios_burstyBatches from "../test/scenarios/burstyBatches.js";
+import type * as test_scenarios_stuckInScheduler from "../test/scenarios/stuckInScheduler.js";
 import type * as test_work from "../test/work.js";
 
 import type {
@@ -31,6 +32,7 @@ declare const fullApi: ApiFromModules<{
   "test/scenarios/bigContext": typeof test_scenarios_bigContext;
   "test/scenarios/bigReturnTypes": typeof test_scenarios_bigReturnTypes;
   "test/scenarios/burstyBatches": typeof test_scenarios_burstyBatches;
+  "test/scenarios/stuckInScheduler": typeof test_scenarios_stuckInScheduler;
   "test/work": typeof test_work;
 }>;
 
