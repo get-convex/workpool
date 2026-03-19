@@ -281,8 +281,8 @@ describe("complete", () => {
       await t.run(async (ctx) => {
         const work = await ctx.db.get(workId);
         expect(work).not.toBeNull();
-        // Re-enqueuing a stuck job should not increment attempts
-        expect(work?.attempts).toBe(0);
+        // Verify attempts was incremented from 0
+        expect(work?.attempts).toBe(1);
       });
 
       // Verify pendingCompletion was created with retry=true

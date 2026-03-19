@@ -314,7 +314,7 @@ describe("loop", () => {
       });
     });
 
-    it("should follow the complete -> pendingCompletion -> pendingStart flow for jobs stuck in the scheduler", async () => {
+    it("should follow the complete -> pendingCompletion -> pendingStart flow for mutations stuck in the scheduler", async () => {
       // Setup initial state with a running job that gets stuck in the "pending" state in the scheduler
       const workId = await t.run<Id<"work">>(async (ctx) => {
         // Create internal state
@@ -326,7 +326,7 @@ describe("loop", () => {
         });
 
         // Create work
-        const workId = await makeDummyWork(ctx);
+        const workId = await makeDummyWork(ctx, { fnType: "mutation" });
 
         // Schedule a function and get its ID
         const scheduledId = await makeDummyScheduledFunction(ctx, workId);
@@ -383,10 +383,10 @@ describe("loop", () => {
         const pendingStarts = await ctx.db.query("pendingStart").collect();
         expect(pendingStarts).toHaveLength(0);
 
-        // Check that work still exists and attempts was not incremented
+        // Check that work still exists and attempts was incremented
         const work = await ctx.db.get(workId);
         expect(work).not.toBeNull();
-        expect(work!.attempts).toBe(0);
+        expect(work!.attempts).toBe(1);
 
         // Check that the job is back in the running list
         const state = await ctx.db.query("internalState").unique();

@@ -103,11 +103,8 @@ export async function completeHandler(
 
   await Promise.all(
     ourBatch.map(async ({ work, job }) => {
-      // Re-enqueuing a job that was stuck in the scheduler does not use up an attempt
-      if (job.runResult.kind !== "stuckInScheduler") {
-        work.attempts++;
-        await ctx.db.patch(work._id, { attempts: work.attempts });
-      }
+      work.attempts++;
+      await ctx.db.patch(work._id, { attempts: work.attempts });
       const pendingCompletion = await ctx.db
         .query("pendingCompletion")
         .withIndex("workId", (q) => q.eq("workId", job.workId))
