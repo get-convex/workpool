@@ -1,7 +1,7 @@
 import { internalMutation, internalAction } from "../_generated/server";
 import { v } from "convex/values";
 import { DefaultFunctionArgs } from "convex/server";
-import { components } from "../_generated/api";
+import { components, internal } from "../_generated/api";
 import {
   vOnCompleteArgs,
   WorkId,
@@ -41,8 +41,26 @@ export const configurableMutation = internalMutation({
     returnBytes: v.number(), // Size of return value
     payload: v.any(), // Separate payload argument
     runId: v.id("runs"), // Run ID for tracking
+    conflictDocId: v.optional(v.id("data")), // Shared doc to read+write, causing OCC
+    dbOps: v.optional(v.number()), // Number of insert+delete cycles to widen transaction window
   },
   handler: async (ctx, args) => {
+    // Widen the transaction window with extra DB operations
+    for (let i = 0; i < (args.dbOps ?? 0); i++) {
+      const id = await ctx.db.insert("data", { data: i });
+      await ctx.db.delete(id);
+    }
+
+    // If conflictDocId is specified, read+write shared doc to cause OCC conflicts.
+    // Placed AFTER dbOps so the transaction is already wide when we touch the
+    // contended document — maximizing the chance of OCC.
+    if (args.conflictDocId) {
+      const doc = await ctx.db.get(args.conflictDocId);
+      if (doc) {
+        await ctx.db.patch(args.conflictDocId, { data: (doc.data ?? 0) + 1 });
+      }
+    }
+
     // If readWriteData is specified, write then delete
     if (args.readWriteData && args.readWriteData > 0) {
       const dataToWrite = generateData(args.readWriteData);
@@ -72,6 +90,58 @@ export const configurableAction = internalAction({
 
     // Return data of specified size
     return generateData(args.returnBytes);
+  },
+});
+
+export const createSharedDoc = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db.insert("data", { data: 0 });
+  },
+});
+
+// Mutation that writes to the shared doc, used to generate external OCC contention
+export const bumpSharedDoc = internalMutation({
+  args: { docId: v.id("data") },
+  handler: async (ctx, args) => {
+    const doc = await ctx.db.get(args.docId);
+    if (doc) {
+      await ctx.db.patch(args.docId, { data: (doc.data ?? 0) + 1 });
+    }
+  },
+});
+
+// Action that continuously writes to the shared doc to create OCC contention.
+// Fires individual mutations with error handling so failures don't stop the
+// contention. Uses a small delay between waves to avoid rate limits.
+export const generateContention = internalAction({
+  args: {
+    docId: v.id("data"),
+    durationMs: v.number(),
+    concurrency: v.number(),
+  },
+  handler: async (ctx, { docId, durationMs, concurrency }) => {
+    const start = Date.now();
+    let totalWrites = 0;
+    let errors = 0;
+    while (Date.now() - start < durationMs) {
+      const batch = Array.from({ length: concurrency }, () =>
+        ctx
+          .runMutation(internal.test.work.bumpSharedDoc, { docId })
+          .then(() => true)
+          .catch(() => {
+            errors++;
+            return false;
+          }),
+      );
+      const results = await Promise.all(batch);
+      totalWrites += results.filter(Boolean).length;
+      // Small delay to avoid "too many concurrent commits" rate limit
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    console.log(
+      `generateContention: ${totalWrites} succeeded, ${errors} errors in ${Date.now() - start}ms`,
+    );
   },
 });
 

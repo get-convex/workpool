@@ -28,7 +28,8 @@ const RECOVERY_BATCH_SIZE = 32;
 const MS = 1;
 const SECOND = 1000 * MS;
 const MINUTE = 60 * SECOND;
-const RECOVERY_THRESHOLD_MS = 5 * MINUTE; // attempt to recover jobs this old.
+const ACTION_RECOVERY_THRESHOLD_MS = 5 * MINUTE; // attempt to recover jobs this old.
+const MUTATION_RECOVERY_THRESHOLD_MS = 1 * MINUTE; // attempt to recover jobs this old.
 export const RECOVERY_PERIOD_SEGMENTS = toSegment(1 * MINUTE); // how often to check.
 export const STATUS_COOLDOWN = 2 * SECOND;
 export const COOLDOWN_CHECK_INTERVAL = 200 * MS;
@@ -43,6 +44,7 @@ export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
     failed: 0,
     retries: 0,
     canceled: 0,
+    conflicted: 0,
     lastReportTs: 0,
   },
   running: [],
@@ -111,6 +113,7 @@ export const main = internalMutation({
         failed: 0,
         retries: 0,
         canceled: 0,
+        conflicted: 0,
         lastReportTs,
       };
     }
@@ -400,10 +403,21 @@ async function handleCompletions(
           console.warn(`[main] ${c.workId} is gone, but trying to complete`);
           return;
         }
-        const retried = await rescheduleJob(ctx, work, console);
+        const wasStuckInScheduler = c.runResult.kind === "stuckInScheduler";
+        const retried = await rescheduleJob(
+          ctx,
+          work,
+          console,
+          wasStuckInScheduler,
+        );
         if (retried) {
-          state.report.retries++;
-          recordCompleted(console, work, "retrying", undefined);
+          if (wasStuckInScheduler) {
+            state.report.conflicted = (state.report.conflicted ?? 0) + 1;
+            recordCompleted(console, work, "retrying conflicted", undefined);
+          } else {
+            state.report.retries++;
+            recordCompleted(console, work, "retrying", undefined);
+          }
         } else {
           // We don't retry if it's been canceled in the mean time.
           state.report.canceled++;
@@ -497,17 +511,30 @@ async function handleRecovery(
   console: Logger,
 ) {
   const missing = new Set<Id<"work">>();
-  const oldEnoughToConsider = Date.now() - RECOVERY_THRESHOLD_MS;
+  const actionOldEnoughToConsider = Date.now() - ACTION_RECOVERY_THRESHOLD_MS;
+  const mutationOldEnoughToConsider =
+    Date.now() - MUTATION_RECOVERY_THRESHOLD_MS;
   const jobs = (
     await Promise.all(
       state.running.map(async (r) => {
-        if (r.started >= oldEnoughToConsider) {
+        if (
+          r.started >=
+          Math.max(actionOldEnoughToConsider, mutationOldEnoughToConsider)
+        ) {
+          // Avoid getting the work if possible
           return null;
         }
         const work = await ctx.db.get(r.workId);
         if (!work) {
           missing.add(r.workId);
           console.error(`[main] ${r.workId} already gone (skipping recovery)`);
+          return null;
+        }
+        const oldEnoughToConsider =
+          work.fnType === "action"
+            ? actionOldEnoughToConsider
+            : mutationOldEnoughToConsider;
+        if (r.started >= oldEnoughToConsider) {
           return null;
         }
         return { ...r, attempt: work.attempts };
@@ -619,6 +646,7 @@ async function rescheduleJob(
   ctx: MutationCtx,
   work: Doc<"work">,
   console: Logger,
+  wasStuckInScheduler: boolean,
 ): Promise<boolean> {
   const pendingCancelation = await ctx.db
     .query("pendingCancelation")
@@ -632,7 +660,14 @@ async function rescheduleJob(
   if (work.canceled) {
     return false;
   }
-  if (!work.retryBehavior) {
+  let backoffMs: number;
+  if (wasStuckInScheduler) {
+    backoffMs = 0;
+  } else if (work.retryBehavior) {
+    backoffMs =
+      work.retryBehavior.initialBackoffMs *
+      Math.pow(work.retryBehavior.base, work.attempts - 1);
+  } else {
     console.warn(`[main] ${work._id} has no retryBehavior so not retrying`);
     return false;
   }
@@ -645,9 +680,6 @@ async function rescheduleJob(
     console.error(`[main] ${work._id} already in pendingStart so not retrying`);
     return false;
   }
-  const backoffMs =
-    work.retryBehavior.initialBackoffMs *
-    Math.pow(work.retryBehavior.base, work.attempts - 1);
   const nextAttempt = withJitter(backoffMs);
   const startTime = boundScheduledTime(Date.now() + nextAttempt, console);
   const segment = toSegment(startTime);

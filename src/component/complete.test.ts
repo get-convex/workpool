@@ -237,6 +237,66 @@ describe("complete", () => {
       });
     });
 
+    it("should process a stuckInScheduler job", async () => {
+      // Create a spy on runMutation
+      const runMutationSpy = vi.fn();
+
+      // Enqueue a work item
+      const workId = await t.mutation(api.lib.enqueue, {
+        fnHandle: "testHandle",
+        fnName: "testFunction",
+        fnArgs: { test: "data" },
+        fnType: "mutation",
+        runAt: Date.now(),
+        config: {
+          maxParallelism: 10,
+          logLevel: "WARN",
+        },
+        onComplete: {
+          fnHandle: "testOnComplete",
+        },
+      });
+
+      // Simulate a stuckInScheduler job completion
+      await t.run(async (ctx) => {
+        // Create a modified context with a spy on runMutation
+        const spyCtx = {
+          ...ctx,
+          runMutation: runMutationSpy,
+        };
+        await completeHandler(spyCtx, {
+          jobs: [
+            {
+              workId,
+              runResult: { kind: "stuckInScheduler" },
+              attempt: 0,
+            },
+          ],
+        });
+        // Verify onComplete was not called
+        expect(runMutationSpy).not.toHaveBeenCalled();
+      });
+
+      // Verify work was not deleted (since it should be retried)
+      await t.run(async (ctx) => {
+        const work = await ctx.db.get(workId);
+        expect(work).not.toBeNull();
+        // Verify attempts was incremented from 0
+        expect(work?.attempts).toBe(1);
+      });
+
+      // Verify pendingCompletion was created with retry=true
+      await t.run(async (ctx) => {
+        const pendingCompletions = await ctx.db
+          .query("pendingCompletion")
+          .withIndex("workId", (q) => q.eq("workId", workId))
+          .collect();
+        expect(pendingCompletions).toHaveLength(1);
+        expect(pendingCompletions[0].runResult.kind).toBe("stuckInScheduler");
+        expect(pendingCompletions[0].retry).toBe(true);
+      });
+    });
+
     it("should call onComplete handler for successful jobs", async () => {
       // Create a spy on runMutation
       // const runMutationSpy = vi.fn();

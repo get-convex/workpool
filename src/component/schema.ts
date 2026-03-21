@@ -1,5 +1,5 @@
 import { defineSchema, defineTable } from "convex/server";
-import { v } from "convex/values";
+import { v, type Infer } from "convex/values";
 import {
   fnType,
   vConfig,
@@ -10,6 +10,14 @@ import {
 
 // Represents a slice of time to process work.
 const segment = v.int64();
+
+export const vResultInternal = v.union(
+  vResult,
+  v.object({
+    kind: v.literal("stuckInScheduler"),
+  }),
+);
+export type RunResultInternal = Infer<typeof vResultInternal>;
 
 export default defineSchema({
   // Written from kickLoop, read everywhere.
@@ -30,6 +38,7 @@ export default defineSchema({
       failed: v.number(), // failed after all retries
       retries: v.number(), // failure that turned into a retry
       canceled: v.number(), // cancelations processed
+      conflicted: v.optional(v.number()), // mutations conflicted in the scheduler
       lastReportTs: v.number(),
     }),
     running: v.array(
@@ -83,7 +92,7 @@ export default defineSchema({
   // Written by complete, read & deleted by `main`.
   pendingCompletion: defineTable({
     segment,
-    runResult: vResult,
+    runResult: vResultInternal,
     workId: v.id("work"),
     retry: v.boolean(),
   })

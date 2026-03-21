@@ -96,6 +96,23 @@ export async function recoveryHandler(
         });
         break;
       }
+      case "pending": {
+        if (work.fnType === "action") {
+          // We do not cancel and re-enqueue actions. If a scheduled action is still
+          // pending, the scheduler is likely backlogged.
+          break;
+        }
+        // It looks like the function has been retried by the scheduler several times.
+        // The scheduler backoff is too long, so cancel and re-enqueue the job to
+        // free up space for more work.
+        await ctx.scheduler.cancel(scheduled._id);
+        completionJobs.push({
+          workId: job.workId,
+          runResult: { kind: "stuckInScheduler" },
+          attempt: job.attempt,
+        });
+        break;
+      }
     }
   }
   if (completionJobs.length > 0) {

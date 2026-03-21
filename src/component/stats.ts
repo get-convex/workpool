@@ -53,7 +53,12 @@ export function recordStarted(
 export function recordCompleted(
   console: Logger,
   work: Doc<"work">,
-  status: "success" | "failed" | "canceled" | "retrying",
+  status:
+    | "success"
+    | "failed"
+    | "canceled"
+    | "retrying"
+    | "retrying conflicted",
   onCompleteScheduledFunctionId: Id<"_scheduled_functions"> | undefined,
 ) {
   console.event("completed", {
