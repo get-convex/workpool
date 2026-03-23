@@ -365,14 +365,18 @@ describe("loop", () => {
       });
 
       // Run main loop to process pendingCompletion -> pendingStart.
-      // Since stuckInScheduler retries have 0 backoff, the pendingStart
-      // is immediately picked up by handleStart in the same main call.
       await t.mutation(internal.loop.main, {
         generation: 1n,
         segment: getNextSegment(),
       });
 
-      // Verify the job was re-started immediately
+      // Run main loop again to pick up the newly created pendingStart.
+      await t.mutation(internal.loop.main, {
+        generation: 2n,
+        segment: getNextSegment(),
+      });
+
+      // Verify the job was re-started
       await t.run(async (ctx) => {
         // Check that pendingCompletion was deleted
         const pendingCompletions = await ctx.db
@@ -380,7 +384,7 @@ describe("loop", () => {
           .collect();
         expect(pendingCompletions).toHaveLength(0);
 
-        // pendingStart was consumed by handleStart in the same main call
+        // pendingStart was consumed by handleStart in the second main call
         const pendingStarts = await ctx.db.query("pendingStart").collect();
         expect(pendingStarts).toHaveLength(0);
 

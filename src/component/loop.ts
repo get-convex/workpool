@@ -2,7 +2,12 @@ import type { WithoutSystemFields } from "convex/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
-import { internalMutation, type MutationCtx } from "./_generated/server.js";
+import {
+  internalMutation,
+  internalQuery,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server.js";
 import type { CompleteJob } from "./complete.js";
 import {
   createLogger,
@@ -50,6 +55,44 @@ export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
   running: [],
 };
 
+export const getPending = internalQuery({
+  args: {
+    toSchedule: v.number(),
+    segment: v.int64(),
+    incomingSegmentCursor: v.int64(),
+    completionSegmentCursor: v.int64(),
+  },
+  handler: async (
+    ctx,
+    { toSchedule, segment, incomingSegmentCursor, completionSegmentCursor },
+  ) => {
+    const pending =
+      toSchedule > 0
+        ? await ctx.db
+            .query("pendingStart")
+            .withIndex("segment", (q) =>
+              q
+                .gte("segment", incomingSegmentCursor - CURSOR_BUFFER_SEGMENTS)
+                .lte("segment", segment),
+            )
+            .take(toSchedule)
+        : [];
+
+    const startSegment = completionSegmentCursor - CURSOR_BUFFER_SEGMENTS;
+    const completed = await ctx.db
+      .query("pendingCompletion")
+      .withIndex("segment", (q) =>
+        q.gte("segment", startSegment).lte("segment", segment),
+      )
+      .collect();
+
+    return {
+      pending,
+      completed,
+    };
+  },
+});
+
 // There should only ever be at most one of these scheduled or running.
 export const main = internalMutation({
   args: { generation: v.int64(), segment: v.int64() },
@@ -74,14 +117,37 @@ export const main = internalMutation({
     const delayMs = Date.now() - fromSegment(segment);
     console.debug(`[main] generation ${generation} behind: ${delayMs}ms`);
 
+    // Read snapshot of pendingStart and pendingCompletions
+    const { pending, completed } = await ctx.runQuery(
+      internal.loop.getPending,
+      {
+        segment,
+        toSchedule: globals.maxParallelism - state.running.length,
+        incomingSegmentCursor: state.segmentCursors.incoming,
+        completionSegmentCursor: state.segmentCursors.completion,
+      },
+    );
+
     // Read pendingCompletions, including retry handling.
     console.time("[main] pendingCompletion");
-    const toCancel = await handleCompletions(ctx, state, segment, console);
+    const toCancel = await handleCompletions(
+      ctx,
+      state,
+      completed,
+      segment,
+      console,
+    );
     console.timeEnd("[main] pendingCompletion");
 
     // Read pendingCancelation, deleting from pendingStart. If it's still running, queue to cancel.
     console.time("[main] pendingCancelation");
-    await handleCancelation(ctx, state, segment, console, toCancel);
+    const canceledWorkIds = await handleCancelation(
+      ctx,
+      state,
+      segment,
+      console,
+      toCancel,
+    );
     console.timeEnd("[main] pendingCancelation");
 
     if (state.running.length === 0) {
@@ -95,7 +161,10 @@ export const main = internalMutation({
 
     // Read pendingStart up to max capacity. Update the config, and incomingSegmentCursor.
     console.time("[main] pendingStart");
-    await handleStart(ctx, state, segment, console, globals);
+    const filteredPending = pending.filter(
+      (p) => !canceledWorkIds.has(p.workId),
+    );
+    await handleStart(ctx, state, filteredPending, segment, console, globals);
     console.timeEnd("[main] pendingStart");
 
     if (Date.now() - state.report.lastReportTs >= MINUTE) {
@@ -370,18 +439,12 @@ async function getNextUp(
 async function handleCompletions(
   ctx: MutationCtx,
   state: Doc<"internalState">,
+  completed: Doc<"pendingCompletion">[],
   segment: bigint,
   console: Logger,
 ) {
-  const startSegment = state.segmentCursors.completion - CURSOR_BUFFER_SEGMENTS;
   // This won't be too many because the jobs all correspond to being scheduled
   // by a single main (the previous one), so they're limited by MAX_PARALLELISM.
-  const completed = await ctx.db
-    .query("pendingCompletion")
-    .withIndex("segment", (q) =>
-      q.gte("segment", startSegment).lte("segment", segment),
-    )
-    .collect();
   state.segmentCursors.completion = segment;
   // Completions that were going to be retried but have since been canceled.
   const toCancel: CompleteJob[] = [];
@@ -503,6 +566,7 @@ async function handleCancelation(
   if (jobs.length) {
     await ctx.scheduler.runAfter(0, internal.complete.complete, { jobs });
   }
+  return canceledWork;
 }
 
 async function handleRecovery(
@@ -551,27 +615,13 @@ async function handleRecovery(
 async function handleStart(
   ctx: MutationCtx,
   state: Doc<"internalState">,
+  pending: Doc<"pendingStart">[],
   segment: bigint,
   console: Logger,
   { maxParallelism, logLevel }: Config,
 ) {
   // Schedule as many as needed to reach maxParallelism.
   const toSchedule = maxParallelism - state.running.length;
-
-  const pending =
-    toSchedule > 0
-      ? await ctx.db
-          .query("pendingStart")
-          .withIndex("segment", (q) =>
-            q
-              .gte(
-                "segment",
-                state.segmentCursors.incoming - CURSOR_BUFFER_SEGMENTS,
-              )
-              .lte("segment", segment),
-          )
-          .take(toSchedule)
-      : [];
 
   if (pending) {
     if (pending.length > 0) {
