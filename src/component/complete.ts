@@ -5,17 +5,16 @@ import { internal } from "./_generated/api.js";
 import { internalMutation, type MutationCtx } from "./_generated/server.js";
 import { kickMainLoop } from "./kick.js";
 import { createLogger } from "./logging.js";
-import { type OnCompleteArgs } from "./shared.js";
+import { type OnCompleteArgs, type RunResult, vResult } from "./shared.js";
 import { recordCompleted } from "./stats.js";
 import { assert } from "convex-helpers";
-import { vResultInternal, type RunResultInternal } from "./schema.js";
 
 export type CompleteJob = Infer<typeof completeArgs.fields.jobs.element>;
 
 const completeArgs = v.object({
   jobs: v.array(
     v.object({
-      runResult: vResultInternal,
+      runResult: vResult,
       workId: v.id("work"),
       attempt: v.number(),
       // TODO: need to be careful about removing this field later
@@ -34,7 +33,7 @@ export async function completeHandler(
     return;
   }
   const pendingCompletions: {
-    runResult: RunResultInternal;
+    runResult: RunResult;
     workId: Id<"work">;
     retry: boolean;
   }[] = [];
@@ -115,11 +114,10 @@ export async function completeHandler(
       }
       const maxAttempts = work.retryBehavior?.maxAttempts;
       const retry =
-        (job.runResult.kind === "failed" &&
-          !!maxAttempts &&
-          work.attempts < maxAttempts) ||
-        job.runResult.kind === "stuckInScheduler";
-      if (!retry && job.runResult.kind !== "stuckInScheduler") {
+        job.runResult.kind === "failed" &&
+        !!maxAttempts &&
+        work.attempts < maxAttempts;
+      if (!retry) {
         let scheduledId = undefined;
         if (work.onComplete) {
           try {
@@ -206,7 +204,7 @@ export async function completeHandler(
   }
 }
 
-function stripResult(result: RunResultInternal): RunResultInternal {
+function stripResult(result: RunResult): RunResult {
   if (result.kind === "success") {
     return { kind: "success", returnValue: null };
   }

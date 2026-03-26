@@ -89,7 +89,6 @@ describe("loop", () => {
         failed: 0,
         retries: 0,
         canceled: 0,
-        conflicted: 0,
         lastReportTs: Date.now(),
       },
       running: [],
@@ -312,88 +311,6 @@ describe("loop", () => {
         const work = await ctx.db.get(workId);
         expect(work).not.toBeNull();
         expect(work!.attempts).toBe(1);
-      });
-    });
-
-    it("should follow the complete -> pendingCompletion -> pendingStart flow for mutations stuck in the scheduler", async () => {
-      // Setup initial state with a running job that gets stuck in the "pending" state in the scheduler
-      const workId = await t.run<Id<"work">>(async (ctx) => {
-        // Create internal state
-        await insertInternalState(ctx);
-
-        // Create running runStatus
-        await ctx.db.insert("runStatus", {
-          state: { kind: "running" },
-        });
-
-        // Create work
-        const workId = await makeDummyWork(ctx, { fnType: "mutation" });
-
-        // Schedule a function and get its ID
-        const scheduledId = await makeDummyScheduledFunction(ctx, workId);
-
-        // Add to running list
-        const state = await ctx.db.query("internalState").unique();
-        assert(state);
-        await ctx.db.patch(state._id, {
-          running: [{ workId, scheduledId, started: Date.now() }],
-        });
-
-        return workId;
-      });
-
-      // Complete the work with failure (workerRunning -> complete)
-      await t.mutation(internal.complete.complete, {
-        jobs: [
-          {
-            workId,
-            runResult: { kind: "stuckInScheduler" },
-            attempt: 0,
-          },
-        ],
-      });
-
-      // Verify pendingCompletion was created with retry=true
-      await t.run(async (ctx) => {
-        const pendingCompletions = await ctx.db
-          .query("pendingCompletion")
-          .collect();
-        expect(pendingCompletions).toHaveLength(1);
-        expect(pendingCompletions[0].workId).toBe(workId);
-        expect(pendingCompletions[0].runResult.kind).toBe("stuckInScheduler");
-        expect(pendingCompletions[0].retry).toBe(true);
-      });
-
-      // Run main loop to process pendingCompletion -> pendingStart.
-      // Since stuckInScheduler retries have 0 backoff, the pendingStart
-      // is immediately picked up by handleStart in the same main call.
-      await t.mutation(internal.loop.main, {
-        generation: 1n,
-        segment: getNextSegment(),
-      });
-
-      // Verify the job was re-started immediately
-      await t.run(async (ctx) => {
-        // Check that pendingCompletion was deleted
-        const pendingCompletions = await ctx.db
-          .query("pendingCompletion")
-          .collect();
-        expect(pendingCompletions).toHaveLength(0);
-
-        // pendingStart was consumed by handleStart in the same main call
-        const pendingStarts = await ctx.db.query("pendingStart").collect();
-        expect(pendingStarts).toHaveLength(0);
-
-        // Check that work still exists and attempts was incremented
-        const work = await ctx.db.get(workId);
-        expect(work).not.toBeNull();
-        expect(work!.attempts).toBe(1);
-
-        // Check that the job is back in the running list
-        const state = await ctx.db.query("internalState").unique();
-        assert(state);
-        expect(state.running).toHaveLength(1);
-        expect(state.running[0].workId).toBe(workId);
       });
     });
   });
