@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.5
+
+- Reverts recovering work from the scheduler for now
+
 ## 0.4.4
 
 - Improves `register` type for `convex-test@0.0.43` compatibility
