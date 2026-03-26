@@ -584,7 +584,7 @@ async function beginWork(
   const console = createLogger(logLevel);
   const work = await ctx.db.get(workId);
   if (!work) {
-    console.error("work not found");
+    console.error(`Trying to start, but work not found: ${workId}`);
     return null;
   }
   const { attempts: attempt, fnHandle, fnArgs, payloadId } = work;
