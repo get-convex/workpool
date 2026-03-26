@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.4
+
+- Improves `register` type for `convex-test@0.0.43` compatibility
+
 ## 0.4.3
 
 - Attempts to first run the completion handler inline in runActionWrapper to log
