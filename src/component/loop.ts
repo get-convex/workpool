@@ -506,8 +506,20 @@ async function handleRecovery(
         }
         const work = await ctx.db.get(r.workId);
         if (!work) {
-          missing.add(r.workId);
-          console.error(`[main] ${r.workId} already gone (skipping recovery)`);
+          const pendingCompletion = await ctx.db
+            .query("pendingCompletion")
+            .withIndex("workId", (q) => q.eq("workId", r.workId))
+            .first();
+          if (!pendingCompletion) {
+            missing.add(r.workId);
+            console.error(
+              `[main] ${r.workId} already gone (skipping recovery)`,
+            );
+          } else {
+            console.debug(
+              `[main] ${r.workId} already gone but has pendingCompletion`,
+            );
+          }
           return null;
         }
         return { ...r, attempt: work.attempts };
