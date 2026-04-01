@@ -567,6 +567,7 @@ async function handleStart(
           const lagMs = Date.now() - fromSegment(segment);
           const scheduledId = await beginWork(ctx, workId, logLevel, lagMs);
           await ctx.db.delete(_id);
+          if (!scheduledId) return null;
           return { scheduledId, workId, started: Date.now() };
         }),
       )
@@ -579,11 +580,12 @@ async function beginWork(
   workId: Id<"work">,
   logLevel: LogLevel,
   lagMs: number,
-): Promise<Id<"_scheduled_functions">> {
+): Promise<Id<"_scheduled_functions"> | null> {
   const console = createLogger(logLevel);
   const work = await ctx.db.get(workId);
   if (!work) {
-    throw new Error("work not found");
+    console.error(`Trying to start, but work not found: ${workId}`);
+    return null;
   }
   const { attempts: attempt, fnHandle, fnArgs, payloadId } = work;
   const args = { workId, fnHandle, fnArgs, payloadId, logLevel, attempt };

@@ -30,6 +30,7 @@ export default defineSchema({
       failed: v.number(), // failed after all retries
       retries: v.number(), // failure that turned into a retry
       canceled: v.number(), // cancelations processed
+      conflicted: v.optional(v.number()),
       lastReportTs: v.number(),
     }),
     running: v.array(

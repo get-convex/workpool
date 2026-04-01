@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.6
+
+- Fails gracefully if the work being started has already been deleted. It will
+  delete the pendingStart entry and continue
+
 ## 0.4.5
 
 - Reverts recovering work from the scheduler for now
