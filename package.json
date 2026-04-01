@@ -80,7 +80,7 @@
     "chokidar-cli": "3.0.0",
     "convex": "1.34.0",
     "convex-helpers": "0.1.111",
-    "convex-test": "0.0.41",
+    "convex-test": "0.0.46",
     "cpy-cli": "7.0.0",
     "eslint": "10.0.2",
     "eslint-plugin-react-hooks": "7.1.0-canary-3f0b9e61-20260317",
