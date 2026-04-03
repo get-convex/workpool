@@ -9,7 +9,7 @@ import {
   it,
   vi,
 } from "vitest";
-import { internal } from "./_generated/api.js";
+import { api, internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import type { MutationCtx } from "./_generated/server.js";
 import schema from "./schema.js";
@@ -169,7 +169,11 @@ const S12_CANCELED_AWAITING_COMPLETE: CompositeState = {
 const ACTION_RECOVERY_THRESHOLD_MS = 5 * 60 * 1000;
 
 describe("state machine", () => {
-  let t: ReturnType<typeof convexTest>;
+  function setupTest() {
+    return convexTest(schema, modules);
+  }
+
+  let t: ReturnType<typeof setupTest>;
   let generation: bigint;
 
   function nextGen() {
@@ -610,7 +614,7 @@ describe("state machine", () => {
   describe("lib.cancel transitions", () => {
     it("S1 enqueued + cancel -> adds pendingCancelation", async () => {
       const { workId } = await setupState(S1_ENQUEUED);
-      await t.mutation(internal.lib.cancel, { id: workId });
+      await t.mutation(api.lib.cancel, { id: workId });
       const s = await observeState(workId);
       assert(s.work);
       expect(s.pendingStart).toBe(true);
@@ -619,7 +623,7 @@ describe("state machine", () => {
 
     it("S2 running + cancel -> adds pendingCancelation", async () => {
       const { workId } = await setupState(S2_RUNNING);
-      await t.mutation(internal.lib.cancel, { id: workId });
+      await t.mutation(api.lib.cancel, { id: workId });
       const s = await observeState(workId);
       assert(s.work);
       expect(s.running).toBe(true);
@@ -628,7 +632,7 @@ describe("state machine", () => {
 
     it("S10 re-enqueued + cancel -> adds pendingCancelation", async () => {
       const { workId } = await setupState(S10_REENQUEUED);
-      await t.mutation(internal.lib.cancel, { id: workId });
+      await t.mutation(api.lib.cancel, { id: workId });
       const s = await observeState(workId);
       expect(s.pendingStart).toBe(true);
       expect(s.pendingCancelation).toBe(true);
@@ -642,14 +646,14 @@ describe("state machine", () => {
         pendingCompletion: false,
         pendingCancelation: false,
       });
-      await t.mutation(internal.lib.cancel, { id: workId });
+      await t.mutation(api.lib.cancel, { id: workId });
       const s = await observeState(workId);
       expect(s.pendingCancelation).toBe(false);
     });
 
     it("S7 already cancel-pending + cancel -> no-op (dedup)", async () => {
       const { workId } = await setupState(S7_CANCEL_PENDING);
-      await t.mutation(internal.lib.cancel, { id: workId });
+      await t.mutation(api.lib.cancel, { id: workId });
       const count = await t.run(async (ctx) => {
         const all = await ctx.db
           .query("pendingCancelation")
@@ -992,7 +996,7 @@ describe("state machine", () => {
       await runComplete(workId, { kind: "success" }, 0);
 
       // Cancel after work was already deleted by complete
-      await t.mutation(internal.lib.cancel, { id: workId });
+      await t.mutation(api.lib.cancel, { id: workId });
 
       await runMain(segment);
       const s = await observeState(workId);
