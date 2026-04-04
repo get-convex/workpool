@@ -238,9 +238,7 @@ describe("complete", () => {
     });
 
     it("should call onComplete handler for successful jobs", async () => {
-      // Create a spy on runMutation
-      // const runMutationSpy = vi.fn();
-      const schedulerSpy = vi.fn();
+      const runMutationSpy = vi.fn();
 
       // Enqueue a work item with onComplete handler
       const workId = await t.mutation(api.lib.enqueue, {
@@ -264,11 +262,7 @@ describe("complete", () => {
         // Create a modified context with a spy on runMutation
         const spyCtx = {
           ...ctx,
-          // runMutation: runMutationSpy,
-          scheduler: {
-            ...ctx.scheduler,
-            runAfter: schedulerSpy,
-          },
+          runMutation: runMutationSpy,
         };
 
         await completeHandler(spyCtx, {
@@ -281,9 +275,8 @@ describe("complete", () => {
           ],
         });
 
-        // Verify onComplete was called with the right arguments
-        expect(schedulerSpy).toHaveBeenCalledWith(
-          0,
+        // Verify onComplete was called transactionally via runMutation
+        expect(runMutationSpy).toHaveBeenCalledWith(
           "testOnComplete",
           expect.objectContaining({
             workId,
