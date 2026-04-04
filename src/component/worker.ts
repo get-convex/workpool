@@ -92,17 +92,17 @@ export const runActionWrapper = internalAction({
       // and `ctx.scheduler.runAfter` won't OCC.
       const runResult: RunResult = { kind: "success", returnValue };
       try {
-        // Attempt to run complete inline and onComplete inline
+        // Attempt to run complete inline
         await ctx.runMutation(internal.complete.complete, {
-          jobs: [{ workId, runResult, attempt, runOnCompleteInline: true }],
+          jobs: [{ workId, runResult, attempt }],
         });
-        console.info("[runActionWrapper] onComplete succeeded");
+        console.debug("[runActionWrapper] completed inline");
         return;
       } catch (e) {
         console.error(
           `[runActionWrapper] caught error while attempting to run complete inline, scheduling instead: ${e}`,
         );
-        // Fall through and schedule complete instead (without running onComplete inline)
+        // Fall through and schedule complete instead
       }
       await ctx.scheduler.runAfter(0, internal.complete.complete, {
         jobs: [{ workId, runResult, attempt }],
