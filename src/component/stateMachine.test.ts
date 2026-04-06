@@ -17,7 +17,6 @@ import {
   DEFAULT_MAX_PARALLELISM,
   getCurrentSegment,
   getNextSegment,
-  toSegment,
 } from "./shared.js";
 import { RECOVERY_PERIOD_SEGMENTS } from "./loop.js";
 
@@ -355,10 +354,7 @@ describe("state machine", () => {
   /** Run complete with given result. */
   async function runComplete(
     workId: Id<"work">,
-    result:
-      | { kind: "success" }
-      | { kind: "failed" }
-      | { kind: "canceled" },
+    result: { kind: "success" } | { kind: "failed" } | { kind: "canceled" },
     attempt: number,
   ) {
     const runResult =
@@ -374,7 +370,7 @@ describe("state machine", () => {
 
   beforeEach(async () => {
     vi.useFakeTimers();
-    t = convexTest(schema, modules);
+    t = setupTest();
     generation = 1n;
     await t.run(async (ctx) => {
       await ctx.db.insert("globals", {
@@ -948,7 +944,7 @@ describe("state machine", () => {
 
     it("multiple cancels for same work -> BUG: crashes with double delete", async () => {
       const seg = getNextSegment();
-      const workId = await t.run<Id<"work">>(async (ctx) => {
+      await t.run<Id<"work">>(async (ctx) => {
         const wId = await ctx.db.insert("work", {
           fnType: "action",
           fnHandle: "h",
