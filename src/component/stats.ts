@@ -79,11 +79,7 @@ export async function generateReport(
   const currentSegment = getCurrentSegment();
   const pendingStart = await paginator(ctx.db, schema)
     .query("pendingStart")
-    .withIndex("segment", (q) =>
-      q
-        .gte("segment", state.segmentCursors.incoming)
-        .lt("segment", currentSegment),
-    )
+    .withIndex("segment", (q) => q.lt("segment", currentSegment))
     .paginate({
       numItems: Math.max(maxParallelism, 10),
       cursor: null,

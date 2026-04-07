@@ -18,11 +18,6 @@ export default defineSchema({
   internalState: defineTable({
     // Ensure that only one main is running at a time.
     generation: v.int64(),
-    segmentCursors: v.object({
-      incoming: segment,
-      completion: segment,
-      cancelation: segment,
-    }),
     lastRecovery: segment,
     report: v.object({
       completed: v.number(), // finished running, counts retries & failures
@@ -42,7 +37,7 @@ export default defineSchema({
     ),
   }),
 
-  // Singleton, written by `updateRunStatus` when running, by client or worker otherwise.
+  // Singleton, written by `main` when scheduling, by client or worker otherwise.
   // Safe to read from kickLoop, since it should update infrequently.
   runStatus: defineTable({
     state: v.union(
