@@ -456,7 +456,7 @@ async function handleCancelation(
   const jobs = toCancel.concat(
     ...(
       await Promise.all(
-        canceled.map(async ({ _id, _creationTime, workId }) => {
+        canceled.map(async ({ _id, workId }) => {
           await ctx.db.delete(_id);
           if (canceledWork.has(workId)) {
             // We shouldn't have multiple pending cancelations for the same work.
