@@ -36,20 +36,18 @@ export const runMutationWrapper = internalMutation({
       fnArgs = payload.args;
     }
 
+    let runResult: RunResult = { kind: "failed", error: "unknown" };
     try {
       const returnValue = await (args.fnType === "query"
         ? ctx.runQuery(args.fnHandle as FunctionHandle<"query">, fnArgs)
         : ctx.runMutation(args.fnHandle as FunctionHandle<"mutation">, fnArgs));
       // NOTE: we could run the `saveResult` handler here, or call `ctx.runMutation`,
       // but we want the mutation to be a separate transaction to reduce the window for OCCs.
-      await ctx.scheduler.runAfter(0, internal.complete.complete, {
-        jobs: [
-          { workId, runResult: { kind: "success", returnValue }, attempt },
-        ],
-      });
+      runResult = { kind: "success", returnValue };
     } catch (e: unknown) {
       console.error(e);
-      const runResult = { kind: "failed" as const, error: formatError(e) };
+      runResult = { kind: "failed" as const, error: formatError(e) };
+    } finally {
       await ctx.scheduler.runAfter(0, internal.complete.complete, {
         jobs: [{ workId, runResult, attempt }],
       });
