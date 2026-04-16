@@ -104,4 +104,10 @@ export default defineSchema({
     args: v.optional(v.record(v.string(), v.any())),
     context: v.optional(v.any()),
   }),
+
+  failedOnComplete: defineTable({
+    workId: v.id("work"),
+    context: v.optional(v.any()),
+    runResult: vResult,
+  }),
 });

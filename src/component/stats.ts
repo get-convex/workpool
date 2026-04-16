@@ -54,13 +54,11 @@ export function recordCompleted(
   console: Logger,
   work: Doc<"work">,
   status: "success" | "failed" | "canceled" | "retrying",
-  onCompleteScheduledFunctionId: Id<"_scheduled_functions"> | undefined,
 ) {
   console.event("completed", {
     workId: work._id,
     fnName: work.fnName,
     completedAt: Date.now(),
-    onCompleteScheduledFunctionId,
     attempts: work.attempts,
     status,
   });

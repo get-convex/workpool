@@ -117,71 +117,6 @@ export async function completeHandler(
         job.runResult.kind === "failed" &&
         !!maxAttempts &&
         work.attempts < maxAttempts;
-      if (!retry) {
-        let scheduledId = undefined;
-        if (work.onComplete) {
-          try {
-            // Retrieve large context if stored separately
-            let context = work.onComplete.context;
-            if (context === undefined && work.payloadId) {
-              const payload = await ctx.db.get(work.payloadId);
-              if (payload) {
-                context = payload.context;
-              }
-            }
-
-            const handle = work.onComplete.fnHandle as FunctionHandle<
-              "mutation",
-              OnCompleteArgs,
-              void
-            >;
-            const onCompleteArgs = {
-              workId: work._id,
-              context,
-              result: job.runResult,
-            };
-            if (job.runOnCompleteInline) {
-              try {
-                await ctx.runMutation(handle, onCompleteArgs);
-              } catch (e) {
-                console.error(
-                  `[complete] caught error while running onComplete inline for ${job.workId}, scheduling instead: ${e}`,
-                );
-                scheduledId = await ctx.scheduler.runAfter(
-                  0,
-                  handle,
-                  onCompleteArgs,
-                );
-              }
-            } else {
-              scheduledId = await ctx.scheduler.runAfter(
-                0,
-                handle,
-                onCompleteArgs,
-              );
-              console.debug(
-                `[complete] onComplete for ${job.workId} scheduled`,
-              );
-            }
-          } catch (e) {
-            console.error(
-              `[complete] error running onComplete for ${job.workId}`,
-              e,
-            );
-            // TODO: store failures in a table for later debugging
-          }
-        }
-        recordCompleted(console, work, job.runResult.kind, scheduledId);
-
-        // Clean up any large data that was stored separately.
-        // TODO: consider async deletion in the future to avoid bandwidth limits.
-        if (work.payloadId) {
-          await ctx.db.delete(work.payloadId);
-        }
-
-        // This is the terminating state for work.
-        await ctx.db.delete(job.workId);
-      }
       if (job.runResult.kind !== "canceled") {
         pendingCompletions.push({
           runResult: stripResult(job.runResult),
@@ -189,6 +124,53 @@ export async function completeHandler(
           retry,
         });
       }
+      if (retry) {
+        return;
+      }
+      if (work.onComplete) {
+        // Retrieve large context if stored separately
+        let context = work.onComplete.context;
+        if (context === undefined && work.payloadId) {
+          const payload = await ctx.db.get(work.payloadId);
+          if (payload) {
+            context = payload.context;
+          }
+        }
+
+        const handle = work.onComplete.fnHandle as FunctionHandle<
+          "mutation",
+          OnCompleteArgs,
+          void
+        >;
+        const onCompleteArgs = {
+          workId: work._id,
+          context,
+          result: job.runResult,
+        };
+        try {
+          await ctx.runMutation(handle, onCompleteArgs);
+        } catch (e) {
+          console.error(
+            `[complete] error running onComplete for ${job.workId}`,
+            e,
+          );
+          await ctx.db.insert("failedOnComplete", {
+            workId: job.workId,
+            context,
+            runResult: stripResult(job.runResult),
+          });
+        }
+      }
+      recordCompleted(console, work, job.runResult.kind);
+
+      // Clean up any large data that was stored separately.
+      // TODO: consider async deletion in the future to avoid bandwidth limits.
+      if (work.payloadId) {
+        await ctx.db.delete(work.payloadId);
+      }
+
+      // This is the terminating state for work.
+      await ctx.db.delete(job.workId);
     }),
   );
   if (pendingCompletions.length > 0) {
