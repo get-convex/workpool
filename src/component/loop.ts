@@ -20,8 +20,8 @@ import {
   DEFAULT_MAX_PARALLELISM,
   fromSegment,
   getCurrentSegment,
-  min,
   max,
+  min,
   type RunResult,
   toSegment,
 } from "./shared.js";
@@ -34,9 +34,12 @@ const SECOND = 1000 * MS;
 const MINUTE = 60 * SECOND;
 const RECOVERY_THRESHOLD_MS = 5 * MINUTE; // attempt to recover jobs this old.
 export const RECOVERY_PERIOD_SEGMENTS = toSegment(1 * MINUTE); // how often to check.
+export const STATUS_COOLDOWN = 2 * SECOND;
+export const COOLDOWN_CHECK_INTERVAL = 200 * MS;
 
 export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
   generation: 0n,
+  segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
   lastRecovery: 0n,
   report: {
     completed: 0,
@@ -49,69 +52,61 @@ export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
   running: [],
 };
 
-// ── Snapshot query functions ──────────────────────────────────────────
-// These are called via ctx.runSnapshotQuery (no read dependency) or
-// ctx.runQuery (with read dependency) from within the main mutation.
-
-export const getPendingCompletions = internalQuery({
-  args: {},
-  handler: async (ctx) => {
-    // Bounded by MAX_PARALLELISM — one completion per running job.
-    return await ctx.db.query("pendingCompletion").collect();
+/**
+ * Single query that returns everything the main loop needs to process.
+ * Called via ctx.runSnapshotQuery (no read dependency) for the hot path,
+ * and via ctx.runQuery (with read dependency) before going idle/scheduled.
+ * Cursors are used to skip tombstones from previously deleted rows.
+ */
+export const getPendingWork = internalQuery({
+  args: {
+    completionCursor: v.int64(),
+    cancelationCursor: v.int64(),
+    incomingCursor: v.int64(),
+    currentSegment: v.int64(),
+    startLimit: v.number(),
   },
-});
-
-export const getPendingStarts = internalQuery({
-  args: { upToSegment: v.int64(), limit: v.number() },
-  handler: async (ctx, { upToSegment, limit }) => {
-    return await ctx.db
-      .query("pendingStart")
-      .withIndex("segment", (q) => q.lte("segment", upToSegment))
-      .take(limit);
-  },
-});
-
-export const getPendingCancelations = internalQuery({
-  args: { limit: v.number() },
-  handler: async (ctx, { limit }) => {
-    return await ctx.db.query("pendingCancelation").take(limit);
-  },
-});
-
-/** Check if any of the three pending tables have work. */
-export const hasPendingWork = internalQuery({
-  args: { includeStarts: v.boolean() },
-  handler: async (ctx, { includeStarts }) => {
-    if (await ctx.db.query("pendingCompletion").first()) return true;
-    if (await ctx.db.query("pendingCancelation").first()) return true;
-    if (includeStarts && (await ctx.db.query("pendingStart").first()))
-      return true;
-    return false;
-  },
-});
-
-/** Find the earliest segment across pending tables. */
-export const getNextPendingSegment = internalQuery({
-  args: { includeStarts: v.boolean() },
-  handler: async (ctx, { includeStarts }) => {
-    const completion = await ctx.db
+  handler: async (
+    ctx,
+    {
+      completionCursor,
+      cancelationCursor,
+      incomingCursor,
+      currentSegment,
+      startLimit,
+    },
+  ) => {
+    const completions = await ctx.db
       .query("pendingCompletion")
-      .withIndex("segment")
-      .first();
-    const cancelation = await ctx.db
+      .withIndex("segment", (q) => q.gte("segment", completionCursor))
+      .take(startLimit);
+    const cancelations = await ctx.db
       .query("pendingCancelation")
-      .withIndex("segment")
+      .withIndex("segment", (q) => q.gte("segment", cancelationCursor))
+      .take(CANCELLATION_BATCH_SIZE);
+    // Only fetch starts up to current segment (respects retry backoff).
+    const starts =
+      startLimit > 0
+        ? await ctx.db
+            .query("pendingStart")
+            .withIndex("segment", (q) =>
+              q
+                .gte("segment", incomingCursor)
+                .lte("segment", currentSegment),
+            )
+            .take(startLimit)
+        : [];
+    // Next future start, for scheduling when there's nothing to do now.
+    const nextFutureStart = await ctx.db
+      .query("pendingStart")
+      .withIndex("segment", (q) => q.gt("segment", currentSegment))
       .first();
-    const start = includeStarts
-      ? await ctx.db.query("pendingStart").withIndex("segment").first()
-      : null;
-    const segments = [
-      completion?.segment,
-      cancelation?.segment,
-      start?.segment,
-    ].filter((s): s is bigint => s != null);
-    if (segments.length === 0) return null;
-    return segments.reduce((a, b) => (a < b ? a : b));
+    return {
+      completions,
+      cancelations,
+      starts,
+      nextStartSegment: nextFutureStart?.segment ?? null,
+    };
   },
 });
 
@@ -139,27 +134,24 @@ export const main = internalMutation({
     const console = createLogger(globals.logLevel);
     const segment = getCurrentSegment();
 
-    // ── Snapshot reads — no read dependency, no OCC conflicts. ──
-    console.time("[main] snapshot reads");
-    const completed: Doc<"pendingCompletion">[] =
-      await (ctx as any).runSnapshotQuery(
-        internal.loop.getPendingCompletions,
-        {},
-      );
-    const canceled: Doc<"pendingCancelation">[] =
-      await (ctx as any).runSnapshotQuery(
-        internal.loop.getPendingCancelations,
-        { limit: CANCELLATION_BATCH_SIZE },
-      );
-    const toSchedule = globals.maxParallelism - state.running.length;
-    const pending: Doc<"pendingStart">[] =
-      toSchedule > 0
-        ? await (ctx as any).runSnapshotQuery(
-            internal.loop.getPendingStarts,
-            { upToSegment: segment, limit: toSchedule },
-          )
-        : [];
-    console.timeEnd("[main] snapshot reads");
+    // ── Snapshot read — no read dependency, no OCC conflicts. ──
+    // Pass maxParallelism as startLimit so we fetch enough starts to
+    // fill slots freed by completions processed in this same iteration.
+    console.time("[main] snapshot read");
+    const queryArgs = {
+      completionCursor: state.segmentCursors.completion,
+      cancelationCursor: state.segmentCursors.cancelation,
+      incomingCursor: state.segmentCursors.incoming,
+      currentSegment: segment,
+      startLimit: globals.maxParallelism,
+    };
+    const work = await (ctx as any).runSnapshotQuery(
+      internal.loop.getPendingWork,
+      queryArgs,
+    );
+    const completed: Doc<"pendingCompletion">[] = work.completions;
+    const canceled: Doc<"pendingCancelation">[] = work.cancelations;
+    console.timeEnd("[main] snapshot read");
 
     // ── Process completions ──
     console.time("[main] pendingCompletion");
@@ -180,6 +172,11 @@ export const main = internalMutation({
     }
 
     // ── Start new work ──
+    // Slice to actual available capacity (completions may have freed slots).
+    const actualCapacity = globals.maxParallelism - state.running.length;
+    const pending: Doc<"pendingStart">[] = (
+      work.starts as Doc<"pendingStart">[]
+    ).slice(0, actualCapacity);
     console.time("[main] pendingStart");
     await handleStart(ctx, state, pending, console, globals);
     console.timeEnd("[main] pendingStart");
@@ -201,12 +198,23 @@ export const main = internalMutation({
       };
     }
 
+    // ── Update cursors to skip tombstones on next scan ──
+    const didWork =
+      completed.length > 0 || canceled.length > 0 || pending.length > 0;
+    if (didWork) {
+      state.segmentCursors.completion = completed.at(-1)?.segment ?? segment;
+      state.segmentCursors.cancelation =
+        canceled.at(-1)?.segment ?? segment;
+      if (pending.length > 0) {
+        state.segmentCursors.incoming = pending.at(-1)!.segment;
+      } else {
+        state.segmentCursors.incoming = segment;
+      }
+    }
+
     await ctx.db.replace(state._id, state);
 
     // ── Schedule next iteration ──
-    const didWork =
-      completed.length > 0 || canceled.length > 0 || pending.length > 0;
-
     if (didWork) {
       // More work might have arrived while we were processing. Check again.
       await ctx.scheduler.runAfter(0, internal.loop.main, {
@@ -215,71 +223,73 @@ export const main = internalMutation({
       return;
     }
 
-    if (state.running.length > 0) {
-      // Jobs are running but nothing new to process right now.
-      // Find the next time we should wake up.
-      const nextPending: bigint | null = await (
-        ctx as any
-      ).runSnapshotQuery(internal.loop.getNextPendingSegment, {
-        includeStarts: state.running.length < globals.maxParallelism,
-      });
-      const nextRecoverySegment = state.lastRecovery + RECOVERY_PERIOD_SEGMENTS;
-      const target =
-        nextPending !== null
-          ? min(nextPending, nextRecoverySegment)
-          : nextRecoverySegment;
-
-      if (target <= segment + 1n) {
-        // Imminent — run immediately.
-        await ctx.scheduler.runAfter(0, internal.loop.main, {
-          generation: state.generation,
-        });
-      } else {
-        const scheduledId = await ctx.scheduler.runAt(
-          boundScheduledTime(fromSegment(target), console),
-          internal.loop.main,
-          { generation: state.generation },
-        );
-        await ctx.db.patch(runStatus._id, {
-          state: {
-            kind: "scheduled",
-            scheduledId,
-            saturated: state.running.length >= globals.maxParallelism,
-            generation: state.generation,
-            segment: target,
-          },
-        });
-      }
-      return;
-    }
-
-    // Nothing running, nothing processed. Before going idle, take a real
-    // read dependency so that a concurrent insert will conflict with us
-    // and force a retry (ensuring we never miss work).
-    console.debug("[main] nothing to do — taking read dependency before idle");
-    const hasPending: boolean = await (ctx as any).runQuery(
-      internal.loop.hasPendingWork,
-      { includeStarts: true },
+    // Nothing found in snapshot. Re-read with a real dependency (same args
+    // for cache-hit efficiency) so a concurrent insert forces an OCC retry.
+    console.debug("[main] no work — confirming with read dependency");
+    const confirm = await (ctx as any).runQuery(
+      internal.loop.getPendingWork,
+      queryArgs,
     );
-    if (hasPending) {
+    if (
+      confirm.completions.length > 0 ||
+      confirm.cancelations.length > 0 ||
+      confirm.starts.length > 0
+    ) {
       await ctx.scheduler.runAfter(0, internal.loop.main, {
         generation: state.generation,
       });
-    } else {
-      await ctx.db.patch(runStatus._id, {
-        state: { kind: "idle", generation: state.generation },
-      });
+      return;
     }
-  },
-});
 
-// Keep the export so that existing scheduled calls don't cause a missing
-// function error, but this is no longer actively used.
-export const updateRunStatus = internalMutation({
-  args: { generation: v.int64(), segment: v.int64() },
-  handler: async (ctx, { generation }) => {
-    // Scheduling logic has been merged into main. Just kick main.
-    await ctx.scheduler.runAfter(0, internal.loop.main, { generation });
+    // Cooldown: if we were recently active, keep checking before
+    // transitioning to scheduled/idle.
+    const { incoming, completion, cancelation } = state.segmentCursors;
+    const latestCursor = fromSegment(
+      max(incoming, max(completion, cancelation)),
+    );
+    if (Date.now() - latestCursor < STATUS_COOLDOWN) {
+      const remaining = STATUS_COOLDOWN - (Date.now() - latestCursor);
+      console.debug(
+        `[main] cooldown: ${remaining}ms remaining, checking again in ${COOLDOWN_CHECK_INTERVAL}ms`,
+      );
+      await ctx.scheduler.runAt(
+        Date.now() + COOLDOWN_CHECK_INTERVAL,
+        internal.loop.main,
+        { generation: state.generation },
+      );
+      return;
+    }
+
+    if (state.running.length > 0) {
+      // Jobs are running but nothing new to process right now.
+      // Schedule for the next future start or next recovery, whichever is sooner.
+      const nextRecoverySegment = state.lastRecovery + RECOVERY_PERIOD_SEGMENTS;
+      const target =
+        confirm.nextStartSegment !== null
+          ? min(confirm.nextStartSegment as bigint, nextRecoverySegment)
+          : nextRecoverySegment;
+
+      const scheduledId = await ctx.scheduler.runAt(
+        boundScheduledTime(fromSegment(target), console),
+        internal.loop.main,
+        { generation: state.generation },
+      );
+      await ctx.db.patch(runStatus._id, {
+        state: {
+          kind: "scheduled",
+          scheduledId,
+          saturated: state.running.length >= globals.maxParallelism,
+          generation: state.generation,
+          segment: target,
+        },
+      });
+      return;
+    }
+
+    // Nothing to do — go idle.
+    await ctx.db.patch(runStatus._id, {
+      state: { kind: "idle", generation: state.generation },
+    });
   },
 });
 

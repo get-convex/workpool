@@ -18,6 +18,12 @@ export default defineSchema({
   internalState: defineTable({
     // Ensure that only one main is running at a time.
     generation: v.int64(),
+    // Track where we've scanned to, so we skip tombstones on re-scan.
+    segmentCursors: v.object({
+      incoming: segment,
+      completion: segment,
+      cancelation: segment,
+    }),
     lastRecovery: segment,
     report: v.object({
       completed: v.number(), // finished running, counts retries & failures
