@@ -73,7 +73,6 @@ export async function kickMainLoop(
   const scheduledTime = boundScheduledTime(fromSegment(current), console);
   await ctx.scheduler.runAt(scheduledTime, internal.loop.main, {
     generation: runStatus.state.generation,
-    segment: current,
   });
   return current;
 }
