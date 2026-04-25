@@ -89,7 +89,7 @@ describe("kickMainLoop", () => {
           segment: futureSegment,
         },
       );
-      await ctx.db.patch(runStatus._id, {
+      await ctx.db.patch("runStatus", runStatus._id, {
         state: {
           kind: "scheduled",
           scheduledId,
@@ -131,7 +131,7 @@ describe("kickMainLoop", () => {
           segment: nearFutureSegment,
         },
       );
-      await ctx.db.patch(runStatus._id, {
+      await ctx.db.patch("runStatus", runStatus._id, {
         state: {
           kind: "scheduled",
           scheduledId,
@@ -161,7 +161,7 @@ describe("kickMainLoop", () => {
       // Delete runStatus
       const runStatus = await ctx.db.query("runStatus").unique();
       assert(runStatus);
-      await ctx.db.delete(runStatus._id);
+      await ctx.db.delete("runStatus", runStatus._id);
 
       // Kick should recreate runStatus
       await kickMainLoop(ctx, "complete");
@@ -181,7 +181,7 @@ describe("kickMainLoop", () => {
       // Delete globals
       const globals = await ctx.db.query("globals").unique();
       assert(globals);
-      await ctx.db.delete(globals._id);
+      await ctx.db.delete("globals", globals._id);
 
       // Kick should recreate globals
       await kickMainLoop(ctx, "complete");
@@ -259,7 +259,7 @@ describe("kickMainLoop", () => {
         internal.loop.main,
         { generation: 0n, segment },
       );
-      await ctx.db.patch(runStatus._id, {
+      await ctx.db.patch("runStatus", runStatus._id, {
         state: {
           generation: 0n,
           saturated: false,
@@ -274,7 +274,7 @@ describe("kickMainLoop", () => {
       assert(afterStatus);
       expect(afterStatus.state.kind).toBe("running");
       assert(afterStatus.state.kind === "running");
-      const scheduledJob = await ctx.db.system.get(scheduledId);
+      const scheduledJob = await ctx.db.system.get("_scheduled_functions", scheduledId);
       assert(scheduledJob);
       expect(scheduledJob.state.kind).toBe("canceled");
     });

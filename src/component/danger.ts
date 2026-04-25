@@ -24,7 +24,7 @@ export const clearPending = internalMutation({
       .withIndex("by_creation_time", (q) => q.lte("_creationTime", time))
       .order("desc")) {
       i++;
-      const work = await ctx.db.get(entry.workId);
+      const work = await ctx.db.get("work", entry.workId);
       totalBytes +=
         getConvexSize(entry) + getConvexSize(work) + (work?.payloadSize ?? 0);
       if (i > MAX_ROWS_READ || totalBytes > MAX_BYTES_READ) {
@@ -33,7 +33,7 @@ export const clearPending = internalMutation({
         console.log(`Continuing after ${i} entries, ${totalBytes} bytes`);
         break;
       }
-      await ctx.db.delete(entry._id);
+      await ctx.db.delete("pendingStart", entry._id);
       if (work) {
         // Clean up any large data stored separately
         if (work.payloadId) {
@@ -95,17 +95,17 @@ export const clearOldWork = internalMutation({
         break;
       }
       if (pendingStart) {
-        await ctx.db.delete(pendingStart._id);
+        await ctx.db.delete("pendingStart", pendingStart._id);
       }
       if (pendingCompletion) {
-        await ctx.db.delete(pendingCompletion._id);
+        await ctx.db.delete("pendingCompletion", pendingCompletion._id);
       }
       if (pendingCancelation) {
-        await ctx.db.delete(pendingCancelation._id);
+        await ctx.db.delete("pendingCancelation", pendingCancelation._id);
       }
       // Clean up any large data stored separately
       if (entry.payloadId) {
-        await ctx.db.delete(entry.payloadId);
+        await ctx.db.delete("payload", entry.payloadId);
       }
       console.debug(
         `cleared ${entry.fnName}: ${entry.fnArgs} (${Object.entries({
@@ -117,7 +117,7 @@ export const clearOldWork = internalMutation({
           .map(([name]) => name)
           .join(", ")})`,
       );
-      await ctx.db.delete(entry._id);
+      await ctx.db.delete("work", entry._id);
     }
     if (hasMore) {
       await ctx.scheduler.runAfter(0, internal.danger.clearOldWork, {

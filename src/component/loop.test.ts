@@ -41,7 +41,7 @@ describe("loop", () => {
           maxParallelism,
         });
       } else {
-        await ctx.db.patch(globals._id, {
+        await ctx.db.patch("globals", globals._id, {
           maxParallelism,
         });
       }
@@ -226,7 +226,7 @@ describe("loop", () => {
         expect(state.running).toHaveLength(0);
         expect(state.report.canceled).toBe(1);
 
-        const work = await ctx.db.get(workId);
+        const work = await ctx.db.get("work", workId);
         expect(work).not.toBeNull();
         expect(work!.canceled).toBe(true);
       });
@@ -259,7 +259,7 @@ describe("loop", () => {
         // Add to running list
         const state = await ctx.db.query("internalState").unique();
         assert(state);
-        await ctx.db.patch(state._id, {
+        await ctx.db.patch("internalState", state._id, {
           running: [{ workId, scheduledId, started: Date.now() }],
         });
 
@@ -308,7 +308,7 @@ describe("loop", () => {
         expect(pendingStarts[0].workId).toBe(workId);
 
         // Check that work still exists
-        const work = await ctx.db.get(workId);
+        const work = await ctx.db.get("work", workId);
         expect(work).not.toBeNull();
         expect(work!.attempts).toBe(1);
       });
@@ -689,7 +689,7 @@ describe("loop", () => {
         expect(completions).toHaveLength(0);
 
         // Check that work was updated
-        const work = await ctx.db.get(workId);
+        const work = await ctx.db.get("work", workId);
         expect(work).toBeDefined();
         expect(work!.attempts).toBe(1);
 
@@ -759,7 +759,7 @@ describe("loop", () => {
         const pendingStarts = await ctx.db.query("pendingStart").collect();
         expect(pendingStarts).toHaveLength(0);
 
-        const work = await ctx.db.get(workId);
+        const work = await ctx.db.get("work", workId);
         expect(work).toBeDefined();
         expect(work!.canceled).toBe(true);
 
@@ -1062,7 +1062,7 @@ describe("loop", () => {
 
       // Verify work was deleted
       await t.run(async (ctx) => {
-        const work = await ctx.db.get(workId);
+        const work = await ctx.db.get("work", workId);
         expect(work).toBeNull();
       });
     });
@@ -1071,7 +1071,7 @@ describe("loop", () => {
       // Call complete with non-existent work ID
       const workId = await t.run(async (ctx) => {
         const id = await makeDummyWork(ctx, { attempts: 0 });
-        await ctx.db.delete(id);
+        await ctx.db.delete("work", id);
         return id;
       });
       await t.mutation(internal.complete.complete, {

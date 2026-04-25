@@ -40,7 +40,7 @@ export async function completeHandler(
   const jobAndWorks = (
     await Promise.all(
       args.jobs.map(async (job) => {
-        const work = await ctx.db.get(job.workId);
+        const work = await ctx.db.get("work", job.workId);
         if (!work) {
           console.warn(
             `[complete] ${job.workId} is done, but its work is gone`,
@@ -103,7 +103,7 @@ export async function completeHandler(
   await Promise.all(
     ourBatch.map(async ({ work, job }) => {
       work.attempts++;
-      await ctx.db.patch(work._id, { attempts: work.attempts });
+      await ctx.db.patch("work", work._id, { attempts: work.attempts });
       const pendingCompletion = await ctx.db
         .query("pendingCompletion")
         .withIndex("workId", (q) => q.eq("workId", job.workId))
@@ -124,7 +124,7 @@ export async function completeHandler(
             // Retrieve large context if stored separately
             let context = work.onComplete.context;
             if (context === undefined && work.payloadId) {
-              const payload = await ctx.db.get(work.payloadId);
+              const payload = await ctx.db.get("payload", work.payloadId);
               if (payload) {
                 context = payload.context;
               }
@@ -176,11 +176,11 @@ export async function completeHandler(
         // Clean up any large data that was stored separately.
         // TODO: consider async deletion in the future to avoid bandwidth limits.
         if (work.payloadId) {
-          await ctx.db.delete(work.payloadId);
+          await ctx.db.delete("payload", work.payloadId);
         }
 
         // This is the terminating state for work.
-        await ctx.db.delete(job.workId);
+        await ctx.db.delete("work", job.workId);
       }
       if (job.runResult.kind !== "canceled") {
         pendingCompletions.push({

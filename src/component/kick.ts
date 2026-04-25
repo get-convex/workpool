@@ -57,7 +57,7 @@ export async function kickMainLoop(
     console.debug(
       `[${source}] main is scheduled to run later, so reschedule it to run now`,
     );
-    const scheduled = await ctx.db.system.get(runStatus.state.scheduledId);
+    const scheduled = await ctx.db.system.get("_scheduled_functions", runStatus.state.scheduledId);
     if (scheduled && scheduled.state.kind === "pending") {
       await ctx.scheduler.cancel(runStatus.state.scheduledId);
     } else {
@@ -68,7 +68,7 @@ export async function kickMainLoop(
   } else if (runStatus.state.kind === "idle") {
     console.debug(`[${source}] main was idle, so run it now`);
   }
-  await ctx.db.patch(runStatus._id, { state: { kind: "running" } });
+  await ctx.db.patch("runStatus", runStatus._id, { state: { kind: "running" } });
   const current = getCurrentSegment();
   const scheduledTime = boundScheduledTime(fromSegment(current), console);
   await ctx.scheduler.runAt(scheduledTime, internal.loop.main, {
@@ -82,7 +82,7 @@ export const forceKick = internalMutation({
   args: {},
   handler: async (ctx) => {
     const runStatus = await getOrCreateRunStatus(ctx);
-    await ctx.db.delete(runStatus._id);
+    await ctx.db.delete("runStatus", runStatus._id);
     await kickMainLoop(ctx, "kick");
   },
 });
@@ -97,7 +97,7 @@ async function getOrCreateRunStatus(ctx: MutationCtx) {
         generation: state?.generation ?? INITIAL_STATE.generation,
       },
     });
-    runStatus = (await ctx.db.get(id))!;
+    runStatus = (await ctx.db.get("runStatus", id))!;
     if (!state) {
       await ctx.db.insert("internalState", INITIAL_STATE);
     }

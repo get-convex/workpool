@@ -206,7 +206,7 @@ export const status = query({
   handler: statusHandler,
 });
 async function statusHandler(ctx: QueryCtx, { id }: { id: Id<"work"> }) {
-  const work = await ctx.db.get(id);
+  const work = await ctx.db.get("work", id);
   if (!work) {
     return { state: "finished" } as const;
   }
@@ -245,7 +245,7 @@ async function shouldCancelWorkItem(
 ) {
   const console = createLogger(logLevel);
   // No-op if the work doesn't exist or has completed.
-  const work = await ctx.db.get(workId);
+  const work = await ctx.db.get("work", workId);
   if (!work) {
     console.warn(`[cancel] work ${workId} doesn't exist`);
     return false;

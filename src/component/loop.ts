@@ -62,7 +62,7 @@ export const main = internalMutation({
     state.generation++;
     const runStatus = await getOrCreateRunningStatus(ctx);
     if (runStatus.state.kind !== "running") {
-      await ctx.db.patch(runStatus._id, {
+      await ctx.db.patch("runStatus", runStatus._id, {
         state: { kind: "running" },
       });
     }
@@ -115,7 +115,7 @@ export const main = internalMutation({
       };
     }
 
-    await ctx.db.replace(state._id, state);
+    await ctx.db.replace("internalState", state._id, state);
     await ctx.scheduler.runAfter(0, internal.loop.updateRunStatus, {
       generation: state.generation,
       segment,
@@ -183,7 +183,7 @@ export const updateRunStatus = internalMutation({
     console.timeEnd("[updateRunStatus] oldSegmentIsActionable");
 
     if (oldIsActionable) {
-      await ctx.db.patch(state._id, {
+      await ctx.db.patch("internalState", state._id, {
         segmentCursors: {
           ...state.segmentCursors,
           ...cursors,
@@ -248,7 +248,7 @@ export const updateRunStatus = internalMutation({
         { generation, segment: targetSegment },
       );
       if (targetSegment > getNextSegment()) {
-        await ctx.db.patch(runStatus._id, {
+        await ctx.db.patch("runStatus", runStatus._id, {
           state: {
             kind: "scheduled",
             scheduledId,
@@ -265,7 +265,7 @@ export const updateRunStatus = internalMutation({
       return;
     }
     // There seems to be nothing in the future to do, so go idle.
-    await ctx.db.patch(runStatus._id, {
+    await ctx.db.patch("runStatus", runStatus._id, {
       state: { kind: "idle", generation },
     });
   },
@@ -384,7 +384,7 @@ async function handleCompletions(
   const toCancel: CompleteJob[] = [];
   await Promise.all(
     completed.map(async (c) => {
-      await ctx.db.delete(c._id);
+      await ctx.db.delete("pendingCompletion", c._id);
 
       const running = state.running.find((r) => r.workId === c.workId);
       if (!running) {
@@ -395,7 +395,7 @@ async function handleCompletions(
       }
       if (c.retry) {
         // Only check for work if it's going to be retried.
-        const work = await ctx.db.get(c.workId);
+        const work = await ctx.db.get("work", c.workId);
         if (!work) {
           console.warn(`[main] ${c.workId} is gone, but trying to complete`);
           return;
@@ -457,19 +457,19 @@ async function handleCancelation(
     ...(
       await Promise.all(
         canceled.map(async ({ _id, workId }) => {
-          await ctx.db.delete(_id);
+          await ctx.db.delete("pendingCancelation", _id);
           if (canceledWork.has(workId)) {
             // We shouldn't have multiple pending cancelations for the same work.
             console.error(`[main] ${workId} already canceled`);
             return null;
           }
-          const work = await ctx.db.get(workId);
+          const work = await ctx.db.get("work", workId);
           if (!work) {
             console.warn(`[main] ${workId} is gone, but trying to cancel`);
             return null;
           }
           // Ensure it doesn't retry.
-          await ctx.db.patch(workId, { canceled: true });
+          await ctx.db.patch("work", workId, { canceled: true });
           // Ensure it doesn't start.
           const pendingStart = await ctx.db
             .query("pendingStart")
@@ -477,7 +477,7 @@ async function handleCancelation(
             .unique();
           if (pendingStart && !canceledWork.has(workId)) {
             state.report.canceled++;
-            await ctx.db.delete(pendingStart._id);
+            await ctx.db.delete("pendingStart", pendingStart._id);
             canceledWork.add(workId);
             return { workId, runResult, attempt: work.attempts };
           }
@@ -504,7 +504,7 @@ async function handleRecovery(
         if (r.started >= oldEnoughToConsider) {
           return null;
         }
-        const work = await ctx.db.get(r.workId);
+        const work = await ctx.db.get("work", r.workId);
         if (!work) {
           const pendingCompletion = await ctx.db
             .query("pendingCompletion")
@@ -578,7 +578,7 @@ async function handleStart(
           }
           const lagMs = Date.now() - fromSegment(segment);
           const scheduledId = await beginWork(ctx, workId, logLevel, lagMs);
-          await ctx.db.delete(_id);
+          await ctx.db.delete("pendingStart", _id);
           if (!scheduledId) return null;
           return { scheduledId, workId, started: Date.now() };
         }),
@@ -594,7 +594,7 @@ async function beginWork(
   lagMs: number,
 ): Promise<Id<"_scheduled_functions"> | null> {
   const console = createLogger(logLevel);
-  const work = await ctx.db.get(workId);
+  const work = await ctx.db.get("work", workId);
   if (!work) {
     console.error(`Trying to start, but work not found: ${workId}`);
     return null;
@@ -694,7 +694,7 @@ async function getOrCreateState(ctx: MutationCtx) {
   const console = createLogger(globals.logLevel);
   console.error("No internalState in running loop! Re-creating empty one...");
   return (await ctx.db.get(
-    await ctx.db.insert("internalState", INITIAL_STATE),
+    "internalState", await ctx.db.insert("internalState", INITIAL_STATE),
   ))!;
 }
 
@@ -705,7 +705,7 @@ async function getOrCreateRunningStatus(ctx: MutationCtx) {
   const console = createLogger(globals.logLevel);
   console.error("No runStatus in running loop! Re-creating one...");
   return (await ctx.db.get(
-    await ctx.db.insert("runStatus", { state: { kind: "running" } }),
+    "runStatus", await ctx.db.insert("runStatus", { state: { kind: "running" } }),
   ))!;
 }
 // eslint-disable-next-line @typescript-eslint/no-unused-vars

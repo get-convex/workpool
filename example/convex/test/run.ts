@@ -86,6 +86,7 @@ export const cancel = internalMutation({
 
 // Get the status of the latest run
 export const status = internalQuery({
+  args: {},
   handler: async (ctx) => {
     const latestRun = await ctx.db.query("runs").order("desc").first();
 
@@ -105,6 +106,7 @@ function percentile(sorted: number[], p: number): number {
 
 // Get metrics for the latest run
 export const metrics = internalQuery({
+  args: {},
   handler: async (ctx) => {
     const run = await ctx.db.query("runs").order("desc").first();
     if (!run) return null;
