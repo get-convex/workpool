@@ -65,7 +65,10 @@ export async function recoveryHandler(
       console.warn(`${preamble} attempts mismatch, skipping`);
       continue;
     }
-    const scheduled = await ctx.db.system.get("_scheduled_functions", job.scheduledId);
+    const scheduled = await ctx.db.system.get(
+      "_scheduled_functions",
+      job.scheduledId,
+    );
     if (scheduled === null) {
       console.warn(`${preamble} not found in _scheduled_functions`);
       completionJobs.push({

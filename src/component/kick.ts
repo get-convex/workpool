@@ -57,7 +57,10 @@ export async function kickMainLoop(
     console.debug(
       `[${source}] main is scheduled to run later, so reschedule it to run now`,
     );
-    const scheduled = await ctx.db.system.get("_scheduled_functions", runStatus.state.scheduledId);
+    const scheduled = await ctx.db.system.get(
+      "_scheduled_functions",
+      runStatus.state.scheduledId,
+    );
     if (scheduled && scheduled.state.kind === "pending") {
       await ctx.scheduler.cancel(runStatus.state.scheduledId);
     } else {
@@ -68,7 +71,9 @@ export async function kickMainLoop(
   } else if (runStatus.state.kind === "idle") {
     console.debug(`[${source}] main was idle, so run it now`);
   }
-  await ctx.db.patch("runStatus", runStatus._id, { state: { kind: "running" } });
+  await ctx.db.patch("runStatus", runStatus._id, {
+    state: { kind: "running" },
+  });
   const current = getCurrentSegment();
   const scheduledTime = boundScheduledTime(fromSegment(current), console);
   await ctx.scheduler.runAt(scheduledTime, internal.loop.main, {

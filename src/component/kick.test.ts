@@ -274,7 +274,10 @@ describe("kickMainLoop", () => {
       assert(afterStatus);
       expect(afterStatus.state.kind).toBe("running");
       assert(afterStatus.state.kind === "running");
-      const scheduledJob = await ctx.db.system.get("_scheduled_functions", scheduledId);
+      const scheduledJob = await ctx.db.system.get(
+        "_scheduled_functions",
+        scheduledId,
+      );
       assert(scheduledJob);
       expect(scheduledJob.state.kind).toBe("canceled");
     });

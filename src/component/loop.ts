@@ -694,7 +694,8 @@ async function getOrCreateState(ctx: MutationCtx) {
   const console = createLogger(globals.logLevel);
   console.error("No internalState in running loop! Re-creating empty one...");
   return (await ctx.db.get(
-    "internalState", await ctx.db.insert("internalState", INITIAL_STATE),
+    "internalState",
+    await ctx.db.insert("internalState", INITIAL_STATE),
   ))!;
 }
 
@@ -705,7 +706,8 @@ async function getOrCreateRunningStatus(ctx: MutationCtx) {
   const console = createLogger(globals.logLevel);
   console.error("No runStatus in running loop! Re-creating one...");
   return (await ctx.db.get(
-    "runStatus", await ctx.db.insert("runStatus", { state: { kind: "running" } }),
+    "runStatus",
+    await ctx.db.insert("runStatus", { state: { kind: "running" } }),
   ))!;
 }
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
