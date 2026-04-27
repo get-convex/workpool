@@ -54,7 +54,7 @@ export async function recoveryHandler(
       console.debug(`${preamble} already in pendingCompletion, skipping`);
       continue;
     }
-    const work = await ctx.db.get(job.workId);
+    const work = await ctx.db.get("work", job.workId);
     if (work === null) {
       // Completion already executed w/o retries, no need to do anything.
       console.warn(`${preamble} work not found, skipping`);
@@ -65,7 +65,7 @@ export async function recoveryHandler(
       console.warn(`${preamble} attempts mismatch, skipping`);
       continue;
     }
-    const scheduled = await ctx.db.system.get(job.scheduledId);
+    const scheduled = await ctx.db.system.get("_scheduled_functions", job.scheduledId);
     if (scheduled === null) {
       console.warn(`${preamble} not found in _scheduled_functions`);
       completionJobs.push({

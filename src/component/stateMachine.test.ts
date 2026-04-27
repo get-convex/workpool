@@ -234,7 +234,7 @@ describe("state machine", () => {
       } else {
         // Create and delete to get a valid Id
         wId = await makeDummyWork(ctx);
-        await ctx.db.delete(wId);
+        await ctx.db.delete("work", wId);
       }
 
       // Set up running array
@@ -307,7 +307,7 @@ describe("state machine", () => {
   /** Read the DB and return the observed state for a given workId. */
   async function observeState(workId: Id<"work">): Promise<ObservedState> {
     return t.run(async (ctx) => {
-      const work = await ctx.db.get(workId);
+      const work = await ctx.db.get("work", workId);
       const ps = await ctx.db
         .query("pendingStart")
         .withIndex("workId", (q) => q.eq("workId", workId))

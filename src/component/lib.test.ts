@@ -165,7 +165,7 @@ describe("lib", () => {
 
       // Delete the work item
       await t.run(async (ctx) => {
-        await ctx.db.delete(id);
+        await ctx.db.delete("work", id);
       });
 
       // Try to cancel the deleted work
@@ -281,7 +281,7 @@ describe("lib", () => {
         },
       });
       await t.run(async (ctx) => {
-        await ctx.db.delete(id);
+        await ctx.db.delete("work", id);
       });
 
       const status = await t.query(api.lib.status, { id });
@@ -303,7 +303,7 @@ describe("lib", () => {
 
       // Verify work item and pending start were created
       await t.run(async (ctx) => {
-        const work = await ctx.db.get(id);
+        const work = await ctx.db.get("work", id);
         expect(work).toBeDefined();
         const pendingStarts = await ctx.db.query("pendingStart").collect();
         expect(pendingStarts).toHaveLength(1);
@@ -332,7 +332,7 @@ describe("lib", () => {
         const pendingStart = await ctx.db.query("pendingStart").first();
         expect(pendingStart).toBeDefined();
         assert(pendingStart);
-        await ctx.db.delete(pendingStart._id);
+        await ctx.db.delete("pendingStart", pendingStart._id);
       });
 
       const status = await t.query(api.lib.status, { id });
@@ -362,7 +362,7 @@ describe("lib", () => {
         const pendingStart = await ctx.db.query("pendingStart").first();
         expect(pendingStart).toBeDefined();
         assert(pendingStart);
-        await ctx.db.delete(pendingStart._id);
+        await ctx.db.delete("pendingStart", pendingStart._id);
 
         // Create a pendingCompletion with retry=true to simulate a failed job that will be retried
         await ctx.db.insert("pendingCompletion", {
@@ -395,7 +395,7 @@ describe("lib", () => {
         const pendingStart = await ctx.db.query("pendingStart").first();
         expect(pendingStart).toBeDefined();
         assert(pendingStart);
-        await ctx.db.delete(pendingStart._id);
+        await ctx.db.delete("pendingStart", pendingStart._id);
 
         // Create a pendingCancelation
         await ctx.db.insert("pendingCancelation", {
@@ -428,7 +428,7 @@ describe("lib", () => {
         const pendingStart = await ctx.db.query("pendingStart").first();
         expect(pendingStart).toBeDefined();
         assert(pendingStart);
-        await ctx.db.delete(pendingStart._id);
+        await ctx.db.delete("pendingStart", pendingStart._id);
 
         // Create a pendingCompletion with retry=false
         await ctx.db.insert("pendingCompletion", {

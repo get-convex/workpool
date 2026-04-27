@@ -31,7 +31,7 @@ export const runMutationWrapper = internalMutation({
     let fnArgs = args.fnArgs;
     if (!fnArgs) {
       assert(args.payloadId);
-      const payload = await ctx.db.get(args.payloadId);
+      const payload = await ctx.db.get("payload", args.payloadId);
       assert(payload?.args);
       fnArgs = payload.args;
     }

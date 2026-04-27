@@ -126,7 +126,7 @@ describe("recovery", () => {
         const scheduledId = await makeDummyScheduledFunction(ctx, workId);
 
         // Delete the work to simulate it not being found
-        await ctx.db.delete(workId);
+        await ctx.db.delete("work", workId);
 
         return [workId, scheduledId];
       });
@@ -160,9 +160,9 @@ describe("recovery", () => {
         const scheduledId = await makeDummyScheduledFunction(ctx, workId);
 
         // Update the work to have a different attempt number
-        const work = await ctx.db.get(workId);
+        const work = await ctx.db.get("work", workId);
         if (work) {
-          await ctx.db.patch(work._id, { attempts: 5 });
+          await ctx.db.patch("work", work._id, { attempts: 5 });
         }
 
         return [workId, scheduledId];

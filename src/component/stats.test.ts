@@ -75,7 +75,7 @@ describe("stats", () => {
 
       // Get the state document
       const state = await t.run(async (ctx) => {
-        return await ctx.db.get(stateId);
+        return await ctx.db.get("internalState", stateId);
       });
       assert(state);
 
@@ -138,7 +138,7 @@ describe("stats", () => {
 
       // Get the state document
       const state = await t.run(async (ctx) => {
-        return await ctx.db.get(stateId);
+        return await ctx.db.get("internalState", stateId);
       });
       assert(state);
 
@@ -217,7 +217,7 @@ describe("stats", () => {
 
       // Get the state document
       const state = await t.run(async (ctx) => {
-        return await ctx.db.get(stateId);
+        return await ctx.db.get("internalState", stateId);
       });
       assert(state);
 
@@ -298,7 +298,7 @@ describe("stats", () => {
 
       // Get the state document
       const state = await t.run(async (ctx) => {
-        return await ctx.db.get(stateId);
+        return await ctx.db.get("internalState", stateId);
       });
       assert(state);
 

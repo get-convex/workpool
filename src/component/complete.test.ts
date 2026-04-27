@@ -69,7 +69,7 @@ describe("complete", () => {
 
       // Verify work was deleted
       await t.run(async (ctx) => {
-        const work = await ctx.db.get(workId);
+        const work = await ctx.db.get("work", workId);
         expect(work).toBeNull();
       });
 
@@ -119,7 +119,7 @@ describe("complete", () => {
 
       // Verify work was not deleted (since it should be retried)
       await t.run(async (ctx) => {
-        const work = await ctx.db.get(workId);
+        const work = await ctx.db.get("work", workId);
         expect(work).not.toBeNull();
         expect(work?.attempts).toBe(1); // Incremented from 0
       });
@@ -157,9 +157,9 @@ describe("complete", () => {
 
       // Update the work to simulate it's already been attempted once
       await t.run(async (ctx) => {
-        const work = await ctx.db.get(workId);
+        const work = await ctx.db.get("work", workId);
         if (work) {
-          await ctx.db.patch(work._id, { attempts: 1 });
+          await ctx.db.patch("work", work._id, { attempts: 1 });
         }
       });
 
@@ -178,7 +178,7 @@ describe("complete", () => {
 
       // Verify work was deleted (since max attempts reached)
       await t.run(async (ctx) => {
-        const work = await ctx.db.get(workId);
+        const work = await ctx.db.get("work", workId);
         expect(work).toBeNull();
       });
 
@@ -223,7 +223,7 @@ describe("complete", () => {
 
       // Verify work was deleted
       await t.run(async (ctx) => {
-        const work = await ctx.db.get(workId);
+        const work = await ctx.db.get("work", workId);
         expect(work).toBeNull();
       });
 
@@ -346,11 +346,11 @@ describe("complete", () => {
       // Verify both jobs were processed correctly
       await t.run(async (ctx) => {
         // First job should be deleted
-        const work1 = await ctx.db.get(workId1);
+        const work1 = await ctx.db.get("work", workId1);
         expect(work1).toBeNull();
 
         // Second job should still exist (for retry)
-        const work2 = await ctx.db.get(workId2);
+        const work2 = await ctx.db.get("work", workId2);
         expect(work2).not.toBeNull();
         expect(work2?.attempts).toBe(1);
 
@@ -378,9 +378,9 @@ describe("complete", () => {
 
       // Update the work to have a different attempt number
       await t.run(async (ctx) => {
-        const work = await ctx.db.get(workId);
+        const work = await ctx.db.get("work", workId);
         if (work) {
-          await ctx.db.patch(work._id, { attempts: 5 });
+          await ctx.db.patch("work", work._id, { attempts: 5 });
         }
       });
 
@@ -399,7 +399,7 @@ describe("complete", () => {
 
       // Verify work was not modified
       await t.run(async (ctx) => {
-        const work = await ctx.db.get(workId);
+        const work = await ctx.db.get("work", workId);
         expect(work).not.toBeNull();
         expect(work?.attempts).toBe(5); // Should remain unchanged
       });
@@ -449,7 +449,7 @@ describe("complete", () => {
       // Verify the first call was processed correctly
       await t.run(async (ctx) => {
         // Work should still exist (for retry)
-        const work = await ctx.db.get(workId);
+        const work = await ctx.db.get("work", workId);
         expect(work).not.toBeNull();
         expect(work?.attempts).toBe(1); // Incremented from 0
 
@@ -491,7 +491,7 @@ describe("complete", () => {
       // Verify the second call was not processed
       await t.run(async (ctx) => {
         // Work should still have the same attempt count
-        const work = await ctx.db.get(workId);
+        const work = await ctx.db.get("work", workId);
         expect(work).not.toBeNull();
         expect(work?.attempts).toBe(1); // Still 1, not incremented again
 

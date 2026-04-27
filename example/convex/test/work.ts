@@ -48,7 +48,7 @@ export const configurableMutation = internalMutation({
       const dataToWrite = generateData(args.readWriteData);
       const docId = await ctx.db.insert("data", { misc: dataToWrite });
       // Delete immediately - this will read then write
-      await ctx.db.delete(docId);
+      await ctx.db.delete("data", docId);
     }
 
     // Return data of specified size
