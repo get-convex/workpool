@@ -843,7 +843,7 @@ describe("state machine", () => {
           fnName: "fn1",
           fnArgs: {},
           attempts: 0,
-          retryBehavior: { maxAttempts: 5, initialBackoffMs: 100, base: 2 },
+          retryBehavior: { maxAttempts: 5, initialBackoffMs: 0, base: 2 },
         });
         const w2 = await ctx.db.insert("work", {
           fnType: "action",
@@ -851,7 +851,7 @@ describe("state machine", () => {
           fnName: "fn2",
           fnArgs: {},
           attempts: 0,
-          retryBehavior: { maxAttempts: 5, initialBackoffMs: 100, base: 2 },
+          retryBehavior: { maxAttempts: 5, initialBackoffMs: 0, base: 2 },
         });
         const s1 = await ctx.scheduler.runAfter(
           0,
