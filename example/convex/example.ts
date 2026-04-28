@@ -8,13 +8,14 @@ import {
 import { api, components, internal } from "./_generated/api";
 import {
   WorkId,
+  NonRetryableError,
   vWorkId,
   Workpool,
   vOnCompleteArgs,
 } from "@convex-dev/workpool";
 import { v } from "convex/values";
 import { createLogger } from "../../src/component/logging";
-import { FunctionArgs } from "convex/server";
+import { createFunctionHandle, FunctionArgs } from "convex/server";
 
 const bigPool = new Workpool(components.bigPool, {
   maxParallelism: 20,
@@ -37,6 +38,7 @@ const serializedPool = new Workpool(components.serializedPool, {
   logLevel: "INFO",
 });
 const console = createLogger("DEBUG");
+let terminalMutationAttempts = 0;
 
 export const addMutation = mutation({
   args: { data: v.optional(v.number()) },
@@ -51,6 +53,88 @@ export const addAction = action({
   args: { data: v.optional(v.number()) },
   handler: async (ctx, { data }): Promise<number> => {
     return await ctx.runMutation(api.example.addMutation, { data });
+  },
+});
+
+export const recordTerminalAttempt = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    await ctx.db.insert("data", { data: 1 });
+  },
+});
+
+export const terminalAction = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    await ctx.runMutation(internal.example.recordTerminalAttempt, {});
+    throw new NonRetryableError("terminal failure");
+  },
+});
+
+export const completeTerminalAction = internalMutation({
+  args: vOnCompleteArgs(v.null()),
+  handler: async (ctx, args) => {
+    await ctx.db.insert("data", {
+      data: args.result.kind === "failed" ? 999 : -1,
+      misc: args.result,
+    });
+  },
+});
+
+export const enqueueTerminalAction = mutation({
+  args: {},
+  handler: async (ctx): Promise<WorkId> => {
+    return await smallPool.enqueueAction(
+      ctx,
+      internal.example.terminalAction,
+      {},
+      {
+        retry: { maxAttempts: 3, initialBackoffMs: 100, base: 2 },
+        onComplete: internal.example.completeTerminalAction,
+        context: null,
+      },
+    );
+  },
+});
+
+export const resetTerminalMutationAttempts = mutation({
+  args: {},
+  handler: async () => {
+    terminalMutationAttempts = 0;
+  },
+});
+
+export const terminalMutationAttemptCount = query({
+  args: {},
+  handler: async () => terminalMutationAttempts,
+});
+
+export const terminalMutation = internalMutation({
+  args: {},
+  handler: async () => {
+    terminalMutationAttempts++;
+    throw new NonRetryableError("terminal mutation failure");
+  },
+});
+
+export const enqueueTerminalMutationWithRetry = mutation({
+  args: {},
+  handler: async (ctx): Promise<WorkId> => {
+    const [fnHandle, onCompleteHandle] = await Promise.all([
+      createFunctionHandle(internal.example.terminalMutation),
+      createFunctionHandle(internal.example.completeTerminalAction),
+    ]);
+
+    return (await ctx.runMutation(components.smallPool.lib.enqueue, {
+      fnHandle,
+      fnName: "example:terminalMutation",
+      fnArgs: {},
+      fnType: "mutation",
+      runAt: Date.now(),
+      onComplete: { fnHandle: onCompleteHandle, context: null },
+      retryBehavior: { maxAttempts: 3, initialBackoffMs: 100, base: 2 },
+      config: { logLevel: "INFO" },
+    })) as WorkId;
   },
 });
 
