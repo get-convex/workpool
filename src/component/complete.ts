@@ -17,6 +17,7 @@ const completeArgs = v.object({
       runResult: vResult,
       workId: v.id("work"),
       attempt: v.number(),
+      nonRetryable: v.optional(v.boolean()),
       // TODO: need to be careful about removing this field later
       runOnCompleteInline: v.optional(v.boolean()),
     }),
@@ -115,6 +116,7 @@ export async function completeHandler(
       const maxAttempts = work.retryBehavior?.maxAttempts;
       const retry =
         job.runResult.kind === "failed" &&
+        !job.nonRetryable &&
         !!maxAttempts &&
         work.attempts < maxAttempts;
       if (!retry) {
