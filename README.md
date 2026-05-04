@@ -326,6 +326,28 @@ The retry options work like this:
 
 You can override the retry behavior per-call with the `retry` option.
 
+#### Non-retryable errors
+
+If an action has retries enabled but hits a terminal failure, throw a
+`NonRetryableError`. Workpool will treat the attempt as failed, call
+`onComplete` with the normal `{ kind: "failed", error }` result, and skip any
+remaining retries.
+
+```ts
+import { NonRetryableError } from "@convex-dev/workpool";
+
+export const sendEmail = action({
+  args: { email: v.string() },
+  handler: async (ctx, { email }) => {
+    if (!email.includes("@")) {
+      throw new NonRetryableError("Invalid email address");
+    }
+
+    // Throw ordinary errors for failures that should still use retry behavior.
+  },
+});
+```
+
 ## Optimizations with and without Workpool
 
 The benefit of Workpool is that it won't fall over if there are many jobs

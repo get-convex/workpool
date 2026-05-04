@@ -11,6 +11,7 @@ import {
   internalMutation,
   internalQuery,
 } from "./_generated/server.js";
+import { getNonRetryableErrorMessage, isNonRetryableError } from "./errors.js";
 import { createLogger, logLevel } from "./logging.js";
 import type { RunResult } from "./shared.js";
 import { assert } from "convex-helpers";
@@ -51,13 +52,24 @@ export const runMutationWrapper = internalMutation({
       console.error(e);
       const runResult = { kind: "failed" as const, error: formatError(e) };
       await ctx.scheduler.runAfter(0, internal.complete.complete, {
-        jobs: [{ workId, runResult, attempt }],
+        jobs: [
+          {
+            workId,
+            runResult,
+            attempt,
+            nonRetryable: isNonRetryableError(e),
+          },
+        ],
       });
     }
   },
 });
 
 function formatError(e: unknown) {
+  const nonRetryableMessage = getNonRetryableErrorMessage(e);
+  if (nonRetryableMessage !== undefined) {
+    return nonRetryableMessage;
+  }
   if (e instanceof Error) {
     return e.message;
   }
@@ -112,7 +124,14 @@ export const runActionWrapper = internalAction({
       // We let the main loop handle the retries.
       const runResult: RunResult = { kind: "failed", error: formatError(e) };
       await ctx.scheduler.runAfter(0, internal.complete.complete, {
-        jobs: [{ workId, runResult, attempt }],
+        jobs: [
+          {
+            workId,
+            runResult,
+            attempt,
+            nonRetryable: isNonRetryableError(e),
+          },
+        ],
       });
     }
   },

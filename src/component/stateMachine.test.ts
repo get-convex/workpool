@@ -839,7 +839,7 @@ describe("state machine", () => {
           fnName: "fn1",
           fnArgs: {},
           attempts: 0,
-          retryBehavior: { maxAttempts: 5, initialBackoffMs: 100, base: 2 },
+          retryBehavior: { maxAttempts: 5, initialBackoffMs: 0, base: 2 },
         });
         const w2 = await ctx.db.insert("work", {
           fnType: "action",
@@ -847,7 +847,7 @@ describe("state machine", () => {
           fnName: "fn2",
           fnArgs: {},
           attempts: 0,
-          retryBehavior: { maxAttempts: 5, initialBackoffMs: 100, base: 2 },
+          retryBehavior: { maxAttempts: 5, initialBackoffMs: 0, base: 2 },
         });
         const s1 = await ctx.scheduler.runAfter(
           0,
@@ -912,7 +912,7 @@ describe("state machine", () => {
       // Both pendingCompletions should be consumed
       expect(s1After.pendingCompletion).toBe(false);
       expect(s2After.pendingCompletion).toBe(false);
-      // With small backoff (100ms), retry pendingStarts are immediately picked up
+      // With zero backoff, retry pendingStarts are immediately picked up
       // by handleStart in the same main pass, so both jobs are running again
       expect(s1After.running).toBe(true);
       expect(s2After.running).toBe(true);

@@ -36,6 +36,7 @@ import {
   type RunQueryCtx,
   safeFunctionName,
 } from "./utils.js";
+export { NonRetryableError, isNonRetryableError } from "../component/errors.js";
 export { logLevel as vLogLevel, type LogLevel } from "../component/logging.js";
 export { retryBehavior as vRetryBehavior } from "../component/shared.js";
 
