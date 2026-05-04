@@ -65,7 +65,10 @@ describe("workpool", () => {
 
   test("NonRetryableError skips remaining mutation retries", async () => {
     await t.mutation(api.example.resetTerminalMutationAttempts, {});
-    const id = await t.mutation(api.example.enqueueTerminalMutationWithRetry, {});
+    const id = await t.mutation(
+      api.example.enqueueTerminalMutationWithRetry,
+      {},
+    );
 
     await t.finishAllScheduledFunctions(vi.runAllTimers);
 

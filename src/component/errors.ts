@@ -51,7 +51,9 @@ export function isNonRetryableError(error: unknown): boolean {
   );
 }
 
-export function getNonRetryableErrorMessage(error: unknown): string | undefined {
+export function getNonRetryableErrorMessage(
+  error: unknown,
+): string | undefined {
   if (error instanceof NonRetryableError) {
     return getNonRetryableErrorData(error.data)?.message;
   }
@@ -80,9 +82,7 @@ function getNonRetryableErrorData(
   return undefined;
 }
 
-function isNonRetryableErrorData(
-  data: unknown,
-): data is NonRetryableErrorData {
+function isNonRetryableErrorData(data: unknown): data is NonRetryableErrorData {
   if (
     typeof data === "object" &&
     data !== null &&
