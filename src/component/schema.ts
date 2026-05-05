@@ -88,6 +88,7 @@ export default defineSchema({
     runResult: vResult,
     workId: v.id("work"),
     retry: v.boolean(),
+    transient: v.optional(v.boolean()),
   })
     .index("workId", ["workId"])
     .index("segment", ["segment"]),

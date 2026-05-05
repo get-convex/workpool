@@ -11,8 +11,13 @@ import {
 } from "vitest";
 import { api, internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
+import type { MutationCtx } from "./_generated/server.js";
 import schema from "./schema.js";
-import { DEFAULT_MAX_PARALLELISM, getCurrentSegment } from "./shared.js";
+import {
+  DEFAULT_MAX_PARALLELISM,
+  getCurrentSegment,
+  getNextSegment,
+} from "./shared.js";
 import { STATUS_COOLDOWN } from "./loop.js";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -163,6 +168,71 @@ describe("loop", () => {
 
   async function statusOf(workId: Id<"work">) {
     return t.query(api.lib.status, { id: workId });
+  }
+
+  /** Insert a bare internalState row with optional overrides. */
+  async function insertInternalState(
+    ctx: MutationCtx,
+    overrides: Partial<{
+      running: {
+        workId: Id<"work">;
+        scheduledId: Id<"_scheduled_functions">;
+        started: number;
+      }[];
+    }> = {},
+  ) {
+    await ctx.db.insert("internalState", {
+      generation: 1n,
+      segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
+      lastRecovery: 0n,
+      report: {
+        completed: 0,
+        succeeded: 0,
+        failed: 0,
+        retries: 0,
+        canceled: 0,
+        lastReportTs: Date.now(),
+      },
+      running: overrides.running ?? [],
+    });
+  }
+
+  /** Create a minimal work doc. */
+  async function makeDummyWork(
+    ctx: MutationCtx,
+    overrides: Partial<WithoutSystemFields<Doc<"work">>> = {},
+  ): Promise<Id<"work">> {
+    return ctx.db.insert("work", {
+      fnType: "action",
+      fnHandle: "test_handle",
+      fnName: "test_handle",
+      fnArgs: {},
+      attempts: 0,
+      ...overrides,
+    });
+  }
+
+  /** Schedule a dummy worker for a given workId. */
+  async function makeDummyScheduledFunction(
+    ctx: MutationCtx,
+    workId: Id<"work">,
+  ): Promise<Id<"_scheduled_functions">> {
+    return ctx.scheduler.runAfter(0, internal.worker.runActionWrapper, {
+      workId,
+      fnHandle: "test_handle",
+      fnArgs: {},
+      logLevel: "WARN",
+      attempt: 0,
+    });
+  }
+
+  /** Update globals.maxParallelism. */
+  async function setMaxParallelism(n: number) {
+    await t.run(async (ctx) => {
+      const g = await ctx.db.query("globals").unique();
+      assert(g);
+      await ctx.db.patch("globals", g._id, { maxParallelism: n });
+    });
   }
 
   // ────────────────────────────────────────────────────────────────────
@@ -375,6 +445,94 @@ describe("loop", () => {
       expect(o.pendingStart).toHaveLength(0);
       const work = await t.run(async (ctx) => ctx.db.get("work", workId));
       expect(work?.canceled).toBe(true);
+    });
+
+    it("reschedules transient query failures even with no retryBehavior", async () => {
+      const workId = await t.run<Id<"work">>(async (ctx) => {
+        await insertInternalState(ctx);
+        await ctx.db.insert("runStatus", { state: { kind: "running" } });
+        const workId = await makeDummyWork(ctx, { fnType: "query" });
+        const scheduledId = await makeDummyScheduledFunction(ctx, workId);
+        const state = await ctx.db.query("internalState").unique();
+        assert(state);
+        await ctx.db.patch(state._id, {
+          running: [{ workId, scheduledId, started: Date.now() }],
+        });
+        return workId;
+      });
+
+      // Recovery-style transient failure with no retryBehavior on work.
+      await t.mutation(internal.complete.complete, {
+        jobs: [
+          {
+            workId,
+            runResult: { kind: "failed", error: "transient" },
+            attempt: 0,
+            transient: true,
+          },
+        ],
+      });
+
+      await t.run(async (ctx) => {
+        const pcs = await ctx.db.query("pendingCompletion").collect();
+        expect(pcs).toHaveLength(1);
+        expect(pcs[0].retry).toBe(true);
+        expect(pcs[0].transient).toBe(true);
+      });
+
+      await t.mutation(internal.loop.main, {
+        generation: 1n,
+        segment: getNextSegment(),
+      });
+
+      await t.run(async (ctx) => {
+        const pendingStarts = await ctx.db.query("pendingStart").collect();
+        expect(pendingStarts).toHaveLength(1);
+        expect(pendingStarts[0].workId).toBe(workId);
+        const work = await ctx.db.get(workId);
+        // attempts unchanged for transient retry.
+        expect(work?.attempts).toBe(0);
+      });
+    });
+
+    it("does not reschedule transient retry if work has been canceled", async () => {
+      const workId = await t.run<Id<"work">>(async (ctx) => {
+        await insertInternalState(ctx);
+        await ctx.db.insert("runStatus", { state: { kind: "running" } });
+        const workId = await makeDummyWork(ctx, {
+          fnType: "query",
+          canceled: true,
+        });
+        const scheduledId = await makeDummyScheduledFunction(ctx, workId);
+        const state = await ctx.db.query("internalState").unique();
+        assert(state);
+        await ctx.db.patch(state._id, {
+          running: [{ workId, scheduledId, started: Date.now() }],
+        });
+        return workId;
+      });
+
+      await t.mutation(internal.complete.complete, {
+        jobs: [
+          {
+            workId,
+            runResult: { kind: "failed", error: "transient" },
+            attempt: 0,
+            transient: true,
+          },
+        ],
+      });
+
+      await t.mutation(internal.loop.main, {
+        generation: 1n,
+        segment: getNextSegment(),
+      });
+
+      await t.run(async (ctx) => {
+        // Cancellation short-circuits even transient retries.
+        const pendingStarts = await ctx.db.query("pendingStart").collect();
+        expect(pendingStarts).toHaveLength(0);
+      });
     });
   });
 
@@ -721,6 +879,179 @@ describe("loop", () => {
       // Work is still in running (recovery removes it via complete, which
       // happens in a separately-scheduled mutation).
       expect(after.running.map((r) => r.workId)).toContain(workId);
+    });
+  });
+
+  describe("status transitions", () => {
+    it("should transition from idle to running when work is enqueued", async () => {
+      // Setup initial idle state
+      await t.run(async (ctx) => {
+        // Create internal state
+        await insertInternalState(ctx);
+
+        // Create idle runStatus
+        await ctx.db.insert("runStatus", {
+          state: { kind: "idle", generation: 1n },
+        });
+      });
+
+      // Enqueue work
+      await t.mutation(api.lib.enqueue, {
+        fnHandle: "testHandle",
+        fnName: "testFunction",
+        fnArgs: { test: true },
+        fnType: "mutation",
+        runAt: Date.now(),
+        config: {
+          maxParallelism: 10,
+          logLevel: "INFO",
+        },
+      });
+
+      // Verify state transition to running
+      await t.run(async (ctx) => {
+        const runStatus = await ctx.db.query("runStatus").unique();
+        expect(runStatus).toBeDefined();
+        assert(runStatus);
+        expect(runStatus.state.kind).toBe("running");
+      });
+    });
+
+    it("should transition from running to scheduled when all work is started and there's leftover capacity", async () => {
+      // Setup initial running state with work
+      await t.run(async (ctx) => {
+        // Create internal state
+        await insertInternalState(ctx);
+
+        // Create running runStatus
+        await ctx.db.insert("runStatus", {
+          state: { kind: "running" },
+        });
+
+        // Create work
+        const workId = await makeDummyWork(ctx);
+
+        // Create pendingStart
+        await ctx.db.insert("pendingStart", {
+          workId,
+          segment: 1n,
+        });
+      });
+
+      // Run main loop to process the work
+      await t.mutation(internal.loop.main, {
+        generation: 1n,
+        segment: getNextSegment(),
+      });
+
+      // Advance clock past the 5s cooldown so cursors are stale
+      vi.setSystemTime(Date.now() + STATUS_COOLDOWN + 1000);
+
+      // Run updateRunStatus to transition to scheduled
+      await t.mutation(internal.loop.updateRunStatus, {
+        generation: 2n,
+        segment: getNextSegment(),
+      });
+
+      // Verify state transition to scheduled
+      await t.run(async (ctx) => {
+        const runStatus = await ctx.db.query("runStatus").unique();
+        expect(runStatus).toBeDefined();
+        assert(runStatus);
+        expect(runStatus.state.kind).toBe("scheduled");
+        assert(runStatus.state.kind === "scheduled");
+        expect(runStatus.state.saturated).toBe(false);
+      });
+    });
+
+    it("should transition from running to saturated when maxed out", async () => {
+      // Setup initial running state with max capacity
+      await setMaxParallelism(1);
+      const segment = getCurrentSegment();
+      await t.run(async (ctx) => {
+        // Create work item
+        const workId = await makeDummyWork(ctx);
+
+        // Schedule a function and get its ID
+        const scheduledId = await makeDummyScheduledFunction(ctx, workId);
+
+        // Create internal state with running job
+        await insertInternalState(ctx, {
+          running: [{ workId, scheduledId, started: Date.now() }],
+        });
+
+        // Create running runStatus
+        await ctx.db.insert("runStatus", {
+          state: { kind: "running" },
+        });
+
+        // Create another pendingStart to exceed capacity
+        const anotherWorkId = await makeDummyWork(ctx);
+
+        await ctx.db.insert("pendingStart", {
+          workId: anotherWorkId,
+          segment,
+        });
+      });
+
+      // Run updateRunStatus to transition to scheduled with saturated=true
+      await t.mutation(internal.loop.updateRunStatus, {
+        generation: 1n,
+        segment,
+      });
+
+      // Verify state transition to scheduled with saturated=true
+      await t.run(async (ctx) => {
+        const runStatus = await ctx.db.query("runStatus").unique();
+        expect(runStatus).toBeDefined();
+        assert(runStatus);
+        expect(runStatus.state.kind).toBe("scheduled");
+        assert(runStatus.state.kind === "scheduled");
+        expect(runStatus.state.saturated).toBe(true);
+      });
+    });
+
+    it("should transition from scheduled to running when new work is enqueued", async () => {
+      // Setup initial scheduled state: internalState + a future main call
+      // recorded in runStatus as "scheduled".
+      await t.run(async (ctx) => {
+        await insertInternalState(ctx);
+        const scheduledId = await ctx.scheduler.runAfter(
+          1000,
+          internal.loop.main,
+          { generation: 1n, segment: getNextSegment() + 10n },
+        );
+        await ctx.db.insert("runStatus", {
+          state: {
+            kind: "scheduled",
+            segment: getNextSegment() + 10n,
+            scheduledId,
+            saturated: false,
+            generation: 1n,
+          },
+        });
+      });
+
+      // Enqueue new work — this should kick the loop to "running".
+      await t.mutation(api.lib.enqueue, {
+        fnHandle: "testHandle",
+        fnName: "testFunction",
+        fnArgs: { test: true },
+        fnType: "mutation",
+        runAt: Date.now(),
+        config: {
+          maxParallelism: 10,
+          logLevel: "INFO",
+        },
+      });
+
+      // Verify the runStatus transitioned to running.
+      await t.run(async (ctx) => {
+        const runStatus = await ctx.db.query("runStatus").unique();
+        expect(runStatus).toBeDefined();
+        assert(runStatus);
+        expect(runStatus.state.kind).toBe("running");
+      });
     });
   });
 

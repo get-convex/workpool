@@ -25,6 +25,11 @@ const completeArgs = v.object({
       nonRetryable: v.optional(v.boolean()),
       // TODO: need to be careful about removing this field later
       runOnCompleteInline: v.optional(v.boolean()),
+      // Set by recovery for action wrappers whose own execution failed
+      // transiently (e.g. host loss). Bypasses maxAttempts and does not
+      // increment work.attempts so the configured retryBehavior keeps
+      // counting only against deterministic, function-thrown failures.
+      transient: v.optional(v.boolean()),
     }),
   ),
 });
@@ -42,6 +47,7 @@ export async function completeHandler(
     runResult: RunResult;
     workId: Id<"work">;
     retry: boolean;
+    transient?: boolean;
   }[] = [];
   const jobAndWorks = (
     await Promise.all(
@@ -108,8 +114,10 @@ export async function completeHandler(
 
   await Promise.all(
     ourBatch.map(async ({ work, job }) => {
-      work.attempts++;
-      await ctx.db.patch("work", work._id, { attempts: work.attempts });
+      if (!job.transient) {
+        work.attempts++;
+        await ctx.db.patch("work", work._id, { attempts: work.attempts });
+      }
       const pendingCompletion = await ctx.db
         .query("pendingCompletion")
         .withIndex("workId", (q) => q.eq("workId", job.workId))
@@ -121,9 +129,8 @@ export async function completeHandler(
       const maxAttempts = work.retryBehavior?.maxAttempts;
       const retry =
         job.runResult.kind === "failed" &&
-        !job.nonRetryable &&
-        !!maxAttempts &&
-        work.attempts < maxAttempts;
+        (job.transient ||
+          (!job.nonRetryable && !!maxAttempts && work.attempts < maxAttempts));
       if (!retry) {
         let scheduledId = undefined;
         if (work.onComplete) {
@@ -194,6 +201,7 @@ export async function completeHandler(
           runResult: stripResult(job.runResult),
           workId: job.workId,
           retry,
+          transient: job.transient,
         });
       }
     }),

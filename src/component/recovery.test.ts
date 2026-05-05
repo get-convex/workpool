@@ -461,6 +461,136 @@ describe("recovery", () => {
       });
     });
 
+    it("marks query failures as transient so they retry forever", async () => {
+      const [workId, scheduledId] = await t.run(async (ctx) => {
+        const workId = await makeDummyWork(ctx, { fnType: "query" });
+        const scheduledId = await makeDummyScheduledFunction(ctx, workId);
+        return [workId, scheduledId];
+      });
+
+      await t.run(async (ctx) => {
+        ctx.db.system.get = patchedSystemGet(ctx.db, {
+          [scheduledId]: {
+            _id: scheduledId,
+            _creationTime: Date.now(),
+            name: "internal/worker.runQueryFromActionWrapper",
+            args: [
+              {
+                workId,
+                fnHandle: "test_handle",
+                fnArgs: {},
+                logLevel: "WARN",
+                attempt: 0,
+              },
+            ],
+            scheduledTime: Date.now(),
+            state: { kind: "failed", error: "host died" },
+          },
+        });
+
+        await recoveryHandler(ctx, {
+          jobs: [{ scheduledId, workId, attempt: 0, started: Date.now() }],
+        });
+      });
+
+      await t.run(async (ctx) => {
+        const pcs = await ctx.db
+          .query("pendingCompletion")
+          .withIndex("workId", (q) => q.eq("workId", workId))
+          .collect();
+        expect(pcs).toHaveLength(1);
+        expect(pcs[0].retry).toBe(true);
+        expect(pcs[0].transient).toBe(true);
+        // Query attempts not incremented because the recovery is transient.
+        const work = await ctx.db.get(workId);
+        expect(work?.attempts).toBe(0);
+      });
+    });
+
+    it("marks query cancelations as transient too", async () => {
+      const [workId, scheduledId] = await t.run(async (ctx) => {
+        const workId = await makeDummyWork(ctx, { fnType: "query" });
+        const scheduledId = await makeDummyScheduledFunction(ctx, workId);
+        return [workId, scheduledId];
+      });
+
+      await t.run(async (ctx) => {
+        ctx.db.system.get = patchedSystemGet(ctx.db, {
+          [scheduledId]: {
+            _id: scheduledId,
+            _creationTime: Date.now(),
+            name: "internal/worker.runQueryFromActionWrapper",
+            args: [
+              {
+                workId,
+                fnHandle: "test_handle",
+                fnArgs: {},
+                logLevel: "WARN",
+                attempt: 0,
+              },
+            ],
+            scheduledTime: Date.now(),
+            state: { kind: "canceled" },
+          },
+        });
+
+        await recoveryHandler(ctx, {
+          jobs: [{ scheduledId, workId, attempt: 0, started: Date.now() }],
+        });
+      });
+
+      await t.run(async (ctx) => {
+        const pcs = await ctx.db
+          .query("pendingCompletion")
+          .withIndex("workId", (q) => q.eq("workId", workId))
+          .collect();
+        expect(pcs).toHaveLength(1);
+        expect(pcs[0].transient).toBe(true);
+      });
+    });
+
+    it("does NOT mark action failures as transient", async () => {
+      const [workId, scheduledId] = await t.run(async (ctx) => {
+        const workId = await makeDummyWork(ctx, { fnType: "action" });
+        const scheduledId = await makeDummyScheduledFunction(ctx, workId);
+        return [workId, scheduledId];
+      });
+
+      await t.run(async (ctx) => {
+        ctx.db.system.get = patchedSystemGet(ctx.db, {
+          [scheduledId]: {
+            _id: scheduledId,
+            _creationTime: Date.now(),
+            name: "internal/worker.runActionWrapper",
+            args: [
+              {
+                workId,
+                fnHandle: "test_handle",
+                fnArgs: {},
+                logLevel: "WARN",
+                attempt: 0,
+              },
+            ],
+            scheduledTime: Date.now(),
+            state: { kind: "failed", error: "boom" },
+          },
+        });
+
+        await recoveryHandler(ctx, {
+          jobs: [{ scheduledId, workId, attempt: 0, started: Date.now() }],
+        });
+      });
+
+      await t.run(async (ctx) => {
+        const pcs = await ctx.db
+          .query("pendingCompletion")
+          .withIndex("workId", (q) => q.eq("workId", workId))
+          .collect();
+        expect(pcs).toHaveLength(1);
+        expect(pcs[0].transient).toBeFalsy();
+      });
+    });
+
     it("should not process jobs with other scheduled states", async () => {
       // Create work and scheduled function
       const [workId, scheduledId] = await t.run(async (ctx) => {
