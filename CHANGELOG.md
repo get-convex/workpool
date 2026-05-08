@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.7-alpha.0
+
+- Reduces database conflict retries (OCC conflicts) from enqueuing or completing
+  work while tasks are being dispatched, improving throughput for workpools at
+  scale.
+- Fixes a race condition where a task could get recovered twice if the scheduler
+  is many minutes behind.
+
 ## 0.4.6
 
 - Fails gracefully if the work being started has already been deleted. It will
