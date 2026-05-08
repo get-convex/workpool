@@ -611,7 +611,7 @@ describe("loop", () => {
 
     it("does not start new work while saturated, even when pendingStart accumulates", async () => {
       // Demonstrates that the capacity-aware query honors the running cap:
-      // when running == max, getPendingWork returns zero starts, so new
+      // when running == max, getPending returns zero starts, so new
       // enqueues sit in pendingStart until a slot opens.
       await initialize({ maxParallelism: 2 });
       await fillRunningTo(2);
@@ -783,14 +783,14 @@ describe("loop", () => {
           workId,
           segment: getCurrentSegment(),
         });
-        const snap = await runSnapshotQuery(internal.loop.getPendingWork, {
+        const snap = await runSnapshotQuery(internal.loop.getPending, {
           completionCursor: 0n,
           cancelationCursor: 0n,
           incomingCursor: 0n,
           maxParallelism: 10,
           runningCount: 0,
         });
-        const real = await ctx.runQuery(internal.loop.getPendingWork, {
+        const real = await ctx.runQuery(internal.loop.getPending, {
           completionCursor: 0n,
           cancelationCursor: 0n,
           incomingCursor: 0n,

@@ -60,7 +60,7 @@ export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
 /**
  * Single query that returns everything the main loop needs to process.
  */
-export const getPendingWork = internalQuery({
+export const getPending = internalQuery({
   args: {
     completionCursor: v.int64(),
     cancelationCursor: v.int64(),
@@ -151,13 +151,13 @@ export const main = internalMutation({
     };
 
     // Snapshot read — no read dependency, no OCC conflicts.
-    console.time("[main] getPendingWork");
+    console.time("[main] getPending");
     const { allStarts, cancelations, completions } = await runSnapshotQuery(
-      internal.loop.getPendingWork,
+      internal.loop.getPending,
       queryArgs,
     );
     const toStart = allStarts.filter((s) => s.segment <= segment);
-    console.timeEnd("[main] getPendingWork");
+    console.timeEnd("[main] getPending");
 
     console.time("[main] pendingCompletion");
     const toCancel = await handleCompletions(ctx, state, completions, console);
@@ -236,7 +236,7 @@ export const main = internalMutation({
     // Nothing found in snapshot. Re-read with a real dependency (same args
     // for cache-hit efficiency) so a concurrent insert forces an OCC retry.
     console.debug("[main] no work — confirming with read dependency");
-    const confirm = await ctx.runQuery(internal.loop.getPendingWork, queryArgs);
+    const confirm = await ctx.runQuery(internal.loop.getPending, queryArgs);
     const confirmStarts = confirm.allStarts;
     const confirmStartsNow = confirmStarts.filter((s) => s.segment <= segment);
     const confirmFuture = confirmStarts.find((s) => s.segment > segment);
