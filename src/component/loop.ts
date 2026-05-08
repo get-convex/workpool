@@ -102,6 +102,7 @@ export const getPendingWork = internalQuery({
         : await ctx.db
             .query("pendingStart")
             .withIndex("segment", (q) => q.gte("segment", incomingCursor))
+            // eslint-disable-next-line @convex-dev/no-filter-in-query
             .filter((q) =>
               q.and(...excludedIds.map((id) => q.neq(q.field("workId"), id))),
             )
@@ -281,29 +282,7 @@ export const main = internalMutation({
         internal.loop.main,
         { generation: state.generation },
       );
-<<<<<<< HEAD
-      if (targetSegment > getNextSegment()) {
-        await ctx.db.patch("runStatus", runStatus._id, {
-          state: {
-            kind: "scheduled",
-            scheduledId,
-            saturated,
-            generation,
-            segment: targetSegment,
-          },
-        });
-      } else {
-        console.debug(
-          `[updateRunStatus] staying running because it's the next segment`,
-        );
-      }
-      return;
-    }
-    // There seems to be nothing in the future to do, so go idle.
-    await ctx.db.patch("runStatus", runStatus._id, {
-      state: { kind: "idle", generation },
-=======
-      await ctx.db.patch(runStatus._id, {
+      await ctx.db.patch("runStatus", runStatus._id, {
         state: {
           kind: "scheduled",
           scheduledId,
@@ -316,9 +295,8 @@ export const main = internalMutation({
     }
 
     // Nothing to do — go idle.
-    await ctx.db.patch(runStatus._id, {
+    await ctx.db.patch("runStatus", runStatus._id, {
       state: { kind: "idle", generation: state.generation },
->>>>>>> 6934e57 (runSnapshotQuery)
     });
   },
 });

@@ -17,6 +17,7 @@ import {
   DEFAULT_MAX_PARALLELISM,
   getCurrentSegment,
   getNextSegment,
+  SECOND,
 } from "./shared.js";
 import { RECOVERY_PERIOD_SEGMENTS } from "./loop.js";
 
@@ -219,7 +220,10 @@ describe("state machine", () => {
       segment?: bigint;
     },
   ): Promise<{ workId: Id<"work">; segment: bigint }> {
-    const seg = opts?.segment ?? getNextSegment();
+    // Default to the current segment so pendingStart entries are eligible
+    // to start in the same iteration; main reads pendingStart with
+    // segment <= getCurrentSegment().
+    const seg = opts?.segment ?? getCurrentSegment();
     const workId = await t.run<Id<"work">>(async (ctx) => {
       let wId: Id<"work">;
       if (state.work) {
@@ -801,7 +805,7 @@ describe("state machine", () => {
 
   describe("multi-step / interleaved transitions", () => {
     it("completion + new enqueue -> main processes both in one pass", async () => {
-      const seg = getNextSegment();
+      const seg = getCurrentSegment();
       const { workId: w1 } = await setupState(S1_ENQUEUED, { segment: seg });
       await runMain(seg);
       // w1 is now running
@@ -831,7 +835,7 @@ describe("state machine", () => {
     });
 
     it("two jobs complete(retry) before main -> main retries both", async () => {
-      const seg = getNextSegment();
+      const seg = getCurrentSegment();
       const ids = await t.run(async (ctx) => {
         const w1 = await ctx.db.insert("work", {
           fnType: "action",
@@ -904,16 +908,21 @@ describe("state machine", () => {
       expect(s1Before.pendingCompletion.retry).toBe(true);
       expect(s2Before.pendingCompletion.retry).toBe(true);
 
-      // Now main processes both completions
+      // First main pass: process pendingCompletions, queue retry
+      // pendingStart entries (segment = now + jittered backoff, so they
+      // can land in the next segment and be ineligible this iteration).
       await runMain(seg);
+      // Advance past the retry backoff window so the retry pendingStart
+      // segments are <= getCurrentSegment().
+      vi.setSystemTime(Date.now() + SECOND);
+      await runMain(getCurrentSegment());
+
       const s1After = await observeState(ids.w1);
       const s2After = await observeState(ids.w2);
 
-      // Both pendingCompletions should be consumed
+      // Both pendingCompletions consumed and retries are running.
       expect(s1After.pendingCompletion).toBe(false);
       expect(s2After.pendingCompletion).toBe(false);
-      // With small backoff (100ms), retry pendingStarts are immediately picked up
-      // by handleStart in the same main pass, so both jobs are running again
       expect(s1After.running).toBe(true);
       expect(s2After.running).toBe(true);
       expect(s1After.pendingStart).toBe(false);
@@ -1057,7 +1066,7 @@ describe("state machine", () => {
     });
 
     it("main crash recovery: state recoverable after restart", async () => {
-      const seg = getNextSegment();
+      const seg = getCurrentSegment();
       const { workId } = await setupState(S1_ENQUEUED, { segment: seg });
 
       await runMain(seg);
@@ -1066,7 +1075,7 @@ describe("state machine", () => {
       await runComplete(workId, { kind: "success" }, 0);
 
       // New main picks up completion
-      const seg2 = getNextSegment();
+      const seg2 = getCurrentSegment();
       await runMain(seg2);
       const s = await observeState(workId);
       expect(s.work).toBe(false);
@@ -1074,7 +1083,7 @@ describe("state machine", () => {
     });
 
     it("all three pending queues populated -> main processes all in order", async () => {
-      const seg = getNextSegment();
+      const seg = getCurrentSegment();
       const ids = await t.run(async (ctx) => {
         // Job 1: in running, has pendingCompletion
         const w1 = await ctx.db.insert("work", {
