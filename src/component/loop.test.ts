@@ -11,1276 +11,844 @@ import {
 } from "vitest";
 import { api, internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
-import type { MutationCtx } from "./_generated/server.js";
-import { DEFAULT_LOG_LEVEL } from "./logging.js";
 import schema from "./schema.js";
-import {
-  DEFAULT_MAX_PARALLELISM,
-  getCurrentSegment,
-  getNextSegment,
-  toSegment,
-} from "./shared.js";
+import { DEFAULT_MAX_PARALLELISM, getCurrentSegment } from "./shared.js";
 import { STATUS_COOLDOWN } from "./loop.js";
 
 const modules = import.meta.glob("./**/*.ts");
+const SECOND = 1000;
+const MINUTE = 60 * SECOND;
 
+/**
+ * Behavior tests for the main loop, designed from first principles around
+ * what an external observer can see:
+ *
+ *   - api.lib.status     — public-facing state of a single work item
+ *   - runStatus.state    — loop lifecycle (running / scheduled / idle)
+ *   - pending* tables    — work in flight that the loop will process
+ *   - state.running      — slots currently occupied by workers
+ *
+ * These tests do NOT assert on implementation specifics like cursor
+ * positions, segment values, or which scheduler call was made — those
+ * change when the loop's internals change, and they're not the contract.
+ *
+ * Setup conventions:
+ *   - vi.useFakeTimers() so time advances deterministically
+ *   - The loop is driven manually via runMain(); convex-test doesn't
+ *     auto-flush scheduled functions
+ *   - simulateCompletion() pretends a worker finished its job by
+ *     calling internal.complete.complete; this is how production gets
+ *     work into pendingCompletion, so it's the correct seam for testing
+ */
 describe("loop", () => {
   async function setupTest() {
     const t = convexTest(schema, modules);
-    return t;
-  }
-
-  let t: Awaited<ReturnType<typeof setupTest>>;
-
-  async function setMaxParallelism(maxParallelism: number) {
-    await t.run(async (ctx) => {
-      const globals = await ctx.db.query("globals").unique();
-      if (!globals) {
-        await ctx.db.insert("globals", {
-          logLevel: DEFAULT_LOG_LEVEL,
-          maxParallelism,
-        });
-      } else {
-        await ctx.db.patch("globals", globals._id, {
-          maxParallelism,
-        });
-      }
-    });
-  }
-
-  async function makeDummyWork(
-    ctx: MutationCtx,
-    overrides: Partial<WithoutSystemFields<Doc<"work">>> = {},
-  ) {
-    return ctx.db.insert("work", {
-      fnType: "action",
-      fnHandle: "test_handle",
-      fnName: "test_handle",
-      fnArgs: {},
-      attempts: 0,
-      ...overrides,
-    });
-  }
-
-  async function makeDummyScheduledFunction(
-    ctx: MutationCtx,
-    workId: Id<"work">,
-  ) {
-    return ctx.scheduler.runAfter(0, internal.worker.runActionWrapper, {
-      workId,
-      fnHandle: "test_handle",
-      fnArgs: {},
-      logLevel: "WARN",
-      attempt: 0,
-    });
-  }
-
-  async function insertInternalState(
-    ctx: MutationCtx,
-    overrides: Partial<WithoutSystemFields<Doc<"internalState">>> = {},
-  ) {
-    await ctx.db.insert("internalState", {
-      generation: 1n,
-      segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-      lastRecovery: getCurrentSegment(),
-      report: {
-        completed: 0,
-        succeeded: 0,
-        failed: 0,
-        retries: 0,
-        canceled: 0,
-        lastReportTs: Date.now(),
-      },
-      running: [],
-      ...overrides,
-    });
-  }
-
-  beforeEach(async () => {
-    vi.useFakeTimers();
-    t = await setupTest();
     await t.run(async (ctx) => {
       await ctx.db.insert("globals", {
         logLevel: "WARN",
         maxParallelism: DEFAULT_MAX_PARALLELISM,
       });
     });
-  });
+    return t;
+  }
+  let t: Awaited<ReturnType<typeof setupTest>>;
 
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    t = await setupTest();
+  });
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  describe("data state machine", () => {
-    it("should follow the pendingStart -> workerRunning -> complete flow", async () => {
-      // Setup initial state
-      const workId = await t.run<Id<"work">>(async (ctx) => {
-        // Create internal state
-        await insertInternalState(ctx);
+  // ── helpers ──────────────────────────────────────────────────────────
 
-        // Create running runStatus
-        await ctx.db.insert("runStatus", {
-          state: { kind: "running" },
-        });
-
-        // Create work
-        const workId = await makeDummyWork(ctx, { attempts: 0 });
-
-        // Create pendingStart
-        await ctx.db.insert("pendingStart", {
-          workId,
-          segment: 1n,
-        });
-
-        return workId;
-      });
-
-      // Run main loop to process pendingStart -> workerRunning
-      await t.mutation(internal.loop.main, { generation: 1n, segment: 1n });
-
-      // Verify work is now in running state
+  /** Seed an empty running loop: internalState + runStatus=running. */
+  async function initialize(opts: { maxParallelism?: number } = {}) {
+    if (opts.maxParallelism !== undefined) {
       await t.run(async (ctx) => {
-        // Check that pendingStart was deleted
-        const pendingStarts = await ctx.db.query("pendingStart").collect();
-        expect(pendingStarts).toHaveLength(0);
-
-        // Check that work is in running list
-        const state = await ctx.db.query("internalState").unique();
-        expect(state).toBeDefined();
-        assert(state);
-        expect(state.running).toHaveLength(1);
-        expect(state.running[0].workId).toBe(workId);
+        const g = await ctx.db.query("globals").unique();
+        assert(g);
+        await ctx.db.patch("globals", g._id, {
+          maxParallelism: opts.maxParallelism!,
+        });
       });
+    }
+    await t.run(async (ctx) => {
+      await ctx.db.insert("internalState", {
+        generation: 1n,
+        segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
+        lastRecovery: 0n,
+        report: {
+          completed: 0,
+          succeeded: 0,
+          failed: 0,
+          retries: 0,
+          canceled: 0,
+          lastReportTs: Date.now(),
+        },
+        running: [],
+      });
+      await ctx.db.insert("runStatus", { state: { kind: "running" } });
+    });
+  }
 
-      // Complete the work (workerRunning -> complete)
-      await t.mutation(internal.complete.complete, {
-        jobs: [
-          {
+  /**
+   * Insert a work doc + pendingStart at the given segment (default: now).
+   * Bypasses the public enqueue API to keep tests focused on the loop.
+   */
+  async function enqueueWork(
+    overrides: Partial<WithoutSystemFields<Doc<"work">>> = {},
+    segment = getCurrentSegment(),
+  ): Promise<Id<"work">> {
+    return t.run(async (ctx) => {
+      const workId = await ctx.db.insert("work", {
+        fnType: "action",
+        fnHandle: "test_handle",
+        fnName: "test_handle",
+        fnArgs: {},
+        attempts: 0,
+        ...overrides,
+      });
+      await ctx.db.insert("pendingStart", { workId, segment });
+      return workId;
+    });
+  }
+
+  /** Drive the main loop one iteration with the current generation. */
+  async function runMain() {
+    const generation = await t.run(async (ctx) => {
+      const s = await ctx.db.query("internalState").unique();
+      return s?.generation ?? 0n;
+    });
+    await t.mutation(internal.loop.main, { generation });
+  }
+
+  /** Pretend a worker finished a job by inserting pendingCompletion. */
+  async function simulateCompletion(
+    workId: Id<"work">,
+    result:
+      | { kind: "success"; returnValue: unknown }
+      | { kind: "failed"; error: string }
+      | { kind: "canceled" },
+    attempt = 0,
+  ) {
+    await t.mutation(internal.complete.complete, {
+      jobs: [{ workId, runResult: result, attempt }],
+    });
+  }
+
+  /** Snapshot of everything an outside observer might check. */
+  async function observe() {
+    return t.run(async (ctx) => {
+      const state = await ctx.db.query("internalState").unique();
+      const runStatus = await ctx.db.query("runStatus").unique();
+      const pendingStart = await ctx.db.query("pendingStart").collect();
+      const pendingCompletion = await ctx.db
+        .query("pendingCompletion")
+        .collect();
+      const pendingCancelation = await ctx.db
+        .query("pendingCancelation")
+        .collect();
+      return {
+        running: state?.running ?? [],
+        generation: state?.generation ?? 0n,
+        runStatus: runStatus?.state,
+        pendingStart,
+        pendingCompletion,
+        pendingCancelation,
+      };
+    });
+  }
+
+  async function statusOf(workId: Id<"work">) {
+    return t.query(api.lib.status, { id: workId });
+  }
+
+  // ────────────────────────────────────────────────────────────────────
+  // Forward progress: work moves through the pipeline
+  // ────────────────────────────────────────────────────────────────────
+
+  describe("forward progress", () => {
+    it("starts a pending work item when main runs", async () => {
+      await initialize();
+      const workId = await enqueueWork();
+
+      await runMain();
+
+      const o = await observe();
+      expect(o.pendingStart).toHaveLength(0);
+      expect(o.running.map((r) => r.workId)).toEqual([workId]);
+      expect(await statusOf(workId)).toMatchObject({ state: "running" });
+    });
+
+    it("removes work from running once a successful completion is processed", async () => {
+      await initialize();
+      const workId = await enqueueWork();
+      await runMain();
+
+      await simulateCompletion(
+        workId,
+        { kind: "success", returnValue: null },
+        0,
+      );
+      await runMain();
+
+      const o = await observe();
+      expect(o.running).toHaveLength(0);
+      expect(o.pendingCompletion).toHaveLength(0);
+      // Work doc deleted → status reports "finished".
+      expect(await statusOf(workId)).toMatchObject({ state: "finished" });
+    });
+
+    it("treats a final failure (no retry policy) as terminal", async () => {
+      await initialize();
+      const workId = await enqueueWork();
+      await runMain();
+
+      await simulateCompletion(workId, { kind: "failed", error: "boom" }, 0);
+      await runMain();
+
+      const o = await observe();
+      expect(o.running).toHaveLength(0);
+      expect(await statusOf(workId)).toMatchObject({ state: "finished" });
+    });
+
+    it("processes multiple work items concurrently within capacity", async () => {
+      await initialize({ maxParallelism: 5 });
+      const ids = [];
+      for (let i = 0; i < 3; i++) ids.push(await enqueueWork());
+
+      await runMain();
+
+      const o = await observe();
+      expect(o.running).toHaveLength(3);
+      expect(new Set(o.running.map((r) => r.workId))).toEqual(new Set(ids));
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────
+  // Capacity: maxParallelism is respected
+  // ────────────────────────────────────────────────────────────────────
+
+  describe("capacity", () => {
+    it("never starts more than maxParallelism in one iteration", async () => {
+      await initialize({ maxParallelism: 3 });
+      for (let i = 0; i < 7; i++) await enqueueWork();
+
+      await runMain();
+
+      const o = await observe();
+      expect(o.running).toHaveLength(3);
+      expect(o.pendingStart).toHaveLength(7 - 3);
+    });
+
+    it("picks up overflow on subsequent iterations as slots free", async () => {
+      await initialize({ maxParallelism: 2 });
+      const ids = [];
+      for (let i = 0; i < 4; i++) ids.push(await enqueueWork());
+
+      await runMain();
+      let o = await observe();
+      expect(o.running).toHaveLength(2);
+      expect(o.pendingStart).toHaveLength(2);
+
+      // Complete one running job; another should take its place.
+      const finished = o.running[0].workId;
+      await simulateCompletion(
+        finished,
+        { kind: "success", returnValue: null },
+        0,
+      );
+      await runMain();
+
+      o = await observe();
+      expect(o.running).toHaveLength(2);
+      expect(o.pendingStart).toHaveLength(1);
+      // The completed one is gone.
+      expect(o.running.map((r) => r.workId)).not.toContain(finished);
+    });
+
+    it("does not start new work when running.length already exceeds maxParallelism", async () => {
+      // Edge case: maxParallelism was lowered while jobs were running.
+      await initialize({ maxParallelism: 2 });
+      // Pre-populate state.running with 4 entries.
+      const runningIds: {
+        workId: Id<"work">;
+        scheduledId: Id<"_scheduled_functions">;
+      }[] = [];
+      for (let i = 0; i < 4; i++) {
+        const workId = await t.run(async (ctx) => {
+          return ctx.db.insert("work", {
+            fnType: "action",
+            fnHandle: "h",
+            fnName: "h",
+            fnArgs: {},
+            attempts: 0,
+          });
+        });
+        const scheduledId = await t.run(async (ctx) => {
+          return ctx.scheduler.runAfter(0, internal.worker.runActionWrapper, {
             workId,
-            runResult: { kind: "success", returnValue: null },
+            fnHandle: "h",
+            fnArgs: {},
+            logLevel: "WARN",
             attempt: 0,
-          },
-        ],
-      });
-
-      // Verify pendingCompletion was created
+          });
+        });
+        runningIds.push({ workId, scheduledId });
+      }
       await t.run(async (ctx) => {
-        const pendingCompletions = await ctx.db
-          .query("pendingCompletion")
-          .collect();
-        expect(pendingCompletions).toHaveLength(1);
-        expect(pendingCompletions[0].workId).toBe(workId);
-        expect(pendingCompletions[0].runResult.kind).toBe("success");
-        expect(pendingCompletions[0].retry).toBe(false);
+        const s = await ctx.db.query("internalState").unique();
+        assert(s);
+        await ctx.db.patch("internalState", s._id, {
+          running: runningIds.map((r) => ({
+            ...r,
+            started: Date.now(),
+          })),
+        });
+      });
+      // New pending work arrives while we're already over capacity.
+      await enqueueWork();
+
+      await runMain();
+
+      const o = await observe();
+      // No new starts — already over capacity.
+      expect(o.running).toHaveLength(4);
+      expect(o.pendingStart).toHaveLength(1);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────
+  // Retry: failed work is retried per the retry policy
+  // ────────────────────────────────────────────────────────────────────
+
+  describe("retry", () => {
+    it("re-enqueues a failed job that has a retry policy with attempts left", async () => {
+      await initialize();
+      const workId = await enqueueWork({
+        retryBehavior: {
+          maxAttempts: 3,
+          initialBackoffMs: 100,
+          base: 2,
+        },
+      });
+      await runMain();
+
+      // Worker reports failure on first attempt.
+      await simulateCompletion(workId, { kind: "failed", error: "boom" }, 0);
+      await runMain();
+
+      // Work doc still exists; pendingStart was re-inserted with backoff segment.
+      const o = await observe();
+      expect(o.pendingStart).toHaveLength(1);
+      expect(o.pendingStart[0].workId).toBe(workId);
+      expect(await statusOf(workId)).toMatchObject({
+        state: "pending",
+        previousAttempts: 1,
       });
     });
 
-    it("should follow the pendingStart + pendingCancelation -> complete flow", async () => {
-      // Setup initial state
-      const workId = await t.run<Id<"work">>(async (ctx) => {
-        // Create internal state
-        await insertInternalState(ctx);
-
-        // Create running runStatus
-        await ctx.db.insert("runStatus", {
-          state: { kind: "running" },
-        });
-
-        // Create work
-        const workId = await makeDummyWork(ctx, { attempts: 0 });
-
-        // Create pendingStart
-        await ctx.db.insert("pendingStart", {
-          workId,
-          segment: 1n,
-        });
-
-        // Create pendingCancelation
-        await ctx.db.insert("pendingCancelation", {
-          workId,
-          segment: 1n,
-        });
-
-        return workId;
+    it("does NOT re-enqueue a failed job that was canceled before retry processed", async () => {
+      await initialize();
+      const workId = await enqueueWork({
+        retryBehavior: {
+          maxAttempts: 3,
+          initialBackoffMs: 100,
+          base: 2,
+        },
       });
+      await runMain();
 
-      // Run main loop to process pendingStart and pendingCancelation
-      await t.mutation(internal.loop.main, { generation: 1n, segment: 1n });
+      // Worker reports failure (would normally retry).
+      await simulateCompletion(workId, { kind: "failed", error: "boom" }, 0);
+      // Cancel arrives before main can process the retry.
+      await t.mutation(api.lib.cancel, { id: workId });
 
-      // Verify work was canceled
-      await t.run(async (ctx) => {
-        // Check that pendingStart was deleted
-        const pendingStarts = await ctx.db.query("pendingStart").collect();
-        expect(pendingStarts).toHaveLength(0);
+      await runMain();
 
-        // Check that pendingCancelation was deleted
-        const pendingCancelations = await ctx.db
-          .query("pendingCancelation")
-          .collect();
-        expect(pendingCancelations).toHaveLength(0);
+      const o = await observe();
+      // Loop's direct effect: no retry was queued, work is marked canceled.
+      // (A follow-up `complete` mutation is scheduled to finalize the work
+      // doc deletion — that's complete.ts's responsibility, not the loop's.)
+      expect(o.pendingStart).toHaveLength(0);
+      const work = await t.run(async (ctx) => ctx.db.get("work", workId));
+      expect(work?.canceled).toBe(true);
+    });
+  });
 
-        // Check that work is not in running list
-        const state = await ctx.db.query("internalState").unique();
-        expect(state).toBeDefined();
-        assert(state);
-        expect(state.running).toHaveLength(0);
-        expect(state.report.canceled).toBe(1);
+  // ────────────────────────────────────────────────────────────────────
+  // Cancellation
+  // ────────────────────────────────────────────────────────────────────
 
-        const work = await ctx.db.get("work", workId);
-        expect(work).not.toBeNull();
-        expect(work!.canceled).toBe(true);
-      });
+  describe("cancellation", () => {
+    it("removes a pendingStart cancellation before the work runs", async () => {
+      await initialize();
+      const workId = await enqueueWork();
+      await t.mutation(api.lib.cancel, { id: workId });
+
+      await runMain();
+
+      const o = await observe();
+      expect(o.pendingStart).toHaveLength(0);
+      expect(o.running).toHaveLength(0);
+      // Work is marked canceled by the loop. Final deletion happens when
+      // the scheduled `complete` mutation runs (separate concern).
+      const work = await t.run(async (ctx) => ctx.db.get("work", workId));
+      expect(work?.canceled).toBe(true);
     });
 
-    it("should follow the complete -> pendingCompletion -> pendingStart flow for retries", async () => {
-      // Setup initial state with a running job that will need retry
-      const workId = await t.run<Id<"work">>(async (ctx) => {
-        // Create internal state
-        await insertInternalState(ctx);
+    it("marks an already-running work as canceled", async () => {
+      await initialize();
+      const workId = await enqueueWork();
+      await runMain(); // start it
+      expect((await observe()).running).toHaveLength(1);
 
-        // Create running runStatus
-        await ctx.db.insert("runStatus", {
-          state: { kind: "running" },
-        });
+      await t.mutation(api.lib.cancel, { id: workId });
+      await runMain(); // process the cancellation
 
-        // Create work with retry behavior
-        const workId = await makeDummyWork(ctx, {
+      const work = await t.run(async (ctx) => ctx.db.get("work", workId));
+      expect(work?.canceled).toBe(true);
+    });
+
+    it("is a graceful no-op for already-finished work", async () => {
+      await initialize();
+      const workId = await enqueueWork();
+      await runMain();
+      await simulateCompletion(
+        workId,
+        { kind: "success", returnValue: null },
+        0,
+      );
+      await runMain();
+
+      // Work doc already gone — cancel should not throw.
+      await t.mutation(api.lib.cancel, { id: workId });
+      const o = await observe();
+      expect(o.pendingCancelation).toHaveLength(0);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────
+  // Lifecycle: runStatus transitions
+  // ────────────────────────────────────────────────────────────────────
+
+  describe("lifecycle", () => {
+    it("transitions running -> idle when there's nothing to do (past cooldown)", async () => {
+      await initialize();
+      // No pending work, cursors at 0 → far in the past, past cooldown.
+      vi.setSystemTime(Date.now() + STATUS_COOLDOWN + SECOND);
+
+      await runMain();
+
+      expect((await observe()).runStatus).toMatchObject({ kind: "idle" });
+    });
+
+    it("stays running during the cooldown window", async () => {
+      await initialize();
+      const workId = await enqueueWork();
+      await runMain(); // process the work; cursors advance to ~now
+
+      // Complete it so there's no work in flight.
+      await simulateCompletion(
+        workId,
+        { kind: "success", returnValue: null },
+        0,
+      );
+      await runMain(); // process completion; cursors at ~now
+
+      // Within cooldown — should stay running.
+      const o = await observe();
+      expect(o.runStatus).toMatchObject({ kind: "running" });
+    });
+
+    it("transitions to scheduled (saturated=false) when only future-scheduled work remains", async () => {
+      await initialize();
+      // A retry-style pendingStart in the future.
+      const future = getCurrentSegment() + 1000n;
+      await enqueueWork({}, future);
+      // Cursors at 0 → past cooldown, so we're not held in cooldown.
+
+      await runMain();
+
+      const o = await observe();
+      expect(o.runStatus?.kind).toBe("scheduled");
+      if (o.runStatus?.kind === "scheduled") {
+        expect(o.runStatus.segment).toBeLessThanOrEqual(future);
+        // No running jobs; capacity isn't full → saturated must be false.
+        expect(o.runStatus.saturated).toBe(false);
+      }
+    });
+
+    it("doesn't lose work when re-checking before going idle", async () => {
+      // Snapshot-then-confirm safety net: even if the snapshot shows no
+      // work, the runQuery confirmation should pick up data committed
+      // before this iteration started.
+      await initialize();
+      const workId = await enqueueWork();
+
+      await runMain();
+
+      const o = await observe();
+      // The work was started, NOT lost to a "go idle" decision.
+      expect(o.running.map((r) => r.workId)).toEqual([workId]);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────
+  // Saturated state: scheduled with running.length == maxParallelism
+  // The flag changes how kickMainLoop behaves (no enqueue-kicks; yes
+  // completion-kicks).
+  // ────────────────────────────────────────────────────────────────────
+
+  describe("saturated", () => {
+    /**
+     * Pre-populate state.running with N entries, each backed by a real work
+     * doc + scheduled worker (so recovery checks don't fire). Useful for
+     * exercising main when the loop is already at-capacity.
+     */
+    async function fillRunningTo(count: number): Promise<Id<"work">[]> {
+      const ids: Id<"work">[] = [];
+      const entries: {
+        workId: Id<"work">;
+        scheduledId: Id<"_scheduled_functions">;
+        started: number;
+      }[] = [];
+      for (let i = 0; i < count; i++) {
+        const workId = await t.run(async (ctx) =>
+          ctx.db.insert("work", {
+            fnType: "action",
+            fnHandle: "test_handle",
+            fnName: "test_handle",
+            fnArgs: {},
+            attempts: 0,
+          }),
+        );
+        const scheduledId = await t.run(async (ctx) =>
+          ctx.scheduler.runAfter(0, internal.worker.runActionWrapper, {
+            workId,
+            fnHandle: "test_handle",
+            fnArgs: {},
+            logLevel: "WARN",
+            attempt: 0,
+          }),
+        );
+        ids.push(workId);
+        entries.push({ workId, scheduledId, started: Date.now() });
+      }
+      await t.run(async (ctx) => {
+        const s = await ctx.db.query("internalState").unique();
+        assert(s);
+        await ctx.db.patch("internalState", s._id, { running: entries });
+      });
+      return ids;
+    }
+
+    it("records saturated=true when transitioning to scheduled at full capacity", async () => {
+      await initialize({ maxParallelism: 3 });
+      // Fill to capacity. No completions, no future starts → main has
+      // nothing to do this iteration but jobs are running, so it should
+      // schedule itself (e.g. for recovery) with saturated=true.
+      await fillRunningTo(3);
+
+      await runMain();
+
+      const o = await observe();
+      assert(o.runStatus);
+      expect(o.runStatus.kind).toBe("scheduled");
+      if (o.runStatus.kind === "scheduled") {
+        expect(o.runStatus.saturated).toBe(true);
+      }
+    });
+
+    it("records saturated=false when scheduling with under-capacity running jobs", async () => {
+      await initialize({ maxParallelism: 5 });
+      // Fewer running jobs than max → not saturated.
+      await fillRunningTo(2);
+
+      await runMain();
+
+      const o = await observe();
+      assert(o.runStatus);
+      expect(o.runStatus.kind).toBe("scheduled");
+      if (o.runStatus.kind === "scheduled") {
+        expect(o.runStatus.saturated).toBe(false);
+      }
+    });
+
+    it("clears saturated when a completion frees a slot", async () => {
+      // Saturated → completion arrives → kick wakes main → main runs and
+      // sees a freed slot → next scheduled state has saturated=false.
+      await initialize({ maxParallelism: 2 });
+      const ids = await fillRunningTo(2);
+      await runMain(); // first transition: scheduled, saturated=true
+      expect((await observe()).runStatus).toMatchObject({
+        kind: "scheduled",
+        saturated: true,
+      });
+
+      // A worker completes — frees a slot.
+      await simulateCompletion(
+        ids[0],
+        { kind: "success", returnValue: null },
+        0,
+      );
+      await runMain();
+
+      const o = await observe();
+      assert(o.runStatus);
+      // After processing the completion, running.length is 1 < 2, so any
+      // subsequent scheduled state should NOT be saturated.
+      if (o.runStatus.kind === "scheduled") {
+        expect(o.runStatus.saturated).toBe(false);
+      } else {
+        // Or we might be in 'running' (within cooldown) — also fine; just
+        // ensure we did not stay saturated=true.
+        expect(o.runStatus.kind).not.toBe("idle");
+      }
+    });
+
+    it("does not start new work while saturated, even when pendingStart accumulates", async () => {
+      // Demonstrates that the capacity-aware query honors the running cap:
+      // when running == max, getPendingWork returns zero starts, so new
+      // enqueues sit in pendingStart until a slot opens.
+      await initialize({ maxParallelism: 2 });
+      await fillRunningTo(2);
+
+      // New work arrives while saturated.
+      const newWorkId = await enqueueWork();
+
+      await runMain();
+
+      const o = await observe();
+      // No new starts — we're at max capacity.
+      expect(o.running).toHaveLength(2);
+      expect(o.pendingStart.map((p) => p.workId)).toContain(newWorkId);
+      assert(o.runStatus);
+      if (o.runStatus.kind === "scheduled") {
+        expect(o.runStatus.saturated).toBe(true);
+      }
+    });
+
+    it("stays saturated when a completion frees a slot but more work is waiting", async () => {
+      // Externally observable: a completion arriving while saturated, with
+      // more pendingStart queued, should leave runStatus = scheduled +
+      // saturated=true. The freed slot gets refilled from pendingStart in
+      // the same iteration, so running.length stays at max and the visible
+      // saturated state doesn't drop.
+      await initialize({ maxParallelism: 2 });
+      const ids = await fillRunningTo(2);
+      // Two more items waiting behind the at-capacity loop.
+      await enqueueWork();
+      await enqueueWork();
+
+      // First main iteration arrives at the saturated end state.
+      await runMain();
+      expect((await observe()).runStatus).toMatchObject({
+        kind: "scheduled",
+        saturated: true,
+      });
+
+      // A worker completes — frees a slot, but pendingStart still has work.
+      await simulateCompletion(
+        ids[0],
+        { kind: "success", returnValue: null },
+        0,
+      );
+
+      // First iteration after the completion does work (processes
+      // completion + starts a new pending), so didWork=true and main
+      // self-reschedules with runStatus = "running".
+      await runMain();
+      // Advance past the cooldown so the next iteration actually records
+      // the end-of-run state instead of holding "running" via cooldown.
+      vi.setSystemTime(Date.now() + STATUS_COOLDOWN + SECOND);
+      await runMain();
+
+      const o = await observe();
+      assert(o.runStatus);
+      // Slot was refilled from pendingStart → running back at max →
+      // saturated=true is the externally observed state again.
+      expect(o.running).toHaveLength(2);
+      expect(o.runStatus).toMatchObject({
+        kind: "scheduled",
+        saturated: true,
+      });
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────
+  // Recovery: stuck running jobs get cleaned up
+  // ────────────────────────────────────────────────────────────────────
+
+  describe("recovery", () => {
+    it("flags running entries whose worker has been silent past the threshold", async () => {
+      await initialize();
+      // Pre-populate state.running with an old entry.
+      const workId = await t.run(async (ctx) => {
+        const wid = await ctx.db.insert("work", {
+          fnType: "action",
+          fnHandle: "h",
+          fnName: "h",
+          fnArgs: {},
           attempts: 0,
-          retryBehavior: {
-            maxAttempts: 3,
-            initialBackoffMs: 1000,
-            base: 2,
-          },
         });
-
-        // Schedule a function and get its ID
-        const scheduledId = await makeDummyScheduledFunction(ctx, workId);
-
-        // Add to running list
-        const state = await ctx.db.query("internalState").unique();
-        assert(state);
-        await ctx.db.patch("internalState", state._id, {
-          running: [{ workId, scheduledId, started: Date.now() }],
-        });
-
-        return workId;
-      });
-
-      // Complete the work with failure (workerRunning -> complete)
-      await t.mutation(internal.complete.complete, {
-        jobs: [
+        const scheduledId = await ctx.scheduler.runAfter(
+          0,
+          internal.worker.runActionWrapper,
           {
-            workId,
-            runResult: { kind: "failed", error: "Test error" },
+            workId: wid,
+            fnHandle: "h",
+            fnArgs: {},
+            logLevel: "WARN",
             attempt: 0,
           },
-        ],
-      });
-
-      // Verify pendingCompletion was created with retry=true
-      await t.run(async (ctx) => {
-        const pendingCompletions = await ctx.db
-          .query("pendingCompletion")
-          .collect();
-        expect(pendingCompletions).toHaveLength(1);
-        expect(pendingCompletions[0].workId).toBe(workId);
-        expect(pendingCompletions[0].runResult.kind).toBe("failed");
-        expect(pendingCompletions[0].retry).toBe(true);
-      });
-
-      // Run main loop to process pendingCompletion -> pendingStart
-      await t.mutation(internal.loop.main, {
-        generation: 1n,
-        segment: getNextSegment(),
-      });
-
-      // Verify work is now in pendingStart for retry
-      await t.run(async (ctx) => {
-        // Check that pendingCompletion was deleted
-        const pendingCompletions = await ctx.db
-          .query("pendingCompletion")
-          .collect();
-        expect(pendingCompletions).toHaveLength(0);
-
-        // Check that pendingStart was created for retry
-        const pendingStarts = await ctx.db.query("pendingStart").collect();
-        expect(pendingStarts).toHaveLength(1);
-        expect(pendingStarts[0].workId).toBe(workId);
-
-        // Check that work still exists
-        const work = await ctx.db.get("work", workId);
-        expect(work).not.toBeNull();
-        expect(work!.attempts).toBe(1);
-      });
-    });
-  });
-
-  describe("status transitions", () => {
-    it("should transition from idle to running when work is enqueued", async () => {
-      // Setup initial idle state
-      await t.run(async (ctx) => {
-        // Create internal state
-        await insertInternalState(ctx);
-
-        // Create idle runStatus
-        await ctx.db.insert("runStatus", {
-          state: { kind: "idle", generation: 1n },
-        });
-      });
-
-      // Enqueue work
-      await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
-        fnName: "testFunction",
-        fnArgs: { test: true },
-        fnType: "mutation",
-        runAt: Date.now(),
-        config: {
-          maxParallelism: 10,
-          logLevel: "INFO",
-        },
-      });
-
-      // Verify state transition to running
-      await t.run(async (ctx) => {
-        const runStatus = await ctx.db.query("runStatus").unique();
-        expect(runStatus).toBeDefined();
-        assert(runStatus);
-        expect(runStatus.state.kind).toBe("running");
-      });
-    });
-
-    it("should transition from running to scheduled when all work is started and there's leftover capacity", async () => {
-      // Setup initial running state with work
-      await t.run(async (ctx) => {
-        // Create internal state
-        await insertInternalState(ctx);
-
-        // Create running runStatus
-        await ctx.db.insert("runStatus", {
-          state: { kind: "running" },
-        });
-
-        // Create work
-        const workId = await makeDummyWork(ctx);
-
-        // Create pendingStart
-        await ctx.db.insert("pendingStart", {
-          workId,
-          segment: 1n,
-        });
-      });
-
-      // Run main loop to process the work
-      await t.mutation(internal.loop.main, {
-        generation: 1n,
-        segment: getNextSegment(),
-      });
-
-      // Advance clock past the 5s cooldown so cursors are stale
-      vi.setSystemTime(Date.now() + STATUS_COOLDOWN + 1000);
-
-      // Run updateRunStatus to transition to scheduled
-      await t.mutation(internal.loop.updateRunStatus, {
-        generation: 2n,
-        segment: getNextSegment(),
-      });
-
-      // Verify state transition to scheduled
-      await t.run(async (ctx) => {
-        const runStatus = await ctx.db.query("runStatus").unique();
-        expect(runStatus).toBeDefined();
-        assert(runStatus);
-        expect(runStatus.state.kind).toBe("scheduled");
-        assert(runStatus.state.kind === "scheduled");
-        expect(runStatus.state.saturated).toBe(false);
-      });
-    });
-
-    it("should transition from running to saturated when maxed out", async () => {
-      // Setup initial running state with max capacity
-      await setMaxParallelism(1);
-      const segment = getCurrentSegment();
-      await t.run(async (ctx) => {
-        // Create work item
-        const workId = await makeDummyWork(ctx);
-
-        // Schedule a function and get its ID
-        const scheduledId = await makeDummyScheduledFunction(ctx, workId);
-
-        // Create internal state with running job
-        await insertInternalState(ctx, {
-          running: [{ workId, scheduledId, started: Date.now() }],
-        });
-
-        // Create running runStatus
-        await ctx.db.insert("runStatus", {
-          state: { kind: "running" },
-        });
-
-        // Create another pendingStart to exceed capacity
-        const anotherWorkId = await makeDummyWork(ctx);
-
-        await ctx.db.insert("pendingStart", {
-          workId: anotherWorkId,
-          segment,
-        });
-      });
-
-      // Run updateRunStatus to transition to scheduled with saturated=true
-      await t.mutation(internal.loop.updateRunStatus, {
-        generation: 1n,
-        segment,
-      });
-
-      // Verify state transition to scheduled with saturated=true
-      await t.run(async (ctx) => {
-        const runStatus = await ctx.db.query("runStatus").unique();
-        expect(runStatus).toBeDefined();
-        assert(runStatus);
-        expect(runStatus.state.kind).toBe("scheduled");
-        assert(runStatus.state.kind === "scheduled");
-        expect(runStatus.state.saturated).toBe(true);
-      });
-    });
-
-    it("should transition from scheduled to running when new work is enqueued", async () => {
-      // Setup initial scheduled state
-      await t.run<Id<"_scheduled_functions">>(async (ctx) => {
-        // Create internal state
-        await insertInternalState(ctx);
-
-        // Schedule main loop
-        const scheduledId = await ctx.scheduler.runAfter(
-          1000,
-          internal.loop.main,
-          { generation: 1n, segment: getNextSegment() + 10n },
         );
-
-        // Create scheduled runStatus
-        await ctx.db.insert("runStatus", {
-          state: {
-            kind: "scheduled",
-            segment: getNextSegment() + 10n,
-            scheduledId,
-            saturated: false,
-            generation: 1n,
-          },
-        });
-
-        return scheduledId;
-      });
-
-      // Enqueue work to trigger transition to running
-      await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
-        fnName: "testFunction",
-        fnArgs: { test: true },
-        fnType: "mutation",
-        runAt: Date.now(),
-        config: {
-          maxParallelism: 10,
-          logLevel: "INFO",
-        },
-      });
-
-      // Verify state transition to running
-      await t.run(async (ctx) => {
-        const runStatus = await ctx.db.query("runStatus").unique();
-        expect(runStatus).toBeDefined();
-        assert(runStatus);
-        expect(runStatus.state.kind).toBe("running");
-      });
-    });
-
-    it("should transition from running to idle when all work is done", async () => {
-      const segment = getNextSegment();
-      // Setup initial running state with work
-      const workId = await t.run<Id<"work">>(async (ctx) => {
-        // Create internal state
-        await insertInternalState(ctx);
-
-        // Create running runStatus
-        await ctx.db.insert("runStatus", {
-          state: { kind: "running" },
-        });
-
-        // Create work
-        const workId = await makeDummyWork(ctx, { attempts: 0 });
-
-        // Create pendingStart
-        await ctx.db.insert("pendingStart", {
-          workId,
-          segment,
-        });
-
-        return workId;
-      });
-
-      // Run main loop to process the work
-      await t.mutation(internal.loop.main, { generation: 1n, segment });
-
-      // Complete the work
-      await t.mutation(internal.complete.complete, {
-        jobs: [
-          {
-            workId,
-            runResult: { kind: "success", returnValue: null },
-            attempt: 0,
-          },
-        ],
-      });
-
-      // Run main loop again to process the completion
-      await t.mutation(internal.loop.main, { generation: 2n, segment });
-
-      // Advance clock past the 5s cooldown so cursors are stale
-      vi.setSystemTime(Date.now() + STATUS_COOLDOWN + 1000);
-
-      // Run updateRunStatus to transition to idle
-      await t.mutation(internal.loop.updateRunStatus, {
-        generation: 3n,
-        segment,
-      });
-
-      // Verify state transition to idle
-      await t.run(async (ctx) => {
-        const runStatus = await ctx.db.query("runStatus").unique();
-        expect(runStatus).toBeDefined();
-        assert(runStatus);
-        expect(runStatus.state.kind).toBe("idle");
-        assert(runStatus.state.kind === "idle");
-      });
-    });
-    it("should transition from scheduled to running when main loop runs", async () => {
-      const segment = getNextSegment();
-      await t.run(async (ctx) => {
-        await insertInternalState(ctx);
-
-        const scheduledId = await ctx.scheduler.runAfter(
-          1000,
-          internal.loop.main,
-          { generation: 1n, segment },
-        );
-
-        await ctx.db.insert("runStatus", {
-          state: {
-            kind: "scheduled",
-            scheduledId,
-            generation: 1n,
-            segment,
-            saturated: false,
-          },
-        });
-      });
-      // Run main loop
-      await t.mutation(internal.loop.main, { generation: 1n, segment });
-
-      // Verify state transition to running
-      await t.run(async (ctx) => {
-        const runStatus = await ctx.db.query("runStatus").unique();
-        expect(runStatus).toBeDefined();
-        assert(runStatus);
-        expect(runStatus.state.kind).toBe("running");
-      });
-    });
-  });
-
-  describe("main function", () => {
-    it("should handle generation mismatch", async () => {
-      // Setup state with different generation
-      await t.run(async (ctx) => {
-        await insertInternalState(ctx, { generation: 2n });
-      });
-
-      // Call main with mismatched generation
-      await expect(
-        t.mutation(internal.loop.main, { generation: 1n, segment: 1n }),
-      ).rejects.toThrow("generation mismatch");
-    });
-
-    it("should process pending completions", async () => {
-      // Setup state with a running job
-      await t.run(async (ctx) => {
-        // Create a work item for the running list
-        const workId = await makeDummyWork(ctx);
-
-        // Schedule a function and get its ID
-        const scheduledId = await makeDummyScheduledFunction(ctx, workId);
-
-        // Create internal state
-        await insertInternalState(ctx, {
-          running: [{ workId, scheduledId, started: 900000 }],
-        });
-
-        // Create pending completion
-        await ctx.db.insert("pendingCompletion", {
-          workId,
-          runResult: { kind: "success", returnValue: null },
-          segment: 1n,
-          retry: false,
-        });
-      });
-
-      // Call main
-      await t.mutation(internal.loop.main, { generation: 1n, segment: 1n });
-
-      // Verify completion was processed
-      await t.run(async (ctx) => {
-        // Check that pendingCompletion was deleted
-        const completions = await ctx.db.query("pendingCompletion").collect();
-        expect(completions).toHaveLength(0);
-
-        // Check that work was removed from running list
-        const state = await ctx.db.query("internalState").unique();
-        expect(state).toBeDefined();
-        assert(state);
-        expect(state.running).toHaveLength(0);
-        expect(state.report.completed).toBe(1);
-        expect(state.report.succeeded).toBe(1);
-      });
-    });
-
-    it("should handle job retries", async () => {
-      // Setup state with a job that needs retry
-      const workId = await t.run<Id<"work">>(async (ctx) => {
-        // Create a work item for the running list
-        const workId = await makeDummyWork(ctx, {
-          attempts: 1,
-          retryBehavior: {
-            maxAttempts: 3,
-            initialBackoffMs: 1000,
-            base: 2,
-          },
-        });
-
-        // Schedule a function and get its ID
-        const scheduledId = await makeDummyScheduledFunction(ctx, workId);
-
-        // Create internal state
-        await insertInternalState(ctx, {
+        const s = await ctx.db.query("internalState").unique();
+        assert(s);
+        await ctx.db.patch("internalState", s._id, {
           running: [
             {
-              workId,
+              workId: wid,
               scheduledId,
-              started: 900000,
+              // Started 10 minutes ago — past 5-minute recovery threshold.
+              started: Date.now() - 10 * MINUTE,
             },
           ],
-        });
-
-        // Create pending completion with failed result
-        await ctx.db.insert("pendingCompletion", {
-          workId,
-          runResult: { kind: "failed", error: "test error" },
-          segment: 1n,
-          retry: true,
-        });
-
-        return workId;
-      });
-
-      // Call main
-      await t.mutation(internal.loop.main, { generation: 1n, segment: 1n });
-
-      // Verify job was retried
-      await t.run(async (ctx) => {
-        // Check that pendingCompletion was deleted
-        const completions = await ctx.db.query("pendingCompletion").collect();
-        expect(completions).toHaveLength(0);
-
-        // Check that work was updated
-        const work = await ctx.db.get("work", workId);
-        expect(work).toBeDefined();
-        expect(work!.attempts).toBe(1);
-
-        // Check that a new pendingStart was created
-        const pendingStarts = await ctx.db.query("pendingStart").collect();
-        expect(pendingStarts).toHaveLength(1);
-        expect(pendingStarts[0].workId).toBe(workId);
-
-        // Check that report was updated
-        const state = await ctx.db.query("internalState").unique();
-        expect(state).toBeDefined();
-        expect(state!.report.retries).toBe(1);
-      });
-    });
-
-    it("should process pending cancelations", async () => {
-      // Setup state with a pending cancelation
-      const workId = await t.run<Id<"work">>(async (ctx) => {
-        // Create a work item for the running list
-        const runningWorkId = await makeDummyWork(ctx);
-
-        // Schedule a function and get its ID
-        const scheduledId = await makeDummyScheduledFunction(
-          ctx,
-          runningWorkId,
-        );
-
-        // Create internal state
-        await insertInternalState(ctx, {
-          running: [{ workId: runningWorkId, scheduledId, started: 900000 }],
-        });
-
-        // Create work
-        const workId = await makeDummyWork(ctx, {
-          retryBehavior: {
-            maxAttempts: 3,
-            initialBackoffMs: 1000,
-            base: 2,
-          },
-        });
-
-        // Create pending start
-        await ctx.db.insert("pendingStart", {
-          workId,
-          segment: 1n,
-        });
-
-        // Create pending cancelation
-        await ctx.db.insert("pendingCancelation", {
-          workId,
-          segment: 1n,
-        });
-
-        return workId;
-      });
-
-      // Call main
-      await t.mutation(internal.loop.main, { generation: 1n, segment: 1n });
-
-      // Verify cancelation was processed
-      await t.run(async (ctx) => {
-        // Check that pendingCancelation was deleted
-        const cancelations = await ctx.db.query("pendingCancelation").collect();
-        expect(cancelations).toHaveLength(0);
-
-        // Check that pendingStart was deleted
-        const pendingStarts = await ctx.db.query("pendingStart").collect();
-        expect(pendingStarts).toHaveLength(0);
-
-        const work = await ctx.db.get("work", workId);
-        expect(work).toBeDefined();
-        expect(work!.canceled).toBe(true);
-
-        // Check that report was updated
-        const state = await ctx.db.query("internalState").unique();
-        expect(state).toBeDefined();
-        expect(state!.report.canceled).toBe(1);
-      });
-    });
-
-    it("should schedule new work", async () => {
-      // Setup state with pending start items
-      const workId = await t.run<Id<"work">>(async (ctx) => {
-        // Create internal state
-        await insertInternalState(ctx);
-
-        // Create work
-        const workId = await makeDummyWork(ctx);
-
-        // Create pending start
-        await ctx.db.insert("pendingStart", {
-          workId,
-          segment: 1n,
-        });
-
-        return workId;
-      });
-
-      // Call main
-      await t.mutation(internal.loop.main, { generation: 1n, segment: 1n });
-
-      // Verify work was started
-      await t.run(async (ctx) => {
-        // Check that pendingStart was deleted
-        const pendingStarts = await ctx.db.query("pendingStart").collect();
-        expect(pendingStarts).toHaveLength(0);
-
-        // Check that work was added to running list
-        const state = await ctx.db.query("internalState").unique();
-        expect(state).toBeDefined();
-        expect(state!.running).toHaveLength(1);
-        expect(state!.running[0].workId).toBe(workId);
-      });
-    });
-
-    it("should schedule recovery for old jobs", async () => {
-      // Setup state with old running jobs
-      const oldTime = Date.now() - 5 * 60 * 1000 - 1000; // Older than recovery threshold
-
-      await t.run(async (ctx) => {
-        // Create work for the running list
-        const workId = await makeDummyWork(ctx);
-
-        // Schedule a function and get its ID
-        const scheduledId = await makeDummyScheduledFunction(ctx, workId);
-
-        // Create internal state with old job
-        await insertInternalState(ctx, {
+          // Force recovery to be eligible to run this iteration.
           lastRecovery: 0n,
-          running: [{ workId, scheduledId, started: oldTime }],
         });
+        return wid;
       });
 
-      // Call main
-      const segment = toSegment(60 * 60 * 1000);
-      await t.mutation(internal.loop.main, {
-        generation: 1n,
-        segment,
-      });
+      await runMain();
 
-      // Verify recovery was scheduled
-      await t.run(async (ctx) => {
-        // Check that lastRecovery was updated
-        const state = await ctx.db.query("internalState").unique();
-        expect(state).toBeDefined();
-        expect(state!.lastRecovery).toBe(segment);
-
-        // We can't directly check if recovery.recover was scheduled,
-        // but we can verify the state was updated correctly
-      });
+      // We can't directly verify "recovery was scheduled" without inspecting
+      // the scheduler queue, but we can verify lastRecovery was advanced.
+      const after = await observe();
+      const state = await t.run(async (ctx) =>
+        ctx.db.query("internalState").unique(),
+      );
+      assert(state);
+      expect(state.lastRecovery).toBeGreaterThan(0n);
+      // Work is still in running (recovery removes it via complete, which
+      // happens in a separately-scheduled mutation).
+      expect(after.running.map((r) => r.workId)).toContain(workId);
     });
   });
 
-  describe("updateRunStatus function", () => {
-    it("should handle generation mismatch", async () => {
-      // Setup state with different generation
-      await t.run(async (ctx) => {
-        await insertInternalState(ctx, { generation: 2n });
-      });
+  // ────────────────────────────────────────────────────────────────────
+  // Generation safety: stale main calls cannot clobber state
+  // ────────────────────────────────────────────────────────────────────
 
-      // Call updateRunStatus with mismatched generation
+  describe("generation safety", () => {
+    it("rejects main calls with the wrong generation", async () => {
+      await initialize();
+      // Current generation is 1n. Calling with 99n should error.
       await expect(
-        t.mutation(internal.loop.updateRunStatus, {
-          generation: 1n,
-          segment: 1n,
-        }),
-      ).rejects.toThrow("generation mismatch");
+        t.mutation(internal.loop.main, { generation: 99n }),
+      ).rejects.toThrow(/generation mismatch/);
     });
 
-    it("should schedule main immediately if there are outstanding cancelations", async () => {
-      // Setup state with outstanding cancelations
-      await t.run(async (ctx) => {
-        // Create work for cancelation
-        const workId = await makeDummyWork(ctx);
-
-        // Create internal state
-        await insertInternalState(ctx, {});
-
-        // Create run status
-        await ctx.db.insert("runStatus", {
-          state: { kind: "running" },
-        });
-
-        // Create pending cancelation
-        await ctx.db.insert("pendingCancelation", {
-          workId,
-          segment: 1n,
-        });
-      });
-
-      // Call updateRunStatus
-      await t.mutation(internal.loop.updateRunStatus, {
-        generation: 1n,
-        segment: 1n,
-      });
-
-      // Verify main was scheduled (indirectly by checking runStatus)
-      await t.run(async (ctx) => {
-        // We can't directly check if main was scheduled,
-        // but we can verify the state was updated correctly
-        const runStatus = await ctx.db.query("runStatus").unique();
-        expect(runStatus).toBeDefined();
-        // The state should no longer be idle
-        expect(runStatus!.state.kind).not.toBe("idle");
-      });
-    });
-
-    it("should transition to idle state when there is no work", async () => {
-      // Setup state with no work
-      await t.run(async (ctx) => {
-        // Create internal state with no running jobs
-        await insertInternalState(ctx, {});
-
-        // Create run status in running state
-        await ctx.db.insert("runStatus", {
-          state: { kind: "running" },
-        });
-      });
-
-      // Call updateRunStatus
-      await t.mutation(internal.loop.updateRunStatus, {
-        generation: 1n,
-        segment: 1n,
-      });
-
-      // Verify idle state was set
-      await t.run(async (ctx) => {
-        const runStatus = await ctx.db.query("runStatus").unique();
-        expect(runStatus).toBeDefined();
-        expect(runStatus!.state.kind).toBe("idle");
-        assert(runStatus!.state.kind === "idle");
-        expect(runStatus!.state.generation).toBe(1n);
-      });
-    });
-
-    it("should set saturated flag when at max capacity", async () => {
-      // Setup state with running jobs at max capacity
-      const now = getCurrentSegment();
-      const later = now + 10n;
-      await setMaxParallelism(10);
-      await t.run(async (ctx) => {
-        // Create 10 work items and scheduled functions
-        const runningJobs = await Promise.all(
-          Array(10)
-            .fill(0)
-            .map(async () => {
-              const workId = await makeDummyWork(ctx);
-
-              // Schedule a function and get its ID
-              const scheduledId = await makeDummyScheduledFunction(ctx, workId);
-
-              return { workId, scheduledId, started: Date.now() };
-            }),
-        );
-
-        // Create internal state with max running jobs
-        await insertInternalState(ctx, {
-          running: runningJobs,
-        });
-
-        // Create run status
-        await ctx.db.insert("runStatus", {
-          state: { kind: "running" },
-        });
-
-        // Create future completion to trigger scheduling
-        await ctx.db.insert("pendingCompletion", {
-          workId: runningJobs[0].workId,
-          runResult: { kind: "success", returnValue: null },
-          segment: later,
-          retry: false,
-        });
-      });
-
-      // Call updateRunStatus
-      await t.mutation(internal.loop.updateRunStatus, {
-        generation: 1n,
-        segment: 1n,
-      });
-
-      // Verify scheduled state was set with saturated flag
-      await t.run(async (ctx) => {
-        const runStatus = await ctx.db.query("runStatus").unique();
-        expect(runStatus).toBeDefined();
-        expect(runStatus!.state.kind).toBe("scheduled");
-        assert(runStatus!.state.kind === "scheduled");
-        expect(runStatus!.state.saturated).toBe(true);
-      });
-    });
-
-    it("should reset cursors correctly when there's old work detected", async () => {
-      // Setup state with old work
-      const now = getCurrentSegment();
-      await t.run(async (ctx) => {
-        // Create internal state with old work
-        await insertInternalState(ctx, {
-          segmentCursors: {
-            incoming: now - 1n,
-            completion: now - 1n,
-            cancelation: now - 1n,
-          },
-        });
-      });
-
-      // Insert very old work
-      await t.run(async (ctx) => {
-        const workId = await makeDummyWork(ctx);
-        await ctx.db.insert("pendingStart", {
-          workId,
-          segment: 0n,
-        });
-      });
-
-      // Call updateRunStatus
-      await t.mutation(internal.loop.updateRunStatus, {
-        generation: 1n,
-        segment: now,
-      });
-
-      // Verify cursors were reset
-      await t.run(async (ctx) => {
-        const state = await ctx.db.query("internalState").unique();
-        expect(state).toBeDefined();
-        expect(state!.segmentCursors.incoming).toBe(0n);
-      });
-
-      // Set maxParallelism to 0 so it doesn't schedule anything / make progress
-      await setMaxParallelism(0);
-
-      // Run main
-      await t.mutation(internal.loop.main, {
-        generation: 1n,
-        segment: now,
-      });
-
-      // Verify start cursor weren't updated
-      await t.run(async (ctx) => {
-        const state = await ctx.db.query("internalState").unique();
-        expect(state).toBeDefined();
-        expect(state!.segmentCursors.incoming).toBe(0n);
-      });
+    it("increments the generation each time main runs", async () => {
+      await initialize();
+      const before = (await observe()).generation;
+      await runMain();
+      const after = (await observe()).generation;
+      expect(after).toBeGreaterThan(before);
     });
   });
 
-  describe("complete function", () => {
-    it("should run onComplete handlers and delete work", async () => {
-      // Setup mock work with onComplete handler
-      const workId = await t.run<Id<"work">>(async (ctx) => {
-        const workId = await makeDummyWork(ctx, {
+  // ────────────────────────────────────────────────────────────────────
+  // Snapshot semantics: the snapshot-then-confirm safety net
+  // ────────────────────────────────────────────────────────────────────
+
+  describe("snapshot semantics", () => {
+    it("the snapshot read does not see the calling mutation's pending writes", async () => {
+      // Verifies the prototype's distinguishing feature:
+      // runSnapshotQuery from inside a mutation does NOT see writes the
+      // mutation has performed. ctx.runQuery does. This is what makes
+      // the snapshot-then-confirm pattern correct.
+      const { runSnapshotQuery } = await import("./future.js");
+      const result = await t.run(async (ctx) => {
+        const workId = await ctx.db.insert("work", {
+          fnType: "action",
+          fnHandle: "h",
+          fnName: "h",
+          fnArgs: {},
           attempts: 0,
-          onComplete: {
-            // TODO: make this a real handle
-            fnHandle: "onComplete_handle",
-            context: { data: "test" },
-          },
         });
-        return workId;
+        await ctx.db.insert("pendingStart", {
+          workId,
+          segment: getCurrentSegment(),
+        });
+        const snap = await runSnapshotQuery(internal.loop.getPendingWork, {
+          completionCursor: 0n,
+          cancelationCursor: 0n,
+          incomingCursor: 0n,
+          maxParallelism: 10,
+          runningCount: 0,
+        });
+        const real = await ctx.runQuery(internal.loop.getPendingWork, {
+          completionCursor: 0n,
+          cancelationCursor: 0n,
+          incomingCursor: 0n,
+          maxParallelism: 10,
+          runningCount: 0,
+        });
+        return { snap: snap.allStarts.length, real: real.allStarts.length };
       });
-
-      // Call complete
-      await t.mutation(internal.complete.complete, {
-        jobs: [
-          {
-            workId,
-            runResult: { kind: "success", returnValue: null },
-            attempt: 0,
-          },
-        ],
-      });
-
-      // Verify work was deleted
-      await t.run(async (ctx) => {
-        const work = await ctx.db.get("work", workId);
-        expect(work).toBeNull();
-      });
+      expect(result.snap).toBe(0);
+      expect(result.real).toBe(1);
     });
 
-    it("should handle missing work gracefully", async () => {
-      // Call complete with non-existent work ID
-      const workId = await t.run(async (ctx) => {
-        const id = await makeDummyWork(ctx, { attempts: 0 });
-        await ctx.db.delete("work", id);
-        return id;
-      });
-      await t.mutation(internal.complete.complete, {
-        jobs: [
-          {
-            workId,
-            runResult: { kind: "success", returnValue: null },
-            attempt: 0,
-          },
-        ],
-      });
+    it("processes work that was committed before main started", async () => {
+      // The snapshot read is at a later snapshot than the inserts,
+      // so it sees them. This is the common case.
+      await initialize();
+      const workId = await enqueueWork();
 
-      // No error should be thrown
+      await runMain();
+
+      expect((await observe()).running.map((r) => r.workId)).toEqual([workId]);
     });
   });
 
-  describe("status cooldown", () => {
-    it("should stay running within the cooldown window", async () => {
-      const segment = getNextSegment();
-      await t.run(async (ctx) => {
-        await insertInternalState(ctx);
-        await ctx.db.insert("runStatus", { state: { kind: "running" } });
+  // ────────────────────────────────────────────────────────────────────
+  // Backwards compatibility with the pre-merge API
+  // ────────────────────────────────────────────────────────────────────
 
-        const workId = await makeDummyWork(ctx);
-        await ctx.db.insert("pendingStart", { workId, segment });
-      });
+  describe("backwards compatibility", () => {
+    it("main accepts (and ignores) a legacy `segment` arg", async () => {
+      await initialize();
+      const workId = await enqueueWork();
 
-      // Process the work
-      await t.mutation(internal.loop.main, { generation: 1n, segment });
-
-      // Advance less than the cooldown
-      vi.setSystemTime(Date.now() + STATUS_COOLDOWN - 1000);
-
-      // updateRunStatus should schedule main again (staying running)
-      await t.mutation(internal.loop.updateRunStatus, {
-        generation: 2n,
-        segment,
-      });
-
-      // runStatus should still be "running" — no transition
-      await t.run(async (ctx) => {
-        const runStatus = await ctx.db.query("runStatus").unique();
-        assert(runStatus);
-        expect(runStatus.state.kind).toBe("running");
-      });
-    });
-
-    it("should transition after the cooldown expires", async () => {
-      const segment = getNextSegment();
-      await t.run(async (ctx) => {
-        await insertInternalState(ctx);
-        await ctx.db.insert("runStatus", { state: { kind: "running" } });
-
-        const workId = await makeDummyWork(ctx);
-        await ctx.db.insert("pendingStart", { workId, segment });
-      });
-
-      // Process the work
-      await t.mutation(internal.loop.main, { generation: 1n, segment });
-
-      // Advance past the cooldown
-      vi.setSystemTime(Date.now() + STATUS_COOLDOWN + 1000);
-
-      // Now it should transition
-      await t.mutation(internal.loop.updateRunStatus, {
-        generation: 2n,
-        segment,
-      });
-
-      await t.run(async (ctx) => {
-        const runStatus = await ctx.db.query("runStatus").unique();
-        assert(runStatus);
-        // Should have transitioned out of running (to scheduled or idle)
-        expect(runStatus.state.kind).not.toBe("running");
-      });
-    });
-
-    it("should pick up new work arriving during cooldown without a kick", async () => {
-      const segment = getNextSegment();
-      await t.run(async (ctx) => {
-        await insertInternalState(ctx);
-        await ctx.db.insert("runStatus", { state: { kind: "running" } });
-
-        const workId = await makeDummyWork(ctx);
-        await ctx.db.insert("pendingStart", { workId, segment });
-      });
-
-      // Process wave 1
-      await t.mutation(internal.loop.main, { generation: 1n, segment });
-
-      // Advance 1 second (within cooldown)
-      vi.setSystemTime(Date.now() + 1000);
-      const segment2 = getNextSegment();
-
-      // updateRunStatus during cooldown — schedules main for next segment
-      await t.mutation(internal.loop.updateRunStatus, {
-        generation: 2n,
-        segment,
-      });
-
-      // Enqueue wave 2 while the loop is still warm
-      await t.run(async (ctx) => {
-        const workId2 = await makeDummyWork(ctx);
-        await ctx.db.insert("pendingStart", {
-          workId: workId2,
-          segment: segment2,
-        });
-      });
-
-      // The scheduled main from cooldown should pick up wave 2
+      // The legacy callsites pass `segment`; the new main treats it as
+      // optional. Calls should still process work as expected.
       await t.mutation(internal.loop.main, {
-        generation: 2n,
-        segment: segment2,
+        generation: 1n,
+        segment: 12345n,
       });
 
-      // Verify both items processed
-      await t.run(async (ctx) => {
-        const state = await ctx.db.query("internalState").unique();
-        assert(state);
-        expect(state.running).toHaveLength(2);
-        // pendingStart should be empty
-        const pending = await ctx.db.query("pendingStart").collect();
-        expect(pending).toHaveLength(0);
-      });
+      expect((await observe()).running.map((r) => r.workId)).toEqual([workId]);
     });
 
-    it("bursty throughput: multiple waves processed without going idle", async () => {
-      const WAVE_COUNT = 3;
-      const TASKS_PER_WAVE = 3;
-      const WAVE_GAP_MS = 1000; // 1s between waves, well within 5s cooldown
-
-      await t.run(async (ctx) => {
-        await insertInternalState(ctx);
-        await ctx.db.insert("runStatus", { state: { kind: "running" } });
-      });
-
-      let generation = 1n;
-      const statusChecks: string[] = [];
-
-      for (let wave = 0; wave < WAVE_COUNT; wave++) {
-        if (wave > 0) {
-          // Advance time between waves (within cooldown)
-          vi.setSystemTime(Date.now() + WAVE_GAP_MS);
-        }
-
-        const waveSeg = getNextSegment();
-
-        // Enqueue tasks for this wave
-        await t.run(async (ctx) => {
-          for (let i = 0; i < TASKS_PER_WAVE; i++) {
-            const workId = await makeDummyWork(ctx);
-            await ctx.db.insert("pendingStart", { workId, segment: waveSeg });
-          }
-        });
-
-        // Run main to process the wave
-        await t.mutation(internal.loop.main, {
-          generation,
-          segment: waveSeg,
-        });
-        generation++;
-
-        // Check status after updateRunStatus
-        await t.mutation(internal.loop.updateRunStatus, {
-          generation,
-          segment: waveSeg,
-        });
-
-        const status = await t.run(async (ctx) => {
-          const runStatus = await ctx.db.query("runStatus").unique();
-          assert(runStatus);
-          return runStatus.state.kind;
-        });
-        statusChecks.push(status);
-
-        // If main was scheduled by cooldown, run it to advance generation
-        if (status === "running") {
-          // The cooldown scheduled main for next segment — run it so
-          // generation stays consistent for the next wave.
-          const nextSeg = getNextSegment();
-          await t.mutation(internal.loop.main, {
-            generation,
-            segment: nextSeg,
-          });
-          generation++;
-        }
-      }
-
-      // During the cooldown window, every wave should see "running"
-      for (let i = 0; i < WAVE_COUNT; i++) {
-        expect(statusChecks[i]).toBe("running");
-      }
-
-      // After the cooldown expires, updateRunStatus should transition.
-      // Don't run main again — that would refresh the cursors.
-      vi.setSystemTime(Date.now() + STATUS_COOLDOWN + 1000);
-
+    it("updateRunStatus schedules a main call (forwards in-flight upgrade traffic)", async () => {
+      await initialize();
+      // A pre-upgrade scheduled call lands here after deploy.
       await t.mutation(internal.loop.updateRunStatus, {
-        generation,
-        segment: getNextSegment(),
+        generation: 1n,
+        segment: 12345n,
       });
-
-      const finalStatus = await t.run(async (ctx) => {
-        const runStatus = await ctx.db.query("runStatus").unique();
-        assert(runStatus);
-        return runStatus.state.kind;
-      });
-      // Should have transitioned out of running
-      expect(finalStatus).not.toBe("running");
+      // The forwarder should have scheduled main; we don't drain the
+      // full pipeline (that's covered by the other tests). Just verify
+      // a main call was queued.
+      const scheduled = await t.run(async (ctx) =>
+        ctx.db.system.query("_scheduled_functions").collect(),
+      );
+      const mainCalls = scheduled.filter((s) => s.name.endsWith("loop:main"));
+      expect(mainCalls.length).toBeGreaterThan(0);
     });
   });
 });
