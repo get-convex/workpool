@@ -65,7 +65,8 @@ export const getPendingWork = internalQuery({
     completionCursor: v.int64(),
     cancelationCursor: v.int64(),
     incomingCursor: v.int64(),
-    startLimit: v.number(),
+    maxParallelism: v.number(),
+    runningCount: v.number(),
   },
   handler: async (
     ctx,
@@ -73,23 +74,28 @@ export const getPendingWork = internalQuery({
       completionCursor,
       cancelationCursor,
       incomingCursor,
-      startLimit,
+      maxParallelism,
+      runningCount,
     },
   ) => {
     const completions = await ctx.db
       .query("pendingCompletion")
       .withIndex("segment", (q) => q.gte("segment", completionCursor))
-      .take(startLimit);
+      .take(maxParallelism);
     const cancelations = await ctx.db
       .query("pendingCancelation")
       .withIndex("segment", (q) => q.gte("segment", cancelationCursor))
       .take(CANCELLATION_BATCH_SIZE);
-    // Read +1 so the caller can detect overflow vs. a future-scheduled item.
-    // Server-side filter excludes any pendingStart whose work is being
-    // canceled this iteration: handleCancelation will delete those docs,
-    // so handing them to handleStart would race ("Delete on non-existent
-    // doc"). The filter is the right tool here — it keeps .take honest
-    // when we know a small number of specific items to exclude.
+    // Available slots after we process this batch's completions, plus 1
+    // for the +1 trick (detect overflow vs. a future-scheduled retry).
+    const startLimit = Math.max(
+      0,
+      maxParallelism - runningCount + completions.length,
+    );
+    const excludedIds = [
+      ...completions.map((c) => c.workId),
+      ...cancelations.map((c) => c.workId),
+    ];
     const allStarts =
       startLimit === 0
         ? []
@@ -97,11 +103,7 @@ export const getPendingWork = internalQuery({
             .query("pendingStart")
             .withIndex("segment", (q) => q.gte("segment", incomingCursor))
             .filter((q) =>
-              q.and(
-                ...cancelations.map((c) =>
-                  q.neq(q.field("workId"), c.workId),
-                ),
-              ),
+              q.and(...excludedIds.map((id) => q.neq(q.field("workId"), id))),
             )
             .take(startLimit + 1);
     return { completions, cancelations, allStarts };
@@ -133,18 +135,18 @@ export const main = internalMutation({
     const console = createLogger(globals.logLevel);
     const segment = getCurrentSegment();
 
-    // Pass startLimit = maxParallelism so we fetch enough starts to fill
-    // slots freed by completions processed in this same iteration.
-    // Apply CURSOR_BUFFER_SEGMENTS so we still pick up out-of-order inserts
-    // that landed behind the cursor since our last scan.
+    // Pass maxParallelism + runningCount so the query bounds each batch to
+    // what we can actually consume this iteration. Apply CURSOR_BUFFER_SEGMENTS
+    // so we still pick up out-of-order inserts that landed behind the cursor
+    // since our last scan.
     const queryArgs = {
       completionCursor:
         state.segmentCursors.completion - CURSOR_BUFFER_SEGMENTS,
       cancelationCursor:
         state.segmentCursors.cancelation - CURSOR_BUFFER_SEGMENTS,
-      incomingCursor:
-        state.segmentCursors.incoming - CURSOR_BUFFER_SEGMENTS,
-      startLimit: globals.maxParallelism,
+      incomingCursor: state.segmentCursors.incoming - CURSOR_BUFFER_SEGMENTS,
+      maxParallelism: globals.maxParallelism,
+      runningCount: state.running.length,
     };
 
     // Snapshot read — no read dependency, no OCC conflicts.
