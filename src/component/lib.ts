@@ -19,7 +19,7 @@ import {
   boundScheduledTime,
   vConfig,
   fnType,
-  getNextSegment,
+  getCurrentSegment,
   max,
   vOnCompleteFnContext,
   retryBehavior,
@@ -53,14 +53,13 @@ export const enqueue = mutation({
   handler: async (ctx, { config, ...itemArgs }) => {
     const globals = await getOrUpdateGlobals(ctx, config);
     const console = createLogger(globals.logLevel);
-    const kickSegment = await kickMainLoop(ctx, "enqueue", globals);
-    return await enqueueHandler(ctx, console, kickSegment, itemArgs);
+    await kickMainLoop(ctx, "enqueue", globals);
+    return await enqueueHandler(ctx, console, itemArgs);
   },
 });
 async function enqueueHandler(
   ctx: MutationCtx,
   console: Logger,
-  kickSegment: bigint,
   { runAt, ...workArgs }: ObjectType<typeof itemArgs>,
 ) {
   runAt = boundScheduledTime(runAt, console);
@@ -115,7 +114,7 @@ async function enqueueHandler(
 
   await ctx.db.insert("pendingStart", {
     workId,
-    segment: max(toSegment(runAt), kickSegment),
+    segment: max(toSegment(runAt), getCurrentSegment()),
   });
   recordEnqueued(console, { workId, fnName: workArgs.fnName, runAt });
   return workId;
@@ -130,10 +129,8 @@ export const enqueueBatch = mutation({
   handler: async (ctx, { config, items }) => {
     const globals = await getOrUpdateGlobals(ctx, config);
     const console = createLogger(globals.logLevel);
-    const kickSegment = await kickMainLoop(ctx, "enqueue", globals);
-    return Promise.all(
-      items.map((item) => enqueueHandler(ctx, console, kickSegment, item)),
-    );
+    await kickMainLoop(ctx, "enqueue", globals);
+    return Promise.all(items.map((item) => enqueueHandler(ctx, console, item)));
   },
 });
 
@@ -146,10 +143,10 @@ export const cancel = mutation({
     const globals = await getOrUpdateGlobals(ctx, { logLevel });
     const shouldCancel = await shouldCancelWorkItem(ctx, id, globals.logLevel);
     if (shouldCancel) {
-      const segment = await kickMainLoop(ctx, "cancel", globals);
+      await kickMainLoop(ctx, "cancel", globals);
       await ctx.db.insert("pendingCancelation", {
         workId: id,
-        segment,
+        segment: getCurrentSegment(),
       });
     }
   },
@@ -176,10 +173,10 @@ export const cancelAll = mutation({
         shouldCancelWorkItem(ctx, _id, globals.logLevel),
       ),
     );
-    let segment = getNextSegment();
     if (shouldCancel.some((c) => c)) {
-      segment = await kickMainLoop(ctx, "cancel", globals);
+      await kickMainLoop(ctx, "cancel", globals);
     }
+    const segment = getCurrentSegment();
     await Promise.all(
       pageOfWork.map(({ _id }, index) => {
         if (shouldCancel[index]) {

@@ -5,7 +5,12 @@ import { internal } from "./_generated/api.js";
 import { internalMutation, type MutationCtx } from "./_generated/server.js";
 import { kickMainLoop } from "./kick.js";
 import { createLogger } from "./logging.js";
-import { type OnCompleteArgs, type RunResult, vResult } from "./shared.js";
+import {
+  getCurrentSegment,
+  type OnCompleteArgs,
+  type RunResult,
+  vResult,
+} from "./shared.js";
 import { recordCompleted } from "./stats.js";
 import { assert } from "convex-helpers";
 
@@ -192,7 +197,8 @@ export async function completeHandler(
     }),
   );
   if (pendingCompletions.length > 0) {
-    const segment = await kickMainLoop(ctx, "complete");
+    await kickMainLoop(ctx, "complete");
+    const segment = getCurrentSegment();
     await Promise.all(
       pendingCompletions.map((completion) =>
         ctx.db.insert("pendingCompletion", {

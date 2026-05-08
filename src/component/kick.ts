@@ -8,31 +8,29 @@ import {
   type Config,
   fromSegment,
   getCurrentSegment,
-  getNextSegment,
   SECOND,
   toSegment,
 } from "./shared.js";
 
 /**
- * Called from outside the loop.
- * Returns the soonest segment to enqueue work for the main loop.
+ * Wakes the main loop if it isn't already running. No-ops when a wake-up
+ * wouldn't be productive (e.g. enqueue while saturated).
  */
 export async function kickMainLoop(
   ctx: MutationCtx,
   source: "enqueue" | "cancel" | "complete" | "kick",
   config?: Config,
-): Promise<bigint> {
+): Promise<void> {
   const globals = config ?? (await getOrUpdateGlobals(ctx, config));
   const console = createLogger(globals.logLevel);
   const runStatus = await getOrCreateRunStatus(ctx);
-  const next = getNextSegment();
 
   // Only kick to run now if we're scheduled or idle.
   if (runStatus.state.kind === "running") {
     console.debug(
       `[${source}] main is actively running, so we don't need to kick it`,
     );
-    return next;
+    return;
   }
   // main is scheduled to run later, so we should cancel it and reschedule.
   if (runStatus.state.kind === "scheduled") {
@@ -40,19 +38,19 @@ export async function kickMainLoop(
       console.debug(
         `[${source}] main is saturated, so we don't need to kick it`,
       );
-      return next;
+      return;
     }
     if (source === "complete" && !runStatus.state.saturated) {
       console.debug(
         `[${source}] main is not saturated, so kicking for completion isn't necessary`,
       );
-      return next;
+      return;
     }
     if (runStatus.state.segment <= toSegment(Date.now() + SECOND)) {
       console.debug(
         `[${source}] main is scheduled to run soon enough, so we don't need to kick it`,
       );
-      return next;
+      return;
     }
     console.debug(
       `[${source}] main is scheduled to run later, so reschedule it to run now`,
@@ -74,12 +72,13 @@ export async function kickMainLoop(
   await ctx.db.patch("runStatus", runStatus._id, {
     state: { kind: "running" },
   });
-  const current = getCurrentSegment();
-  const scheduledTime = boundScheduledTime(fromSegment(current), console);
+  const scheduledTime = boundScheduledTime(
+    fromSegment(getCurrentSegment()),
+    console,
+  );
   await ctx.scheduler.runAt(scheduledTime, internal.loop.main, {
     generation: runStatus.state.generation,
   });
-  return current;
 }
 
 export const forceKick = internalMutation({
