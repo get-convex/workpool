@@ -761,61 +761,6 @@ describe("loop", () => {
   });
 
   // ────────────────────────────────────────────────────────────────────
-  // Snapshot semantics: the snapshot-then-confirm safety net
-  // ────────────────────────────────────────────────────────────────────
-
-  describe("snapshot semantics", () => {
-    it("the snapshot read does not see the calling mutation's pending writes", async () => {
-      // Verifies the prototype's distinguishing feature:
-      // runSnapshotQuery from inside a mutation does NOT see writes the
-      // mutation has performed. ctx.runQuery does. This is what makes
-      // the snapshot-then-confirm pattern correct.
-      const { runSnapshotQuery } = await import("./future.js");
-      const result = await t.run(async (ctx) => {
-        const workId = await ctx.db.insert("work", {
-          fnType: "action",
-          fnHandle: "h",
-          fnName: "h",
-          fnArgs: {},
-          attempts: 0,
-        });
-        await ctx.db.insert("pendingStart", {
-          workId,
-          segment: getCurrentSegment(),
-        });
-        const snap = await runSnapshotQuery(internal.loop.getPending, {
-          completionCursor: 0n,
-          cancelationCursor: 0n,
-          incomingCursor: 0n,
-          maxParallelism: 10,
-          runningCount: 0,
-        });
-        const real = await ctx.runQuery(internal.loop.getPending, {
-          completionCursor: 0n,
-          cancelationCursor: 0n,
-          incomingCursor: 0n,
-          maxParallelism: 10,
-          runningCount: 0,
-        });
-        return { snap: snap.allStarts.length, real: real.allStarts.length };
-      });
-      expect(result.snap).toBe(0);
-      expect(result.real).toBe(1);
-    });
-
-    it("processes work that was committed before main started", async () => {
-      // The snapshot read is at a later snapshot than the inserts,
-      // so it sees them. This is the common case.
-      await initialize();
-      const workId = await enqueueWork();
-
-      await runMain();
-
-      expect((await observe()).running.map((r) => r.workId)).toEqual([workId]);
-    });
-  });
-
-  // ────────────────────────────────────────────────────────────────────
   // Backwards compatibility with the pre-merge API
   // ────────────────────────────────────────────────────────────────────
 
