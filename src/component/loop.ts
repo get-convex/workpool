@@ -233,10 +233,15 @@ export const main = internalMutation({
       return;
     }
 
-    // Nothing found in snapshot. Re-read with a real dependency (same args
-    // for cache-hit efficiency) so a concurrent insert forces an OCC retry.
+    // Nothing found in snapshot. Re-read with a real dependency so a
+    // concurrent insert forces an OCC retry. Override runningCount so it
+    // reflects post-recovery state — otherwise a stale count can leave
+    // startLimit pinned to 0 and miss now-runnable pendingStart.
     console.debug("[main] no work — confirming with read dependency");
-    const confirm = await ctx.runQuery(internal.loop.getPending, queryArgs);
+    const confirm = await ctx.runQuery(internal.loop.getPending, {
+      ...queryArgs,
+      runningCount: state.running.length,
+    });
     const confirmStarts = confirm.allStarts;
     const confirmStartsNow = confirmStarts.filter((s) => s.segment <= segment);
     const confirmFuture = confirmStarts.find((s) => s.segment > segment);
