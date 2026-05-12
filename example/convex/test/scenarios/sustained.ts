@@ -1,9 +1,8 @@
 import { internalAction, internalMutation } from "../../_generated/server";
 import { v } from "convex/values";
-import { internal, components } from "../../_generated/api";
-import { Workpool } from "@convex-dev/workpool";
-import { Workpool as OldWorkpool } from "@convex-dev/workpool-old";
+import { internal } from "../../_generated/api";
 import { Id } from "../../_generated/dataModel";
+import { PoolKind, makePool } from "../pool";
 
 /**
  * Sustained, interleaved load scenario. Designed to exercise OCC paths
@@ -90,6 +89,10 @@ const Mode = v.union(
   v.literal("oldpool-oc"),
 );
 
+function poolFromMode(mode: string): PoolKind {
+  return mode === "oldpool-bare" || mode === "oldpool-oc" ? "old" : "new";
+}
+
 export default internalAction({
   args: {
     targetTps: v.optional(v.number()), // tasks per second
@@ -113,6 +116,8 @@ export default internalAction({
     },
   ) => {
     const totalTasks = targetTps * durationSec;
+    const poolKind = poolFromMode(mode);
+    const useOnComplete = mode === "workpool-oc" || mode === "oldpool-oc";
     const runId: Id<"runs"> = await ctx.runMutation(internal.test.run.start, {
       scenario: `sustained-${mode}`,
       parameters: {
@@ -124,29 +129,11 @@ export default internalAction({
         mode,
         maxParallelism,
       },
+      pool: poolKind,
     });
 
-    const isNew = mode === "workpool-bare" || mode === "workpool-oc";
-    const isOld = mode === "oldpool-bare" || mode === "oldpool-oc";
-    const useOnComplete = mode === "workpool-oc" || mode === "oldpool-oc";
-
-    if (isNew) {
-      await ctx.runMutation(components.testWorkpool.config.update, {
-        maxParallelism,
-      });
-    }
-    if (isOld) {
-      await ctx.runMutation(components.oldWorkpool.config.update, {
-        maxParallelism,
-      });
-    }
-    const newPool = isNew
-      ? new Workpool(components.testWorkpool, { maxParallelism })
-      : null;
-    const oldPool = isOld
-      ? new OldWorkpool(components.oldWorkpool, { maxParallelism })
-      : null;
-    const pool = newPool ?? oldPool!;
+    // run.start already configured the right component's maxParallelism.
+    const pool = makePool(poolKind, { maxParallelism });
 
     console.log(
       `sustained[${mode}]: ${totalTasks} tasks @ ${targetTps}/s for ${durationSec}s, ` +

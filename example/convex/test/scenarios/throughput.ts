@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { internal } from "../../_generated/api";
 import { enqueueTasks, TaskType } from "../work";
 import { Id } from "../../_generated/dataModel";
+import { vPoolKind } from "../pool";
 
 /**
  * Throughput / saturation scenario.
@@ -23,6 +24,7 @@ const parameters = {
   taskDurationMs: v.optional(v.number()),
   taskType: v.optional(v.union(v.literal("mutation"), v.literal("action"))),
   pollTimeoutMs: v.optional(v.number()),
+  pool: v.optional(vPoolKind),
 };
 
 export default internalAction({
@@ -37,6 +39,7 @@ export default internalAction({
       taskDurationMs = 20,
       taskType = "mutation",
       pollTimeoutMs = 600_000, // 10 minutes for big runs
+      pool = "new",
     },
   ) => {
     const runId: Id<"runs"> = await ctx.runMutation(internal.test.run.start, {
@@ -49,6 +52,7 @@ export default internalAction({
         taskType,
         taskDurationMs,
       },
+      pool,
     });
 
     const fn =
@@ -80,6 +84,7 @@ export default internalAction({
       const enqueuedAt = Date.now();
       await enqueueTasks({
         ctx,
+        pool,
         taskArgs: Array(thisBatch).fill(baseArgs),
         taskType,
         fn,
