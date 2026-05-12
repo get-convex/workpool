@@ -4,6 +4,7 @@ import { internal } from "../../_generated/api";
 import { enqueueTasks, TaskType } from "../work";
 import { Id } from "../../_generated/dataModel";
 import { WorkId } from "@convex-dev/workpool";
+import { vPoolKind } from "../pool";
 
 /**
  * Big Return Types Scenario
@@ -19,6 +20,7 @@ const parameters = {
   taskType: v.optional(v.union(v.literal("mutation"), v.literal("action"))),
   batchEnqueue: v.optional(v.boolean()),
   maxParallelism: v.optional(v.number()),
+  pool: v.optional(vPoolKind),
 };
 
 export default internalAction({
@@ -31,6 +33,7 @@ export default internalAction({
       taskType = "mutation",
       batchEnqueue = false,
       maxParallelism = 50,
+      pool = "new",
     },
   ): Promise<{
     workIds: WorkId[];
@@ -46,6 +49,7 @@ export default internalAction({
         batchEnqueue,
         maxParallelism,
       },
+      pool,
     });
 
     console.log(
@@ -75,6 +79,7 @@ export default internalAction({
     // Use shared enqueueTasks helper
     const workIds = await enqueueTasks({
       ctx,
+      pool,
       taskArgs,
       taskType,
       fn,

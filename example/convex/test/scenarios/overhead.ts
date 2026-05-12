@@ -1,9 +1,8 @@
 import { internalAction, internalMutation } from "../../_generated/server";
 import { v } from "convex/values";
-import { internal, components } from "../../_generated/api";
-import { Workpool } from "@convex-dev/workpool";
-import { Workpool as OldWorkpool } from "@convex-dev/workpool-old";
+import { internal } from "../../_generated/api";
 import { Id } from "../../_generated/dataModel";
+import { PoolKind, makePool } from "../pool";
 
 /**
  * Throughput / overhead measurement scenario.
@@ -66,6 +65,12 @@ const Mode = v.union(
   v.literal("oldpool-oc"),
 );
 
+function poolFromMode(mode: string): PoolKind | null {
+  if (mode === "workpool-bare" || mode === "workpool-oc") return "new";
+  if (mode === "oldpool-bare" || mode === "oldpool-oc") return "old";
+  return null;
+}
+
 export default internalAction({
   args: {
     taskCount: v.optional(v.number()),
@@ -86,38 +91,20 @@ export default internalAction({
       pollTimeoutMs = 600_000,
     },
   ) => {
+    const poolKind = poolFromMode(mode);
+    const useOnComplete = mode === "workpool-oc" || mode === "oldpool-oc";
     const runId: Id<"runs"> = await ctx.runMutation(internal.test.run.start, {
       scenario: `overhead-${mode}`,
       parameters: { taskCount, batchSize, mode, maxParallelism, interBatchMs },
+      pool: poolKind ?? undefined,
     });
     const scenarioStart = Date.now();
-
-    const isWorkpoolNew = mode === "workpool-bare" || mode === "workpool-oc";
-    const isWorkpoolOld = mode === "oldpool-bare" || mode === "oldpool-oc";
-    const useOnComplete = mode === "workpool-oc" || mode === "oldpool-oc";
-
-    // Configure the right pool (separate components → no cross-contamination)
-    if (isWorkpoolNew) {
-      await ctx.runMutation(components.testWorkpool.config.update, {
-        maxParallelism,
-      });
-    }
-    if (isWorkpoolOld) {
-      await ctx.runMutation(components.oldWorkpool.config.update, {
-        maxParallelism,
-      });
-    }
-
-    const newPool = isWorkpoolNew
-      ? new Workpool(components.testWorkpool, { maxParallelism })
-      : null;
-    const oldPool = isWorkpoolOld
-      ? new OldWorkpool(components.oldWorkpool, { maxParallelism })
-      : null;
+    // run.start already configured the right component's maxParallelism.
+    const pool = poolKind ? makePool(poolKind, { maxParallelism }) : null;
 
     console.log(
       `overhead[${mode}]: ${taskCount} tasks, batchSize=${batchSize}` +
-        (newPool || oldPool ? `, max=${maxParallelism}` : ""),
+        (pool ? `, max=${maxParallelism}` : ""),
     );
 
     const numBatches = Math.ceil(taskCount / batchSize);
@@ -140,10 +127,9 @@ export default internalAction({
           ),
         );
       } else if (!useOnComplete) {
-        const pool = newPool ?? oldPool!;
         await Promise.all(
           tasks.map(() =>
-            pool.enqueueMutation(
+            pool!.enqueueMutation(
               ctx,
               internal.test.scenarios.overhead.recorder,
               { runId, enqueuedAt },
@@ -151,10 +137,9 @@ export default internalAction({
           ),
         );
       } else {
-        const pool = newPool ?? oldPool!;
         await Promise.all(
           tasks.map(() =>
-            pool.enqueueMutation(
+            pool!.enqueueMutation(
               ctx,
               internal.test.scenarios.overhead.noop,
               {},

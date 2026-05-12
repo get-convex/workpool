@@ -1,14 +1,9 @@
 import { internalMutation, internalAction } from "../_generated/server";
 import { v } from "convex/values";
 import { DefaultFunctionArgs } from "convex/server";
-import { components } from "../_generated/api";
-import {
-  vOnCompleteArgs,
-  WorkId,
-  enqueueBatch,
-  enqueue,
-} from "@convex-dev/workpool";
+import { vOnCompleteArgs, WorkId, enqueue } from "@convex-dev/workpool";
 import { ActionCtx } from "../_generated/server";
+import { PoolKind, enqueueFor } from "./pool";
 
 /**
  * Generates a string of the specified length.
@@ -142,6 +137,7 @@ export type { WorkId };
  */
 export async function enqueueTasks<T extends DefaultFunctionArgs>(options: {
   ctx: ActionCtx;
+  pool?: PoolKind;
   taskArgs: T[];
   taskType: TaskType;
   fn: Parameters<typeof enqueue>[3];
@@ -150,33 +146,28 @@ export async function enqueueTasks<T extends DefaultFunctionArgs>(options: {
 }): Promise<WorkId[]> {
   const {
     ctx,
+    pool = "new",
     taskArgs,
     taskType,
     fn,
     onCompleteOpts,
     batchEnqueue = false,
   } = options;
-
-  let workIds: WorkId[];
+  const { component, enqueueOne, enqueueMany } = enqueueFor(pool);
 
   if (batchEnqueue) {
-    console.log("Using batch enqueue");
-    workIds = await enqueueBatch(
-      components.testWorkpool,
+    return await enqueueMany(
+      component,
       ctx,
       taskType,
       fn,
       taskArgs,
       onCompleteOpts,
     );
-  } else {
-    console.log("Using individual enqueue");
-    workIds = await Promise.all(
-      taskArgs.map((a) =>
-        enqueue(components.testWorkpool, ctx, taskType, fn, a, onCompleteOpts),
-      ),
-    );
   }
-
-  return workIds;
+  return await Promise.all(
+    taskArgs.map((a) =>
+      enqueueOne(component, ctx, taskType, fn, a, onCompleteOpts),
+    ),
+  );
 }
