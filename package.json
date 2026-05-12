@@ -67,8 +67,8 @@
     "convex-helpers": "^0.1.94"
   },
   "devDependencies": {
-    "@convex-dev/workpool-old": "npm:@convex-dev/workpool@0.4.6",
     "@convex-dev/eslint-plugin": "^2.0.0",
+    "@convex-dev/workpool-old": "npm:@convex-dev/workpool@0.4.6",
     "@edge-runtime/vm": "5.0.0",
     "@eslint/eslintrc": "3.3.3",
     "@eslint/js": "10.0.1",
@@ -89,6 +89,7 @@
     "prettier": "3.8.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "recharts": "^3.8.1",
     "typescript": "5.9.3",
     "typescript-eslint": "8.56.1",
     "vite": "7.3.2",

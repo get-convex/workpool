@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { internal } from "../../_generated/api";
 import { enqueueTasks, TaskType } from "../work";
 import { Id } from "../../_generated/dataModel";
+import { vPoolKind } from "../pool";
 
 const parameters = {
   waveCount: v.optional(v.number()),
@@ -11,6 +12,7 @@ const parameters = {
   taskType: v.optional(v.union(v.literal("mutation"), v.literal("action"))),
   maxParallelism: v.optional(v.number()),
   taskDurationMs: v.optional(v.number()),
+  pool: v.optional(vPoolKind),
 };
 
 /**
@@ -49,6 +51,7 @@ export default internalAction({
       taskType = "mutation",
       maxParallelism = 50,
       taskDurationMs = 0,
+      pool = "new",
     },
   ) => {
     const taskCount = waveCount * tasksPerWave;
@@ -63,6 +66,7 @@ export default internalAction({
         maxParallelism,
         taskDurationMs,
       },
+      pool,
     });
 
     const scenarioStart = Date.now();
@@ -111,6 +115,7 @@ export default internalAction({
       const waveStart = Date.now();
       await enqueueTasks({
         ctx,
+        pool,
         taskArgs,
         taskType,
         fn,
