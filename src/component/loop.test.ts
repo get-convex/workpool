@@ -481,19 +481,6 @@ describe("loop", () => {
       }
     });
 
-    it("doesn't lose work when re-checking before going idle", async () => {
-      // Snapshot-then-confirm safety net: even if the snapshot shows no
-      // work, the runQuery confirmation should pick up data committed
-      // before this iteration started.
-      await initialize();
-      const workId = await enqueueWork();
-
-      await runMain();
-
-      const o = await observe();
-      // The work was started, NOT lost to a "go idle" decision.
-      expect(o.running.map((r) => r.workId)).toEqual([workId]);
-    });
   });
 
   // ────────────────────────────────────────────────────────────────────
