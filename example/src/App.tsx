@@ -36,13 +36,94 @@ function fmtTime(t: number): string {
   return new Date(t).toLocaleString();
 }
 
+type CompareIds = [RunId | null, RunId | null, RunId | null];
+
+const SLOT_LABELS = ["A", "B", "C"] as const;
+const SLOT_COLORS = ["#4f8cff", "#ff8c4f", "#5cc97a"] as const;
+
+type UrlState = {
+  tab: Tab;
+  selectedRunId: RunId | null;
+  compareIds: CompareIds;
+};
+
+function serializeUrlState(s: UrlState): string {
+  switch (s.tab) {
+    case "detail":
+      return s.selectedRunId ? `detail/${s.selectedRunId}` : "history";
+    case "compare": {
+      const ids = s.compareIds.filter((x): x is RunId => x !== null);
+      return ids.length > 0 ? `compare/${ids.join(",")}` : "compare";
+    }
+    case "run":
+      return "new";
+    case "history":
+    default:
+      return "history";
+  }
+}
+
+function parseUrlHash(hash: string): Partial<UrlState> {
+  const h = hash.replace(/^#\/?/, "");
+  if (!h || h === "history") return { tab: "history" };
+  if (h === "new") return { tab: "run" };
+  if (h === "compare") return { tab: "compare" };
+  const detailMatch = h.match(/^detail\/(.+)$/);
+  if (detailMatch) {
+    return { tab: "detail", selectedRunId: detailMatch[1] as RunId };
+  }
+  const compareMatch = h.match(/^compare\/(.+)$/);
+  if (compareMatch) {
+    const parts = compareMatch[1].split(",").slice(0, 3);
+    const ids: CompareIds = [null, null, null];
+    parts.forEach((p, i) => {
+      if (p) ids[i] = p as RunId;
+    });
+    return { tab: "compare", compareIds: ids };
+  }
+  return { tab: "history" };
+}
+
+function readHashState(): UrlState {
+  const parsed = parseUrlHash(window.location.hash);
+  return {
+    tab: parsed.tab ?? "history",
+    selectedRunId: parsed.selectedRunId ?? null,
+    compareIds: parsed.compareIds ?? [null, null, null],
+  };
+}
+
 function App() {
-  const [tab, setTab] = useState<Tab>("history");
-  const [selectedRunId, setSelectedRunId] = useState<RunId | null>(null);
-  const [compareIds, setCompareIds] = useState<[RunId | null, RunId | null]>([
-    null,
-    null,
-  ]);
+  const initial = readHashState();
+  const [tab, setTab] = useState<Tab>(initial.tab);
+  const [selectedRunId, setSelectedRunId] = useState<RunId | null>(
+    initial.selectedRunId,
+  );
+  const [compareIds, setCompareIds] = useState<[RunId | null, RunId | null]>(
+    initial.compareIds,
+  );
+
+  // Sync state → hash.
+  useEffect(() => {
+    const next = serializeUrlState({ tab, selectedRunId, compareIds });
+    const current = window.location.hash.replace(/^#\/?/, "");
+    if (next !== current) {
+      const url = `${window.location.pathname}${window.location.search}#${next}`;
+      window.history.replaceState(null, "", url);
+    }
+  }, [tab, selectedRunId, compareIds]);
+
+  // Sync hash → state (back/forward, pasted URLs).
+  useEffect(() => {
+    const onHashChange = () => {
+      const s = readHashState();
+      setTab(s.tab);
+      setSelectedRunId(s.selectedRunId);
+      setCompareIds(s.compareIds);
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
 
   return (
     <>
