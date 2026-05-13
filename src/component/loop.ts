@@ -176,9 +176,7 @@ export const main = internalMutation({
         };
 
     // Snapshot read — no read dependency, no OCC conflicts.
-    const snapLabel = isRecoveryIter
-      ? "[main] getPending(recovery)"
-      : "[main] getPending";
+    const snapLabel = `[main] getPending${isRecoveryIter ? "(recovery)" : ""}(${state.running.length}/${globals.maxParallelism})`;
     console.time(snapLabel);
     const { allStarts, cancelations, completions } = await runSnapshotQuery(
       internal.loop.getPending,
@@ -187,13 +185,15 @@ export const main = internalMutation({
     const toStart = allStarts.filter((s) => s.segment <= segment);
     console.timeEnd(snapLabel);
 
-    console.time("[main] pendingCompletion");
+    const compLabel = `[main] pendingCompletion(${completions.length})`;
+    console.time(compLabel);
     const toCancel = await handleCompletions(ctx, state, completions, console);
-    console.timeEnd("[main] pendingCompletion");
+    console.timeEnd(compLabel);
 
-    console.time("[main] pendingCancelation");
+    const cancLabel = `[main] pendingCancelation(${cancelations.length})`;
+    console.time(cancLabel);
     await handleCancelation(ctx, state, cancelations, console, toCancel);
-    console.timeEnd("[main] pendingCancelation");
+    console.timeEnd(cancLabel);
 
     if (state.running.length === 0) {
       // If there's nothing active, reset lastRecovery.
@@ -210,9 +210,10 @@ export const main = internalMutation({
     const actualCapacity = globals.maxParallelism - state.running.length;
     const pending: Doc<"pendingStart">[] =
       actualCapacity > 0 ? toStart.slice(0, actualCapacity) : [];
-    console.time("[main] pendingStart");
+    const startLabel = `[main] pendingStart(${pending.length})`;
+    console.time(startLabel);
     await handleStart(ctx, state, pending, console, globals);
-    console.timeEnd("[main] pendingStart");
+    console.timeEnd(startLabel);
 
     if (Date.now() - state.report.lastReportTs >= MINUTE) {
       // If minute rollover since last report, log report.
@@ -324,6 +325,9 @@ export const main = internalMutation({
           segment: target,
         },
       });
+      console.debug(
+        `[main] → scheduled(${state.running.length}/${globals.maxParallelism})`,
+      );
       return;
     }
 
@@ -331,6 +335,7 @@ export const main = internalMutation({
     await ctx.db.patch("runStatus", runStatus._id, {
       state: { kind: "idle", generation: state.generation },
     });
+    console.debug(`[main] → idle`);
   },
 });
 
