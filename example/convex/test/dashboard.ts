@@ -197,7 +197,7 @@ export const runConcurrent = action({
     await Promise.all([
       ctx.runAction(fn, { ...args, pool: "0.4.2" }),
       ctx.runAction(fn, { ...args, pool: "0.4.6" }),
-      ctx.runAction(fn, { ...args, pool: "0.4.7" }),
+      ctx.runAction(fn, { ...args, pool: "new" }),
     ]);
   },
 });

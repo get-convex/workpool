@@ -146,7 +146,7 @@ export async function enqueueTasks<T extends DefaultFunctionArgs>(options: {
 }): Promise<WorkId[]> {
   const {
     ctx,
-    pool = "0.4.7",
+    pool = "new",
     taskArgs,
     taskType,
     fn,

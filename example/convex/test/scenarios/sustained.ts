@@ -17,7 +17,7 @@ import { makePool, vPoolKind } from "../pool";
  * running, completions arriving — exactly the scenario where main /
  * updateRunStatus / kickMainLoop reads can race with concurrent writes.
  *
- *   pool:        "0.4.7" | "0.4.6" | "0.4.2"
+ *   pool:        "new" | "0.4.6" | "0.4.2"
  *   onComplete:  if true, worker is a no-op and the recorder runs via the
  *                onComplete callback. If false, the worker itself records.
  *
@@ -103,7 +103,7 @@ export default internalAction({
       durationSec = 20,
       workerMinMs = 50,
       workerMaxMs = 500,
-      pool: poolKind = "0.4.7",
+      pool: poolKind = "new",
       onComplete = false,
       maxParallelism = 100,
       pollTimeoutMs = 600_000,
