@@ -597,7 +597,8 @@ const SCENARIO_PRESETS = {
     taskCount: 500,
     batchSize: 50,
     interBatchMs: 0,
-    mode: "workpool-bare",
+    mode: "pool",
+    onComplete: false,
     maxParallelism: 50,
   },
   sustained: {
@@ -605,7 +606,7 @@ const SCENARIO_PRESETS = {
     durationSec: 20,
     workerMinMs: 50,
     workerMaxMs: 500,
-    mode: "workpool-bare",
+    onComplete: false,
     maxParallelism: 100,
   },
   bigArgs: {
@@ -654,13 +655,11 @@ function RunScenarioForm({ onStarted }: { onStarted: () => void }) {
     }
     setBusy(true);
     try {
-      const supportsPool =
-        scenario !== "overhead" && scenario !== "sustained";
       const launches: Array<"new" | "old"> =
         pool === "both" ? ["old", "new"] : [pool];
       const argsList = launches.map((p) => ({
         ...parsed,
-        ...(supportsPool ? { pool: p } : {}),
+        pool: p,
       }));
       await runScenarios({ scenario, argsList });
       onStarted();
@@ -670,8 +669,6 @@ function RunScenarioForm({ onStarted }: { onStarted: () => void }) {
       setBusy(false);
     }
   };
-
-  const supportsPool = scenario !== "overhead" && scenario !== "sustained";
 
   return (
     <div className="card">
@@ -695,12 +692,6 @@ function RunScenarioForm({ onStarted }: { onStarted: () => void }) {
             value={pool}
             onChange={(e) =>
               setPool(e.target.value as "new" | "old" | "both")
-            }
-            disabled={!supportsPool}
-            title={
-              supportsPool
-                ? ""
-                : "This scenario picks pool via its 'mode' parameter"
             }
           >
             <option value="new">new (this branch)</option>
