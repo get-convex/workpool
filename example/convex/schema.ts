@@ -13,7 +13,17 @@ export default defineSchema({
     parameters: v.any(),
     taskCount: v.optional(v.number()),
     endTime: v.optional(v.number()),
-    pool: v.optional(v.union(v.literal("new"), v.literal("old"))),
+    pool: v.optional(
+      v.union(
+        v.literal("0.4.7"),
+        v.literal("0.4.6"),
+        v.literal("0.4.2"),
+        // Legacy values kept so historical runs still validate. New runs
+        // should write the version-string values above.
+        v.literal("new"),
+        v.literal("old"),
+      ),
+    ),
   }),
   tasks: defineTable({
     runId: v.id("runs"),

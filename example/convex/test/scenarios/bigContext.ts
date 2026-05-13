@@ -34,7 +34,7 @@ export default internalAction({
       taskType = "mutation",
       batchEnqueue = false,
       maxParallelism = 50,
-      pool = "new",
+      pool = "0.4.7",
     },
   ): Promise<{
     workIds: WorkId[];

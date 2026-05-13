@@ -182,6 +182,11 @@ textarea {
   color: #ff8c4f;
 }
 
+.pool-badge.older {
+  background: #d9636333;
+  color: #d96363;
+}
+
 .pool-badge.none {
   background: #8884;
 }

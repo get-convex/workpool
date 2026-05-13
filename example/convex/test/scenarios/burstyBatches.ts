@@ -51,7 +51,7 @@ export default internalAction({
       taskType = "mutation",
       maxParallelism = 50,
       taskDurationMs = 0,
-      pool = "new",
+      pool = "0.4.7",
     },
   ) => {
     const taskCount = waveCount * tasksPerWave;

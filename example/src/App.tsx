@@ -19,10 +19,21 @@ import {
 type RunId = Id<"runs">;
 type Tab = "history" | "detail" | "compare" | "run";
 
-type PoolKind = "new" | "old";
+type PoolKind = "0.4.7" | "0.4.6" | "0.4.2";
+// Legacy values still appear on historical run docs.
+type PoolValue = PoolKind | "new" | "old";
 
-function PoolBadge({ pool }: { pool?: PoolKind }) {
-  const cls = pool ?? "none";
+const POOL_CSS_CLASS: Record<PoolValue | "none", string> = {
+  "0.4.7": "new",
+  new: "new",
+  "0.4.6": "old",
+  old: "old",
+  "0.4.2": "older",
+  none: "none",
+};
+
+function PoolBadge({ pool }: { pool?: PoolValue }) {
+  const cls = POOL_CSS_CLASS[pool ?? "none"];
   return <span className={`pool-badge ${cls}`}>{pool ?? "—"}</span>;
 }
 
@@ -283,7 +294,7 @@ function HistoryRow({
       </td>
       <td>{row.scenario}</td>
       <td>
-        <PoolBadge pool={row.pool as PoolKind | undefined} />
+        <PoolBadge pool={row.pool as PoolValue | undefined} />
       </td>
       <td className={run ? `status-${run.status}` : "muted"}>
         {run ? run.status : "…"}
@@ -316,7 +327,7 @@ function RunDetail({ runId }: { runId: RunId }) {
       <div className="card">
         <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
           <h2 style={{ margin: 0 }}>{run.scenario}</h2>
-          <PoolBadge pool={run.pool as PoolKind | undefined} />
+          <PoolBadge pool={run.pool as PoolValue | undefined} />
           <span className={`status-${run.status}`}>{run.status}</span>
           <span className="muted">{fmtTime(run.startTime)}</span>
         </div>
@@ -715,7 +726,7 @@ type ScenarioName = keyof typeof SCENARIO_PRESETS;
 function RunScenarioForm({ onStarted }: { onStarted: () => void }) {
   const runScenarios = useAction(api.test.dashboard.runScenarios);
   const [scenario, setScenario] = useState<ScenarioName>("burstyBatches");
-  const [pool, setPool] = useState<"new" | "old" | "both">("new");
+  const [pool, setPool] = useState<PoolKind | "all">("0.4.7");
   const [paramsText, setParamsText] = useState<string>(
     JSON.stringify(SCENARIO_PRESETS[scenario], null, 2),
   );
@@ -739,8 +750,8 @@ function RunScenarioForm({ onStarted }: { onStarted: () => void }) {
     }
     setBusy(true);
     try {
-      const launches: Array<"new" | "old"> =
-        pool === "both" ? ["old", "new"] : [pool];
+      const launches: Array<PoolKind> =
+        pool === "all" ? ["0.4.2", "0.4.6", "0.4.7"] : [pool];
       const argsList = launches.map((p) => ({
         ...parsed,
         pool: p,
@@ -774,11 +785,12 @@ function RunScenarioForm({ onStarted }: { onStarted: () => void }) {
           Pool
           <select
             value={pool}
-            onChange={(e) => setPool(e.target.value as "new" | "old" | "both")}
+            onChange={(e) => setPool(e.target.value as PoolKind | "all")}
           >
-            <option value="new">new (this branch)</option>
-            <option value="old">old (workpool@0.4.6)</option>
-            <option value="both">both (sequential)</option>
+            <option value="0.4.7">0.4.7 (this branch)</option>
+            <option value="0.4.6">0.4.6 (published, with cooldown)</option>
+            <option value="0.4.2">0.4.2 (pre-cooldown)</option>
+            <option value="all">all (sequential)</option>
           </select>
         </label>
       </div>
@@ -797,10 +809,11 @@ function RunScenarioForm({ onStarted }: { onStarted: () => void }) {
         {busy ? "Starting…" : "Run"}
       </button>
       <p className="muted" style={{ fontSize: "0.8rem", marginTop: "1rem" }}>
-        Tip: pick “both” to run the same scenario back-to-back on old then new,
-        then compare them under “Compare”. The dashboard waits for each run to
-        finish (plus a short buffer for the runner's 5s reentry guard) before
-        starting the next, so the button stays busy for the full duration.
+        Tip: pick “all” to run the same scenario back-to-back on each
+        version (0.4.2 → 0.4.6 → 0.4.7), then compare them under “Compare”.
+        The dashboard waits for each run to finish (plus a short buffer for
+        the runner's 5s reentry guard) before starting the next, so the
+        button stays busy for the full duration.
       </p>
     </div>
   );

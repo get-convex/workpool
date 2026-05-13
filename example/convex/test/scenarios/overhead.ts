@@ -8,7 +8,7 @@ import { makePool, vPoolKind } from "../pool";
  * Throughput / overhead measurement scenario.
  *
  *   mode:        "raw" (bare ctx.scheduler) or "pool" (use a workpool)
- *   pool:        "new" | "old"  (only meaningful when mode = "pool")
+ *   pool:        "0.4.7" | "0.4.6" | "0.4.2"  (only meaningful when mode = "pool")
  *   onComplete:  if true, worker is a no-op and the recorder runs as the
  *                onComplete callback. If false, the worker itself records.
  *
@@ -75,7 +75,7 @@ export default internalAction({
       batchSize = 50,
       interBatchMs = 0,
       mode = "raw",
-      pool: poolKind = "new",
+      pool: poolKind = "0.4.7",
       onComplete = false,
       maxParallelism = 50,
       pollTimeoutMs = 600_000,
