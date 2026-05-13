@@ -34,7 +34,7 @@ export const start = internalMutation({
     pool: v.optional(vPoolKind),
   },
   handler: async (ctx, args) => {
-    const pool = args.pool ?? "0.4.7";
+    const pool = args.pool ?? "new";
     // Check for in-flight tasks from the latest run
     const latestRun = await ctx.db.query("runs").order("desc").first();
 

@@ -14,10 +14,10 @@ import {
 } from "@convex-dev/workpool-v042";
 import { ActionCtx, MutationCtx } from "../_generated/server";
 
-export const POOL_KINDS = ["0.4.7", "0.4.6", "0.4.2"] as const;
+export const POOL_KINDS = ["new", "0.4.6", "0.4.2"] as const;
 export type PoolKind = (typeof POOL_KINDS)[number];
 export const vPoolKind = v.union(
-  v.literal("0.4.7"),
+  v.literal("new"),
   v.literal("0.4.6"),
   v.literal("0.4.2"),
 );
@@ -26,7 +26,7 @@ type Ctx = ActionCtx | MutationCtx;
 
 export function getComponent(kind: PoolKind) {
   switch (kind) {
-    case "0.4.7":
+    case "new":
       return components.v047Pool;
     case "0.4.6":
       return components.v046Pool;
@@ -53,7 +53,7 @@ export function makePool(
   opts: { maxParallelism: number },
 ): Workpool | WorkpoolV046 | WorkpoolV042 {
   switch (kind) {
-    case "0.4.7":
+    case "new":
       return new Workpool(components.v047Pool, opts);
     case "0.4.6":
       return new WorkpoolV046(components.v046Pool, opts);
@@ -68,7 +68,7 @@ export function enqueueFor(kind: PoolKind): {
   enqueueMany: typeof enqueueBatch;
 } {
   switch (kind) {
-    case "0.4.7":
+    case "new":
       return {
         component: components.v047Pool,
         enqueueOne: enqueue,

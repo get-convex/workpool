@@ -19,13 +19,13 @@ import {
 type RunId = Id<"runs">;
 type Tab = "history" | "detail" | "compare" | "run";
 
-type PoolKind = "0.4.7" | "0.4.6" | "0.4.2";
+type PoolKind = "new" | "0.4.6" | "0.4.2";
 // Legacy values still appear on historical run docs.
-type PoolValue = PoolKind | "new" | "old";
+type PoolValue = PoolKind | "0.4.7" | "old";
 
 const POOL_CSS_CLASS: Record<PoolValue | "none", string> = {
-  "0.4.7": "new",
   new: "new",
+  "0.4.7": "new",
   "0.4.6": "old",
   old: "old",
   "0.4.2": "older",
@@ -764,7 +764,7 @@ type ScenarioName = keyof typeof SCENARIO_PRESETS;
 function RunScenarioForm({ onStarted }: { onStarted: () => void }) {
   const runScenarios = useAction(api.test.dashboard.runScenarios);
   const [scenario, setScenario] = useState<ScenarioName>("burstyBatches");
-  const [pool, setPool] = useState<PoolKind | "all">("0.4.7");
+  const [pool, setPool] = useState<PoolKind | "all">("new");
   const [paramsText, setParamsText] = useState<string>(
     JSON.stringify(SCENARIO_PRESETS[scenario], null, 2),
   );
@@ -789,7 +789,7 @@ function RunScenarioForm({ onStarted }: { onStarted: () => void }) {
     setBusy(true);
     try {
       const launches: Array<PoolKind> =
-        pool === "all" ? ["0.4.2", "0.4.6", "0.4.7"] : [pool];
+        pool === "all" ? ["0.4.2", "0.4.6", "new"] : [pool];
       const argsList = launches.map((p) => ({
         ...parsed,
         pool: p,
@@ -825,7 +825,7 @@ function RunScenarioForm({ onStarted }: { onStarted: () => void }) {
             value={pool}
             onChange={(e) => setPool(e.target.value as PoolKind | "all")}
           >
-            <option value="0.4.7">0.4.7 (this branch)</option>
+            <option value="new">new (this branch, 0.4.7-α)</option>
             <option value="0.4.6">0.4.6 (published, with cooldown)</option>
             <option value="0.4.2">0.4.2 (pre-cooldown)</option>
             <option value="all">all (sequential)</option>
@@ -847,11 +847,11 @@ function RunScenarioForm({ onStarted }: { onStarted: () => void }) {
         {busy ? "Starting…" : "Run"}
       </button>
       <p className="muted" style={{ fontSize: "0.8rem", marginTop: "1rem" }}>
-        Tip: pick “all” to run the same scenario back-to-back on each version
-        (0.4.2 → 0.4.6 → 0.4.7), then compare them under “Compare”. The
-        dashboard waits for each run to finish (plus a short buffer for the
-        runner's 5s reentry guard) before starting the next, so the button stays
-        busy for the full duration.
+        Tip: pick “all” to run the same scenario back-to-back on each
+        version (0.4.2 → 0.4.6 → new), then compare them under “Compare”.
+        The dashboard waits for each run to finish (plus a short buffer for
+        the runner's 5s reentry guard) before starting the next, so the
+        button stays busy for the full duration.
       </p>
     </div>
   );

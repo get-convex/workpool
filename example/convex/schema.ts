@@ -15,12 +15,12 @@ export default defineSchema({
     endTime: v.optional(v.number()),
     pool: v.optional(
       v.union(
-        v.literal("0.4.7"),
+        v.literal("new"),
         v.literal("0.4.6"),
         v.literal("0.4.2"),
         // Legacy values kept so historical runs still validate. New runs
-        // should write the version-string values above.
-        v.literal("new"),
+        // should write the values above.
+        v.literal("0.4.7"),
         v.literal("old"),
       ),
     ),
