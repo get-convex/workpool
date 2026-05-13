@@ -43,8 +43,12 @@ export const STATUS_COOLDOWN = 2 * SECOND;
 export const COOLDOWN_CHECK_INTERVAL = 200 * MS;
 // Buffer applied when querying with cursors. Transactions that started
 // before ours may still be running and commit inserts at segments behind
-// a previously advanced cursor — the buffer lets us pick those up.
-const CURSOR_BUFFER_SEGMENTS = toSegment(30 * SECOND);
+// a previously advanced cursor — the buffer lets us pick those up. Most
+// commits land within milliseconds, so a small buffer covers nearly all
+// of them. The minute-cadence recovery iteration scans from segment 0
+// (the start of each pending table) to catch any very-late commit that
+// fell behind even this buffer.
+const CURSOR_BUFFER_SEGMENTS = toSegment(10 * SECOND);
 
 export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
   generation: 0n,
@@ -145,25 +149,43 @@ export const main = internalMutation({
     // Pass maxParallelism + runningCount so the query bounds each batch to
     // what we can actually consume this iteration. Apply CURSOR_BUFFER_SEGMENTS
     // so we still pick up out-of-order inserts that landed behind the cursor
-    // since our last scan.
-    const queryArgs = {
-      completionCursor:
-        state.segmentCursors.completion - CURSOR_BUFFER_SEGMENTS,
-      cancelationCursor:
-        state.segmentCursors.cancelation - CURSOR_BUFFER_SEGMENTS,
-      incomingCursor: state.segmentCursors.incoming - CURSOR_BUFFER_SEGMENTS,
-      maxParallelism: globals.maxParallelism,
-      runningCount: state.running.length,
-    };
+    // since our last scan. Once per recovery period (≈1min), scan from
+    // segment 0 to catch any very-late commit that fell behind the buffer
+    // — the pending tables only contain unprocessed work, so this stays
+    // bounded by the size of any backlog.
+    const isRecoveryIter =
+      state.running.length > 0 &&
+      segment - state.lastRecovery >= RECOVERY_PERIOD_SEGMENTS;
+    const queryArgs = isRecoveryIter
+      ? {
+          completionCursor: 0n,
+          cancelationCursor: 0n,
+          incomingCursor: 0n,
+          maxParallelism: globals.maxParallelism,
+          runningCount: state.running.length,
+        }
+      : {
+          completionCursor:
+            state.segmentCursors.completion - CURSOR_BUFFER_SEGMENTS,
+          cancelationCursor:
+            state.segmentCursors.cancelation - CURSOR_BUFFER_SEGMENTS,
+          incomingCursor:
+            state.segmentCursors.incoming - CURSOR_BUFFER_SEGMENTS,
+          maxParallelism: globals.maxParallelism,
+          runningCount: state.running.length,
+        };
 
     // Snapshot read — no read dependency, no OCC conflicts.
-    console.time("[main] getPending");
+    const snapLabel = isRecoveryIter
+      ? "[main] getPending(recovery)"
+      : "[main] getPending";
+    console.time(snapLabel);
     const { allStarts, cancelations, completions } = await runSnapshotQuery(
       internal.loop.getPending,
       queryArgs,
     );
     const toStart = allStarts.filter((s) => s.segment <= segment);
-    console.timeEnd("[main] getPending");
+    console.timeEnd(snapLabel);
 
     console.time("[main] pendingCompletion");
     const toCancel = await handleCompletions(ctx, state, completions, console);
