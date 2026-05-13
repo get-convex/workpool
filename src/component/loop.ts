@@ -30,6 +30,10 @@ import { generateReport, recordCompleted, recordStarted } from "./stats.js";
 
 const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
 const RECOVERY_BATCH_SIZE = 32;
+// Cap per-iteration completions + starts. Larger batches push per-iteration
+// latency up without buying throughput: the loop re-fires immediately on
+// didWork, so smaller cheaper iterations carry the same work in aggregate.
+const MAIN_BATCH_SIZE = 64;
 const MS = 1;
 const SECOND = 1000 * MS;
 const MINUTE = 60 * SECOND;
@@ -81,16 +85,18 @@ export const getPending = internalQuery({
     const completions = await ctx.db
       .query("pendingCompletion")
       .withIndex("segment", (q) => q.gte("segment", completionCursor))
-      .take(maxParallelism);
+      .take(Math.min(maxParallelism, MAIN_BATCH_SIZE));
     const cancelations = await ctx.db
       .query("pendingCancelation")
       .withIndex("segment", (q) => q.gte("segment", cancelationCursor))
       .take(CANCELLATION_BATCH_SIZE);
     // Available slots after we process this batch's completions, plus 1
     // for the +1 trick (detect overflow vs. a future-scheduled retry).
-    const startLimit = Math.max(
-      0,
-      maxParallelism - runningCount + completions.length,
+    // Cap at MAIN_BATCH_SIZE so a single iteration's per-item writes
+    // (delete pendingStart + scheduler.runAfter) don't grow unbounded.
+    const startLimit = Math.min(
+      MAIN_BATCH_SIZE,
+      Math.max(0, maxParallelism - runningCount + completions.length),
     );
     const excludedIds = [
       ...completions.map((c) => c.workId),
