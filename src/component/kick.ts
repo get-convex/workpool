@@ -18,7 +18,7 @@ import {
  */
 export async function kickMainLoop(
   ctx: MutationCtx,
-  source: "enqueue" | "cancel" | "complete" | "kick",
+  source: "enqueue" | "cancel" | "complete" | "retry" | "kick",
   config?: Config,
 ): Promise<void> {
   const globals = config ?? (await getOrUpdateGlobals(ctx, config));
@@ -41,6 +41,9 @@ export async function kickMainLoop(
       return;
     }
     if (source === "complete" && !runStatus.state.saturated) {
+      // A pure completion doesn't create new work to start, so the loop's
+      // existing wake-up is fine. Retries (source "retry") do create new
+      // pendingStart work and fall through to kick the loop promptly.
       console.debug(
         `[${source}] main is not saturated, so kicking for completion isn't necessary`,
       );

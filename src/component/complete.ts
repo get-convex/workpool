@@ -197,7 +197,10 @@ export async function completeHandler(
     }),
   );
   if (pendingCompletions.length > 0) {
-    await kickMainLoop(ctx, "complete");
+    const source = pendingCompletions.some((c) => c.retry)
+      ? "retry"
+      : "complete";
+    await kickMainLoop(ctx, source);
     const segment = getCurrentSegment();
     await Promise.all(
       pendingCompletions.map((completion) =>
