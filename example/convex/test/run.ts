@@ -104,6 +104,46 @@ export const status = internalQuery({
   },
 });
 
+// runId-scoped metrics — necessary for concurrent runs where the "latest"
+// run is ambiguous. Same payload as `metrics` for the caller's runId.
+export const metricsForRun = internalQuery({
+  args: { runId: v.id("runs") },
+  handler: async (ctx, { runId }) => {
+    const run = await ctx.db.get(runId);
+    if (!run) return null;
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("runId", (q) => q.eq("runId", run._id))
+      .collect();
+    const status = await runStatus(ctx, run);
+    const completedCount = tasks.length;
+    const taskCount = run.taskCount ?? 0;
+    const latencies = tasks
+      .filter((t) => t.enqueuedAt !== undefined)
+      .map((t) => t.endTime - t.enqueuedAt!)
+      .sort((a, b) => a - b);
+    const endTimes = tasks.map((t) => t.endTime);
+    const lastEndTime = endTimes.length ? Math.max(...endTimes) : undefined;
+    const totalDurationMs = lastEndTime
+      ? lastEndTime - run.startTime
+      : undefined;
+    return {
+      status,
+      completedCount,
+      taskCount,
+      ...(totalDurationMs !== undefined && { totalDurationMs }),
+      ...(latencies.length > 0 && {
+        latency: {
+          p50: percentile(latencies, 50),
+          p95: percentile(latencies, 95),
+          p99: percentile(latencies, 99),
+          max: latencies[latencies.length - 1],
+        },
+      }),
+    };
+  },
+});
+
 function percentile(sorted: number[], p: number): number {
   const idx = Math.ceil((p / 100) * sorted.length) - 1;
   return sorted[Math.max(0, idx)];
