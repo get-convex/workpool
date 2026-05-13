@@ -28,7 +28,7 @@ export const listRuns = query({
 export const getRun = query({
   args: { runId: v.id("runs") },
   handler: async (ctx, { runId }) => {
-    const run = await ctx.db.get(runId);
+    const run = await ctx.db.get("runs", runId);
     if (!run) return null;
     const tasks = await ctx.db
       .query("tasks")
@@ -71,7 +71,7 @@ export const getRun = query({
 export const throughputOverTime = query({
   args: { runId: v.id("runs"), bucketMs: v.optional(v.number()) },
   handler: async (ctx, { runId, bucketMs = 500 }) => {
-    const run = await ctx.db.get(runId);
+    const run = await ctx.db.get("runs", runId);
     if (!run) return null;
     const tasks = await ctx.db
       .query("tasks")

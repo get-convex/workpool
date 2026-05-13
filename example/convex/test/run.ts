@@ -6,7 +6,6 @@ import {
 import { v } from "convex/values";
 import { Id } from "../_generated/dataModel";
 import { assert } from "convex-helpers";
-import { components } from "../_generated/api";
 import { getComponent } from "./pool";
 
 export async function runStatus(
