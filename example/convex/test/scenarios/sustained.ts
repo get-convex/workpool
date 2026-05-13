@@ -2,7 +2,7 @@ import { internalAction, internalMutation } from "../../_generated/server";
 import { v } from "convex/values";
 import { internal } from "../../_generated/api";
 import { Id } from "../../_generated/dataModel";
-import { PoolKind, makePool } from "../pool";
+import { makePool, vPoolKind } from "../pool";
 
 /**
  * Sustained, interleaved load scenario. Designed to exercise OCC paths
@@ -17,8 +17,11 @@ import { PoolKind, makePool } from "../pool";
  * running, completions arriving — exactly the scenario where main /
  * updateRunStatus / kickMainLoop reads can race with concurrent writes.
  *
- * Modes mirror overhead.ts: workpool-bare/oc and oldpool-bare/oc on the
- * same deployment. Workers are actions (so they can actually sleep).
+ *   pool:        "new" | "old"
+ *   onComplete:  if true, worker is a no-op and the recorder runs via the
+ *                onComplete callback. If false, the worker itself records.
+ *
+ * Workers are actions (so they can actually sleep).
  */
 
 // Worker: an action that sleeps for [minMs, maxMs] then records completion.
@@ -82,24 +85,14 @@ export const sleepingNoop = internalAction({
   },
 });
 
-const Mode = v.union(
-  v.literal("workpool-bare"),
-  v.literal("workpool-oc"),
-  v.literal("oldpool-bare"),
-  v.literal("oldpool-oc"),
-);
-
-function poolFromMode(mode: string): PoolKind {
-  return mode === "oldpool-bare" || mode === "oldpool-oc" ? "old" : "new";
-}
-
 export default internalAction({
   args: {
     targetTps: v.optional(v.number()), // tasks per second
     durationSec: v.optional(v.number()), // how long to keep enqueuing
     workerMinMs: v.optional(v.number()),
     workerMaxMs: v.optional(v.number()),
-    mode: v.optional(Mode),
+    pool: v.optional(vPoolKind),
+    onComplete: v.optional(v.boolean()),
     maxParallelism: v.optional(v.number()),
     pollTimeoutMs: v.optional(v.number()),
   },
@@ -110,23 +103,23 @@ export default internalAction({
       durationSec = 20,
       workerMinMs = 50,
       workerMaxMs = 500,
-      mode = "workpool-bare",
+      pool: poolKind = "new",
+      onComplete = false,
       maxParallelism = 100,
       pollTimeoutMs = 600_000,
     },
   ) => {
     const totalTasks = targetTps * durationSec;
-    const poolKind = poolFromMode(mode);
-    const useOnComplete = mode === "workpool-oc" || mode === "oldpool-oc";
+    const scenarioLabel = `sustained-${poolKind}${onComplete ? "-oc" : "-bare"}`;
     const runId: Id<"runs"> = await ctx.runMutation(internal.test.run.start, {
-      scenario: `sustained-${mode}`,
+      scenario: scenarioLabel,
       parameters: {
         taskCount: totalTasks,
         targetTps,
         durationSec,
         workerMinMs,
         workerMaxMs,
-        mode,
+        onComplete,
         maxParallelism,
       },
       pool: poolKind,
@@ -136,7 +129,7 @@ export default internalAction({
     const pool = makePool(poolKind, { maxParallelism });
 
     console.log(
-      `sustained[${mode}]: ${totalTasks} tasks @ ${targetTps}/s for ${durationSec}s, ` +
+      `${scenarioLabel}: ${totalTasks} tasks @ ${targetTps}/s for ${durationSec}s, ` +
         `worker=${workerMinMs}-${workerMaxMs}ms, max=${maxParallelism}`,
     );
 
@@ -157,7 +150,7 @@ export default internalAction({
         maxMs: workerMaxMs,
       };
       let p: Promise<unknown>;
-      if (useOnComplete) {
+      if (onComplete) {
         p = pool.enqueueAction(
           ctx,
           internal.test.scenarios.sustained.sleepingNoop,
@@ -221,7 +214,7 @@ export default internalAction({
       | { p50: number; p95: number; p99: number; max: number }
       | undefined;
 
-    console.log(`\n=== sustained[${mode}] ===`);
+    console.log(`\n=== ${scenarioLabel} ===`);
     console.log(
       `${completedCount}/${enqueued} done in ${total}ms ` +
         `(${tps.toFixed(0)} tps, ${msPerTask.toFixed(1)} ms/task wall)`,
@@ -232,7 +225,8 @@ export default internalAction({
           `p99=${latency.p99}ms max=${latency.max}ms`,
       );
     return {
-      mode,
+      pool: poolKind,
+      onComplete,
       taskCount: completedCount,
       enqueued,
       totalDurationMs: total,
