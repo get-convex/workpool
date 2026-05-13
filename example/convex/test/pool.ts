@@ -3,43 +3,63 @@ import { components } from "../_generated/api";
 import { Workpool, enqueue, enqueueBatch } from "@convex-dev/workpool";
 import type { ComponentApi } from "@convex-dev/workpool/_generated/component.js";
 import {
-  Workpool as OldWorkpool,
-  enqueue as enqueueOld,
-  enqueueBatch as enqueueBatchOld,
-} from "@convex-dev/workpool-old";
+  Workpool as WorkpoolV046,
+  enqueue as enqueueV046,
+  enqueueBatch as enqueueBatchV046,
+} from "@convex-dev/workpool-v046";
+import {
+  Workpool as WorkpoolV042,
+  enqueue as enqueueV042,
+  enqueueBatch as enqueueBatchV042,
+} from "@convex-dev/workpool-v042";
 import { ActionCtx, MutationCtx } from "../_generated/server";
 
-export const POOL_KINDS = ["new", "old"] as const;
+export const POOL_KINDS = ["0.4.7", "0.4.6", "0.4.2"] as const;
 export type PoolKind = (typeof POOL_KINDS)[number];
-export const vPoolKind = v.union(v.literal("new"), v.literal("old"));
+export const vPoolKind = v.union(
+  v.literal("0.4.7"),
+  v.literal("0.4.6"),
+  v.literal("0.4.2"),
+);
 
 type Ctx = ActionCtx | MutationCtx;
+
+export function getComponent(kind: PoolKind) {
+  switch (kind) {
+    case "0.4.7":
+      return components.v047Pool;
+    case "0.4.6":
+      return components.v046Pool;
+    case "0.4.2":
+      return components.v042Pool;
+  }
+}
 
 export async function configurePool(
   ctx: Ctx,
   kind: PoolKind,
   maxParallelism: number,
 ): Promise<void> {
-  const component =
-    kind === "new" ? components.testWorkpool : components.oldWorkpool;
-  await ctx.runMutation(component.config.update, { maxParallelism });
+  await ctx.runMutation(getComponent(kind).config.update, { maxParallelism });
 }
 
 /**
- * Returns a Workpool instance for the chosen pool. Both classes share the
- * same `enqueueMutation` / `enqueueAction` / `enqueueBatch` shape, so the
- * union return type works for callers that just need to enqueue.
+ * Returns a Workpool instance for the chosen pool. All three classes share
+ * the same `enqueueMutation` / `enqueueAction` / `enqueueBatch` shape, so
+ * the union return type works for callers that just need to enqueue.
  */
 export function makePool(
   kind: PoolKind,
   opts: { maxParallelism: number },
-): Workpool | OldWorkpool {
-  if (kind === "new") return new Workpool(components.testWorkpool, opts);
-  return new OldWorkpool(components.oldWorkpool, opts);
-}
-
-export function getComponent(kind: PoolKind) {
-  return kind === "new" ? components.testWorkpool : components.oldWorkpool;
+): Workpool | WorkpoolV046 | WorkpoolV042 {
+  switch (kind) {
+    case "0.4.7":
+      return new Workpool(components.v047Pool, opts);
+    case "0.4.6":
+      return new WorkpoolV046(components.v046Pool, opts);
+    case "0.4.2":
+      return new WorkpoolV042(components.v042Pool, opts);
+  }
 }
 
 export function enqueueFor(kind: PoolKind): {
@@ -47,16 +67,24 @@ export function enqueueFor(kind: PoolKind): {
   enqueueOne: typeof enqueue;
   enqueueMany: typeof enqueueBatch;
 } {
-  if (kind === "new") {
-    return {
-      component: components.testWorkpool,
-      enqueueOne: enqueue,
-      enqueueMany: enqueueBatch,
-    };
+  switch (kind) {
+    case "0.4.7":
+      return {
+        component: components.v047Pool,
+        enqueueOne: enqueue,
+        enqueueMany: enqueueBatch,
+      };
+    case "0.4.6":
+      return {
+        component: components.v046Pool,
+        enqueueOne: enqueueV046,
+        enqueueMany: enqueueBatchV046,
+      };
+    case "0.4.2":
+      return {
+        component: components.v042Pool,
+        enqueueOne: enqueueV042,
+        enqueueMany: enqueueBatchV042,
+      };
   }
-  return {
-    component: components.oldWorkpool,
-    enqueueOne: enqueueOld,
-    enqueueMany: enqueueBatchOld,
-  };
 }
