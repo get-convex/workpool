@@ -16,7 +16,6 @@ import { modules } from "./setup.test.js";
 import {
   DEFAULT_MAX_PARALLELISM,
   fromSegment,
-  getCurrentSegment,
   getNextSegment,
   toSegment,
 } from "./shared.js";
@@ -58,12 +57,11 @@ describe("kickMainLoop", () => {
       expect(runStatus.state.kind).toBe("running");
 
       // Second kick should not change state
-      const segment = await kickMainLoop(ctx, "enqueue");
+      await kickMainLoop(ctx, "enqueue");
       const afterStatus = await ctx.db.query("runStatus").unique();
       assert(afterStatus);
       expect(afterStatus.state.kind).toBe("running");
       expect(afterStatus._id).toBe(runStatus._id);
-      expect(segment).toBe(getNextSegment());
     });
   });
 
@@ -100,8 +98,7 @@ describe("kickMainLoop", () => {
       });
 
       // Kick should reschedule to run sooner
-      const segment = await kickMainLoop(ctx, "enqueue");
-      expect(segment).toBe(getCurrentSegment());
+      await kickMainLoop(ctx, "enqueue");
 
       const afterStatus = await ctx.db.query("runStatus").unique();
       assert(afterStatus);
@@ -142,8 +139,7 @@ describe("kickMainLoop", () => {
       });
 
       // Kick should not change state when saturated
-      const segment = await kickMainLoop(ctx, "enqueue");
-      expect(segment).toBe(getNextSegment());
+      await kickMainLoop(ctx, "enqueue");
       const afterStatus = await ctx.db.query("runStatus").unique();
       assert(afterStatus);
       expect(afterStatus.state.kind).toBe("scheduled");
@@ -195,16 +191,14 @@ describe("kickMainLoop", () => {
 
   test("handles race conditions between multiple kicks", async () => {
     const t = convexTest(schema, modules);
-    // Run kicks in separate transactions to simulate concurrent access
-    const segments = await Promise.all(
+    // Run kicks in separate transactions to simulate concurrent access.
+    // None should throw; the loser transactions just observe the winner's
+    // running state and return early.
+    await Promise.all(
       Array.from({ length: 10 }, () =>
-        t.run(async (ctx) => {
-          const segment = await kickMainLoop(ctx, "enqueue");
-          return segment;
-        }),
+        t.mutation((ctx) => kickMainLoop(ctx, "enqueue")),
       ),
     );
-    expect(segments.filter((s) => s === getCurrentSegment())).toHaveLength(1);
 
     // Check final state in a new transaction
     await t.run(async (ctx) => {
