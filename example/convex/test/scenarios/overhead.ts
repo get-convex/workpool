@@ -2,21 +2,19 @@ import { internalAction, internalMutation } from "../../_generated/server";
 import { v } from "convex/values";
 import { internal } from "../../_generated/api";
 import { Id } from "../../_generated/dataModel";
-import { PoolKind, makePool } from "../pool";
+import { makePool, vPoolKind } from "../pool";
 
 /**
  * Throughput / overhead measurement scenario.
  *
- *   mode determines what does the enqueue:
- *     raw            — ctx.scheduler.runAfter(0, recorder). Bare-Convex floor.
- *     workpool-bare  — new workpool, no onComplete (worker is the recorder)
- *     workpool-oc    — new workpool with onComplete (worker is no-op)
- *     oldpool-bare   — old workpool (workpool-old), no onComplete
- *     oldpool-oc     — old workpool with onComplete
+ *   mode:        "raw" (bare ctx.scheduler) or "pool" (use a workpool)
+ *   pool:        "new" | "old"  (only meaningful when mode = "pool")
+ *   onComplete:  if true, worker is a no-op and the recorder runs as the
+ *                onComplete callback. If false, the worker itself records.
  *
  * Both pool variants test against the same Convex deployment, against the
  * same tasks table, with the same recorder. The only difference between
- * `workpool-*` and `oldpool-*` is which workpool component is used.
+ * `pool=new` and `pool=old` is which workpool component is used.
  */
 
 export const recorder = internalMutation({
@@ -57,19 +55,7 @@ export const oncompleteRecorder = internalMutation({
   },
 });
 
-const Mode = v.union(
-  v.literal("raw"),
-  v.literal("workpool-bare"),
-  v.literal("workpool-oc"),
-  v.literal("oldpool-bare"),
-  v.literal("oldpool-oc"),
-);
-
-function poolFromMode(mode: string): PoolKind | null {
-  if (mode === "workpool-bare" || mode === "workpool-oc") return "new";
-  if (mode === "oldpool-bare" || mode === "oldpool-oc") return "old";
-  return null;
-}
+const Mode = v.union(v.literal("raw"), v.literal("pool"));
 
 export default internalAction({
   args: {
@@ -77,6 +63,8 @@ export default internalAction({
     batchSize: v.optional(v.number()),
     interBatchMs: v.optional(v.number()),
     mode: v.optional(Mode),
+    pool: v.optional(vPoolKind),
+    onComplete: v.optional(v.boolean()),
     maxParallelism: v.optional(v.number()),
     pollTimeoutMs: v.optional(v.number()),
   },
@@ -87,23 +75,34 @@ export default internalAction({
       batchSize = 50,
       interBatchMs = 0,
       mode = "raw",
+      pool: poolKind = "new",
+      onComplete = false,
       maxParallelism = 50,
       pollTimeoutMs = 600_000,
     },
   ) => {
-    const poolKind = poolFromMode(mode);
-    const useOnComplete = mode === "workpool-oc" || mode === "oldpool-oc";
+    const usePool = mode === "pool";
+    const scenarioLabel = usePool
+      ? `overhead-${poolKind}${onComplete ? "-oc" : "-bare"}`
+      : "overhead-raw";
     const runId: Id<"runs"> = await ctx.runMutation(internal.test.run.start, {
-      scenario: `overhead-${mode}`,
-      parameters: { taskCount, batchSize, mode, maxParallelism, interBatchMs },
-      pool: poolKind ?? undefined,
+      scenario: scenarioLabel,
+      parameters: {
+        taskCount,
+        batchSize,
+        mode,
+        onComplete,
+        maxParallelism,
+        interBatchMs,
+      },
+      pool: usePool ? poolKind : undefined,
     });
     const scenarioStart = Date.now();
     // run.start already configured the right component's maxParallelism.
-    const pool = poolKind ? makePool(poolKind, { maxParallelism }) : null;
+    const pool = usePool ? makePool(poolKind, { maxParallelism }) : null;
 
     console.log(
-      `overhead[${mode}]: ${taskCount} tasks, batchSize=${batchSize}` +
+      `${scenarioLabel}: ${taskCount} tasks, batchSize=${batchSize}` +
         (pool ? `, max=${maxParallelism}` : ""),
     );
 
@@ -116,7 +115,7 @@ export default internalAction({
       const thisBatch = Math.min(batchSize, taskCount - enqueued);
       const enqueuedAt = Date.now();
       const tasks = Array(thisBatch).fill(0);
-      if (mode === "raw") {
+      if (!usePool) {
         await Promise.all(
           tasks.map(() =>
             ctx.scheduler.runAfter(
@@ -126,7 +125,7 @@ export default internalAction({
             ),
           ),
         );
-      } else if (!useOnComplete) {
+      } else if (!onComplete) {
         await Promise.all(
           tasks.map(() =>
             pool!.enqueueMutation(
@@ -180,13 +179,15 @@ export default internalAction({
     const tps = (completedCount / total) * 1000;
     const msPerTask = total / completedCount;
 
-    console.log(`\n=== overhead[${mode}] ===`);
+    console.log(`\n=== ${scenarioLabel} ===`);
     console.log(
       `${completedCount}/${taskCount} done in ${total}ms ` +
         `(${tps.toFixed(0)} tps, ${msPerTask.toFixed(1)} ms/task)`,
     );
     return {
       mode,
+      pool: usePool ? poolKind : undefined,
+      onComplete,
       taskCount: completedCount,
       totalDurationMs: total,
       enqueueTotal,
