@@ -39,7 +39,7 @@ export default internalAction({
       taskDurationMs = 20,
       taskType = "mutation",
       pollTimeoutMs = 600_000, // 10 minutes for big runs
-      pool = "0.4.7",
+      pool = "new",
     },
   ) => {
     const runId: Id<"runs"> = await ctx.runMutation(internal.test.run.start, {
