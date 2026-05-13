@@ -132,7 +132,9 @@ export default internalAction({
     const tasksPerSec = ((completedCount / totalDurationMs) * 1000).toFixed(0);
     console.log(`\n=== throughput results ===`);
     console.log(`Completed: ${completedCount}/${taskCount}`);
-    console.log(`Total duration: ${totalDurationMs}ms (${tasksPerSec} tasks/s)`);
+    console.log(
+      `Total duration: ${totalDurationMs}ms (${tasksPerSec} tasks/s)`,
+    );
     console.log(`Enqueue total: ${enqueueTotal}ms`);
     if (latency) {
       console.log(
