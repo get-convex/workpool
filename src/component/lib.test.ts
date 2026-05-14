@@ -287,7 +287,7 @@ describe("lib", () => {
       });
 
       await t.run(async (ctx) => {
-        const work = await ctx.db.get(id);
+        const work = await ctx.db.get("work", id);
         expect(work).toBeDefined();
         assert(work);
         expect(work.payloadId).toBeDefined();
@@ -296,7 +296,7 @@ describe("lib", () => {
 
         // Payload document should contain the context
         assert(work.payloadId);
-        const payload = await ctx.db.get(work.payloadId);
+        const payload = await ctx.db.get("payload", work.payloadId);
         expect(payload).toBeDefined();
         assert(payload);
         expect(payload.context).toBe(largeString);
@@ -324,7 +324,7 @@ describe("lib", () => {
       });
 
       await t.run(async (ctx) => {
-        const work = await ctx.db.get(id);
+        const work = await ctx.db.get("work", id);
         expect(work).toBeDefined();
         assert(work);
         expect(work.payloadId).toBeDefined();
@@ -333,7 +333,7 @@ describe("lib", () => {
 
         // Payload document should contain the context
         assert(work.payloadId);
-        const payload = await ctx.db.get(work.payloadId);
+        const payload = await ctx.db.get("payload", work.payloadId);
         expect(payload).toBeDefined();
         assert(payload);
         expect(payload.context).toBe(largeString);
@@ -355,7 +355,7 @@ describe("lib", () => {
       });
 
       await t.run(async (ctx) => {
-        const work = await ctx.db.get(id);
+        const work = await ctx.db.get("work", id);
         expect(work).toBeDefined();
         assert(work);
         expect(work.payloadId).toBeUndefined();
