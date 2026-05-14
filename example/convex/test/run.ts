@@ -109,7 +109,7 @@ export const status = internalQuery({
 export const metricsForRun = internalQuery({
   args: { runId: v.id("runs") },
   handler: async (ctx, { runId }) => {
-    const run = await ctx.db.get(runId);
+    const run = await ctx.db.get("runs", runId);
     if (!run) return null;
     const tasks = await ctx.db
       .query("tasks")
