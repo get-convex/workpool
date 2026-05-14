@@ -1,5 +1,5 @@
 import "./App.css";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery, useAction } from "convex/react";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
@@ -36,10 +36,7 @@ function fmtTime(t: number): string {
   return new Date(t).toLocaleString();
 }
 
-type CompareIds = [RunId | null, RunId | null, RunId | null];
-
-const SLOT_LABELS = ["A", "B", "C"] as const;
-const SLOT_COLORS = ["#4f8cff", "#ff8c4f", "#5cc97a"] as const;
+type CompareIds = [RunId | null, RunId | null];
 
 type UrlState = {
   tab: Tab;
@@ -74,8 +71,8 @@ function parseUrlHash(hash: string): Partial<UrlState> {
   }
   const compareMatch = h.match(/^compare\/(.+)$/);
   if (compareMatch) {
-    const parts = compareMatch[1].split(",").slice(0, 3);
-    const ids: CompareIds = [null, null, null];
+    const parts = compareMatch[1].split(",").slice(0, 2);
+    const ids: CompareIds = [null, null];
     parts.forEach((p, i) => {
       if (p) ids[i] = p as RunId;
     });
@@ -89,7 +86,7 @@ function readHashState(): UrlState {
   return {
     tab: parsed.tab ?? "history",
     selectedRunId: parsed.selectedRunId ?? null,
-    compareIds: parsed.compareIds ?? [null, null, null],
+    compareIds: parsed.compareIds ?? [null, null],
   };
 }
 
@@ -99,9 +96,7 @@ function App() {
   const [selectedRunId, setSelectedRunId] = useState<RunId | null>(
     initial.selectedRunId,
   );
-  const [compareIds, setCompareIds] = useState<[RunId | null, RunId | null]>(
-    initial.compareIds,
-  );
+  const [compareIds, setCompareIds] = useState<CompareIds>(initial.compareIds);
 
   // Sync state → hash.
   useEffect(() => {
