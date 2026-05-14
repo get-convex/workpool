@@ -106,6 +106,41 @@ describe("kickMainLoop", () => {
     });
   });
 
+  test("kicks on retry even when not saturated (#198)", async () => {
+    const t = convexTest(schema, modules);
+    await t.run(async (ctx) => {
+      await kickMainLoop(ctx, "enqueue");
+      const runStatus = await ctx.db.query("runStatus").unique();
+      assert(runStatus);
+
+      // Simulate the loop having gone to sleep with one job running.
+      // saturated=false because 1 < maxParallelism.
+      const farFutureSegment = toSegment(Date.now() + 60_000);
+      const scheduledId = await ctx.scheduler.runAfter(
+        60_000,
+        internal.loop.main,
+        { generation: 0n, segment: farFutureSegment },
+      );
+      await ctx.db.patch("runStatus", runStatus._id, {
+        state: {
+          kind: "scheduled",
+          scheduledId,
+          saturated: false,
+          generation: 0n,
+          segment: farFutureSegment,
+        },
+      });
+
+      // A retry should bring the loop forward so the new pendingStart is
+      // processed promptly, not 60s from now.
+      await kickMainLoop(ctx, "retry");
+
+      const after = await ctx.db.query("runStatus").unique();
+      assert(after);
+      expect(after.state.kind).toBe("running");
+    });
+  });
+
   test("does not kick when scheduled and saturated", async () => {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
