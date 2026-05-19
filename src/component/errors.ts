@@ -1,4 +1,4 @@
-import { ConvexError, type Value } from "convex/values";
+import { ConvexError } from "convex/values";
 
 const NON_RETRYABLE_ERROR_MARKER = "__convexWorkpoolNonRetryable";
 
@@ -6,28 +6,19 @@ type NonRetryableErrorMarker = {
   readonly [NON_RETRYABLE_ERROR_MARKER]: true;
 };
 
-type NonRetryableErrorData<TData extends Value = Value> =
-  NonRetryableErrorMarker & {
-    message: string;
-    data?: TData;
-  };
-
-type NonRetryableErrorOptions<TData extends Value = Value> = ErrorOptions & {
-  data?: TData;
+type NonRetryableErrorData = NonRetryableErrorMarker & {
+  message: string;
 };
 
 /**
  * Throw this from workpool jobs when the failure should finish immediately
  * instead of using the configured retry behavior.
  */
-export class NonRetryableError<TData extends Value = never> extends ConvexError<
-  NonRetryableErrorData<TData>
-> {
-  constructor(message: string, options?: NonRetryableErrorOptions<TData>) {
+export class NonRetryableError extends ConvexError<NonRetryableErrorData> {
+  constructor(message: string, options?: ErrorOptions) {
     super({
       [NON_RETRYABLE_ERROR_MARKER]: true,
       message,
-      ...(options?.data === undefined ? {} : { data: options.data }),
     });
     this.name = new.target.name;
     if (options?.cause !== undefined) {

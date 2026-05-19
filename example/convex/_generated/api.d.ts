@@ -10,6 +10,7 @@
 
 import type * as crons from "../crons.js";
 import type * as example from "../example.js";
+import type * as test_nonRetryable from "../test/nonRetryable.js";
 import type * as test_run from "../test/run.js";
 import type * as test_scenarios_bigArgs from "../test/scenarios/bigArgs.js";
 import type * as test_scenarios_bigContext from "../test/scenarios/bigContext.js";
@@ -29,6 +30,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   example: typeof example;
+  "test/nonRetryable": typeof test_nonRetryable;
   "test/run": typeof test_run;
   "test/scenarios/bigArgs": typeof test_scenarios_bigArgs;
   "test/scenarios/bigContext": typeof test_scenarios_bigContext;

@@ -15,6 +15,11 @@ describe("errors", () => {
 
     expect(isNonRetryableError(error)).toBe(true);
     expect(getNonRetryableErrorMessage(error)).toBe("invalid input");
+    // The ConvexError payload is the only data that can cross Convex boundaries.
+    expect(error.data).toEqual({
+      __convexWorkpoolNonRetryable: true,
+      message: "invalid input",
+    });
   });
 
   it("identifies ConvexError data from nested mutations", () => {

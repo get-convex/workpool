@@ -52,21 +52,8 @@ describe("workpool", () => {
   });
 
   test("NonRetryableError skips remaining retries", async () => {
-    const id = await t.mutation(api.example.enqueueTerminalAction, {});
-
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
-
-    expect(await t.query(api.example.status, { id })).toEqual({
-      state: "finished",
-    });
-    // One attempt marker plus the terminal onComplete marker means it did not retry.
-    expect(await t.query(api.example.queryData, {})).toEqual([1, 999]);
-  });
-
-  test("NonRetryableError skips remaining mutation retries", async () => {
-    await t.mutation(api.example.resetTerminalMutationAttempts, {});
     const id = await t.mutation(
-      api.example.enqueueTerminalMutationWithRetry,
+      api.test.nonRetryable.enqueueTerminalAction,
       {},
     );
 
@@ -75,8 +62,34 @@ describe("workpool", () => {
     expect(await t.query(api.example.status, { id })).toEqual({
       state: "finished",
     });
-    expect(await t.query(api.example.terminalMutationAttemptCount, {})).toBe(1);
+    // One attempt marker plus the terminal onComplete marker means it did not retry.
+    expect(await t.query(api.example.queryData, {})).toEqual([1, 999]);
+    // onComplete only receives the client-visible RunResult message.
+    expect(
+      await t.query(api.test.nonRetryable.terminalCompletionResults, {}),
+    ).toEqual([{ kind: "failed", error: "terminal failure" }]);
+  });
+
+  test("NonRetryableError skips remaining mutation retries", async () => {
+    await t.mutation(api.test.nonRetryable.resetTerminalMutationAttempts, {});
+    const id = await t.mutation(
+      api.test.nonRetryable.enqueueTerminalMutationWithRetry,
+      {},
+    );
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    expect(await t.query(api.example.status, { id })).toEqual({
+      state: "finished",
+    });
+    expect(
+      await t.query(api.test.nonRetryable.terminalMutationAttemptCount, {}),
+    ).toBe(1);
     expect(await t.query(api.example.queryData, {})).toEqual([999]);
+    // Nested mutation errors cross a Convex boundary, so this guards the serialized path.
+    expect(
+      await t.query(api.test.nonRetryable.terminalCompletionResults, {}),
+    ).toEqual([{ kind: "failed", error: "terminal mutation failure" }]);
   });
 
   test("enqueueMany with low parallelism", async () => {
