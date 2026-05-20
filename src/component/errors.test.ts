@@ -33,19 +33,6 @@ describe("errors", () => {
     expect(getNonRetryableErrorMessage(error)).toBe("invalid input");
   });
 
-  it("identifies serialized ConvexError data", () => {
-    // Some Convex boundaries surface ConvexError data as a serialized string.
-    const error = new ConvexError(
-      JSON.stringify({
-        __convexWorkpoolNonRetryable: true,
-        message: "invalid input",
-      }),
-    );
-
-    expect(isNonRetryableError(error)).toBe(true);
-    expect(getNonRetryableErrorMessage(error)).toBe("invalid input");
-  });
-
   it("identifies marker-compatible errors", () => {
     // The marker path keeps detection working across duplicated package modules.
     const error = new Error("invalid input");

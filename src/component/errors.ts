@@ -45,9 +45,6 @@ export function isNonRetryableError(error: unknown): boolean {
 export function getNonRetryableErrorMessage(
   error: unknown,
 ): string | undefined {
-  if (error instanceof NonRetryableError) {
-    return getNonRetryableErrorData(error.data)?.message;
-  }
   if (error instanceof ConvexError) {
     return getNonRetryableErrorData(error.data)?.message;
   }
@@ -59,16 +56,6 @@ function getNonRetryableErrorData(
 ): NonRetryableErrorData | undefined {
   if (isNonRetryableErrorData(data)) {
     return data;
-  }
-  if (typeof data === "string") {
-    try {
-      const parsed = JSON.parse(data);
-      if (isNonRetryableErrorData(parsed)) {
-        return parsed;
-      }
-    } catch {
-      return undefined;
-    }
   }
   return undefined;
 }
