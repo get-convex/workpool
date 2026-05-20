@@ -847,11 +847,11 @@ function RunScenarioForm({ onStarted }: { onStarted: () => void }) {
         {busy ? "Starting…" : "Run"}
       </button>
       <p className="muted" style={{ fontSize: "0.8rem", marginTop: "1rem" }}>
-        Tip: pick “all” to run the same scenario back-to-back on each
-        version (0.4.2 → 0.4.6 → new), then compare them under “Compare”.
-        The dashboard waits for each run to finish (plus a short buffer for
-        the runner's 5s reentry guard) before starting the next, so the
-        button stays busy for the full duration.
+        Tip: pick “all” to run the same scenario back-to-back on each version
+        (0.4.2 → 0.4.6 → new), then compare them under “Compare”. The dashboard
+        waits for each run to finish (plus a short buffer for the runner's 5s
+        reentry guard) before starting the next, so the button stays busy for
+        the full duration.
       </p>
     </div>
   );
