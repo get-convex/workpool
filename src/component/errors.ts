@@ -48,6 +48,15 @@ export function getNonRetryableErrorMessage(
   if (error instanceof ConvexError) {
     return getNonRetryableErrorData(error.data)?.message;
   }
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    (error as Partial<NonRetryableErrorMarker>)[NON_RETRYABLE_ERROR_MARKER] ===
+      true
+  ) {
+    const message = (error as Partial<NonRetryableErrorData>).message;
+    return typeof message === "string" ? message : undefined;
+  }
   return undefined;
 }
 

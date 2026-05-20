@@ -39,6 +39,7 @@ describe("errors", () => {
     Object.assign(error, { __convexWorkpoolNonRetryable: true });
 
     expect(isNonRetryableError(error)).toBe(true);
+    expect(getNonRetryableErrorMessage(error)).toBe("invalid input");
   });
 
   it("does not identify ordinary errors as non-retryable", () => {
