@@ -113,7 +113,6 @@ export default internalAction({
     },
   ) => {
     const totalTasks = targetTps * durationSec;
-    const interMs = 1000 / targetTps;
     const runId: Id<"runs"> = await ctx.runMutation(internal.test.run.start, {
       scenario: `sustained-${mode}`,
       parameters: {
