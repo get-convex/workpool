@@ -61,4 +61,44 @@ describe("NonRetryableError", () => {
       await t.query(api.test.nonRetryable.terminalCompletionErrors, {}),
     ).toEqual(["terminal mutation failure"]);
   });
+
+  test("treats nested mutation NonRetryableError as terminal", async () => {
+    const id = await t.mutation(
+      api.test.nonRetryable.enqueueTerminalActionCallingMutation,
+      {},
+    );
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    expect(await t.query(api.example.status, { id })).toEqual({
+      state: "finished",
+    });
+    // If the nested error lost its marker, the action would retry.
+    expect(await t.query(api.test.nonRetryable.terminalAttemptCount, {})).toBe(
+      1,
+    );
+    expect(
+      await t.query(api.test.nonRetryable.terminalCompletionErrors, {}),
+    ).toEqual(["nested mutation terminal failure"]);
+  });
+
+  test("treats nested query NonRetryableError as terminal", async () => {
+    const id = await t.mutation(
+      api.test.nonRetryable.enqueueTerminalActionCallingQuery,
+      {},
+    );
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    expect(await t.query(api.example.status, { id })).toEqual({
+      state: "finished",
+    });
+    // If the nested error lost its marker, the action would retry.
+    expect(await t.query(api.test.nonRetryable.terminalAttemptCount, {})).toBe(
+      1,
+    );
+    expect(
+      await t.query(api.test.nonRetryable.terminalCompletionErrors, {}),
+    ).toEqual(["nested query terminal failure"]);
+  });
 });

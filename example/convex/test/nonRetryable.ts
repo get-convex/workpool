@@ -4,6 +4,7 @@ import {
   query,
   internalAction,
   internalMutation,
+  internalQuery,
 } from "../_generated/server";
 import { components, internal } from "../_generated/api";
 import {
@@ -62,12 +63,77 @@ export const completeTerminalAction = internalMutation({
   },
 });
 
+export const terminalNestedMutation = internalMutation({
+  args: {},
+  handler: async () => {
+    throw new NonRetryableError("nested mutation terminal failure");
+  },
+});
+
+export const terminalActionCallingMutation = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    await ctx.runMutation(internal.test.nonRetryable.recordTerminalAttempt, {});
+    await ctx.runMutation(
+      internal.test.nonRetryable.terminalNestedMutation,
+      {},
+    );
+  },
+});
+
+export const terminalNestedQuery = internalQuery({
+  args: {},
+  handler: async () => {
+    throw new NonRetryableError("nested query terminal failure");
+  },
+});
+
+export const terminalActionCallingQuery = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    await ctx.runMutation(internal.test.nonRetryable.recordTerminalAttempt, {});
+    await ctx.runQuery(internal.test.nonRetryable.terminalNestedQuery, {});
+  },
+});
+
 export const enqueueTerminalAction = mutation({
   args: {},
   handler: async (ctx): Promise<WorkId> => {
     return await smallPool.enqueueAction(
       ctx,
       internal.test.nonRetryable.terminalAction,
+      {},
+      {
+        retry: { maxAttempts: 3, initialBackoffMs: 100, base: 2 },
+        onComplete: internal.test.nonRetryable.completeTerminalAction,
+        context: null,
+      },
+    );
+  },
+});
+
+export const enqueueTerminalActionCallingMutation = mutation({
+  args: {},
+  handler: async (ctx): Promise<WorkId> => {
+    return await smallPool.enqueueAction(
+      ctx,
+      internal.test.nonRetryable.terminalActionCallingMutation,
+      {},
+      {
+        retry: { maxAttempts: 3, initialBackoffMs: 100, base: 2 },
+        onComplete: internal.test.nonRetryable.completeTerminalAction,
+        context: null,
+      },
+    );
+  },
+});
+
+export const enqueueTerminalActionCallingQuery = mutation({
+  args: {},
+  handler: async (ctx): Promise<WorkId> => {
+    return await smallPool.enqueueAction(
+      ctx,
+      internal.test.nonRetryable.terminalActionCallingQuery,
       {},
       {
         retry: { maxAttempts: 3, initialBackoffMs: 100, base: 2 },
