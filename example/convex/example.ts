@@ -14,7 +14,7 @@ import {
 } from "@convex-dev/workpool";
 import { v } from "convex/values";
 import { createLogger } from "../../src/component/logging";
-import { FunctionArgs } from "convex/server";
+import { type FunctionArgs } from "convex/server";
 
 const bigPool = new Workpool(components.bigPool, {
   maxParallelism: 20,

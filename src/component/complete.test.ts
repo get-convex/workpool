@@ -136,6 +136,54 @@ describe("complete", () => {
       });
     });
 
+    it("should not retry a non-retryable failed job", async () => {
+      // The nonRetryable flag should override remaining retry attempts.
+      const workId = await t.mutation(api.lib.enqueue, {
+        fnHandle: "testHandle",
+        fnName: "testFunction",
+        fnArgs: { test: "data" },
+        fnType: "mutation",
+        runAt: Date.now(),
+        config: {
+          maxParallelism: 10,
+          logLevel: "WARN",
+        },
+        retryBehavior: {
+          maxAttempts: 3,
+          initialBackoffMs: 100,
+          base: 2,
+        },
+      });
+
+      await t.run(async (ctx) => {
+        await completeHandler(ctx, {
+          jobs: [
+            {
+              workId,
+              runResult: { kind: "failed", error: "terminal error" },
+              attempt: 0,
+              nonRetryable: true,
+            },
+          ],
+        });
+      });
+
+      await t.run(async (ctx) => {
+        const work = await ctx.db.get("work", workId);
+        expect(work).toBeNull();
+
+        const pendingCompletions = await ctx.db
+          .query("pendingCompletion")
+          .withIndex("workId", (q) => q.eq("workId", workId))
+          .collect();
+        expect(pendingCompletions).toHaveLength(1);
+        expect(pendingCompletions[0].runResult.kind).toBe("failed");
+        assert(pendingCompletions[0].runResult.kind === "failed");
+        expect(pendingCompletions[0].runResult.error).toBe("terminal error");
+        expect(pendingCompletions[0].retry).toBe(false);
+      });
+    });
+
     it("should process a failed job that has reached max attempts", async () => {
       // Enqueue a work item with retry behavior
       const workId = await t.mutation(api.lib.enqueue, {

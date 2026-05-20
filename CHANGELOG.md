@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.4.7
+
 ## 0.4.7-alpha.0
 
 - Reduces database conflict retries (OCC conflicts) from enqueuing or completing
