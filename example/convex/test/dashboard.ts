@@ -194,7 +194,7 @@ export const runConcurrent = action({
   args: { scenario: scenarioName, args: v.any() },
   handler: async (ctx, { scenario, args }) => {
     const fn = internal.test.scenarios[scenario].default;
-    const [, ] = await Promise.all([
+    const [,] = await Promise.all([
       ctx.runAction(fn, { ...args, pool: "old" }),
       ctx.runAction(fn, { ...args, pool: "new" }),
     ]);
