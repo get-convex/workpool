@@ -6,7 +6,8 @@
   max-width: 1400px;
   margin: 0 auto;
   padding: 1.5rem;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   text-align: left;
 }
 
@@ -55,7 +56,8 @@ table {
   font-size: 0.85rem;
 }
 
-th, td {
+th,
+td {
   text-align: left;
   padding: 0.4rem 0.6rem;
   border-bottom: 1px solid #ddd3;
@@ -112,7 +114,9 @@ label {
   margin-bottom: 0.6rem;
 }
 
-input, select, textarea {
+input,
+select,
+textarea {
   font: inherit;
   padding: 0.4rem 0.5rem;
   border: 1px solid #8884;
