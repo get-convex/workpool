@@ -163,12 +163,8 @@ function App() {
           }}
         />
       )}
-      {tab === "detail" && selectedRunId && (
-        <RunDetail runId={selectedRunId} />
-      )}
-      {tab === "compare" && (
-        <Compare ids={compareIds} setIds={setCompareIds} />
-      )}
+      {tab === "detail" && selectedRunId && <RunDetail runId={selectedRunId} />}
+      {tab === "compare" && <Compare ids={compareIds} setIds={setCompareIds} />}
       {tab === "run" && <RunScenarioForm onStarted={() => setTab("history")} />}
     </>
   );
@@ -345,7 +341,9 @@ function RunDetail({ runId }: { runId: RunId }) {
         </div>
         <details>
           <summary className="muted">parameters</summary>
-          <pre className="params">{JSON.stringify(run.parameters, null, 2)}</pre>
+          <pre className="params">
+            {JSON.stringify(run.parameters, null, 2)}
+          </pre>
         </details>
       </div>
 
@@ -363,7 +361,9 @@ function RunDetail({ runId }: { runId: RunId }) {
               />
               <YAxis />
               <Tooltip
-                labelFormatter={(t) => `t=${((t as number) / 1000).toFixed(2)}s`}
+                labelFormatter={(t) =>
+                  `t=${((t as number) / 1000).toFixed(2)}s`
+                }
               />
               <Legend />
               <Area
@@ -434,14 +434,8 @@ function Compare({
 }) {
   const runs = useQuery(api.test.dashboard.listRuns, { limit: 100 });
   const [a, b] = ids;
-  const runA = useQuery(
-    api.test.dashboard.getRun,
-    a ? { runId: a } : "skip",
-  );
-  const runB = useQuery(
-    api.test.dashboard.getRun,
-    b ? { runId: b } : "skip",
-  );
+  const runA = useQuery(api.test.dashboard.getRun, a ? { runId: a } : "skip");
+  const runB = useQuery(api.test.dashboard.getRun, b ? { runId: b } : "skip");
   const tA = useQuery(
     api.test.dashboard.throughputOverTime,
     a ? { runId: a, bucketMs: 500 } : "skip",
@@ -450,21 +444,18 @@ function Compare({
     api.test.dashboard.throughputOverTime,
     b ? { runId: b, bucketMs: 500 } : "skip",
   );
-  const cA = useQuery(
-    api.test.dashboard.latencyCdf,
-    a ? { runId: a } : "skip",
-  );
-  const cB = useQuery(
-    api.test.dashboard.latencyCdf,
-    b ? { runId: b } : "skip",
-  );
+  const cA = useQuery(api.test.dashboard.latencyCdf, a ? { runId: a } : "skip");
+  const cB = useQuery(api.test.dashboard.latencyCdf, b ? { runId: b } : "skip");
 
   const throughputData = useMemo(() => {
     const aPts = tA?.points ?? [];
     const bPts = tB?.points ?? [];
     const len = Math.max(aPts.length, bPts.length);
-    const out: Array<{ tMs: number; aCompleted?: number; bCompleted?: number }> =
-      [];
+    const out: Array<{
+      tMs: number;
+      aCompleted?: number;
+      bCompleted?: number;
+    }> = [];
     for (let i = 0; i < len; i++) {
       const tMs = (aPts[i]?.tMs ?? bPts[i]?.tMs ?? i * 500) as number;
       out.push({
@@ -613,8 +604,18 @@ function DeltaTable({
   a: NonNullable<ReturnType<typeof useQuery<typeof api.test.dashboard.getRun>>>;
   b: NonNullable<ReturnType<typeof useQuery<typeof api.test.dashboard.getRun>>>;
 }) {
-  const rows: Array<{ label: string; av?: number; bv?: number; lower: boolean }> = [
-    { label: "Total duration (ms)", av: a.totalDurationMs, bv: b.totalDurationMs, lower: true },
+  const rows: Array<{
+    label: string;
+    av?: number;
+    bv?: number;
+    lower: boolean;
+  }> = [
+    {
+      label: "Total duration (ms)",
+      av: a.totalDurationMs,
+      bv: b.totalDurationMs,
+      lower: true,
+    },
     { label: "p50 (ms)", av: a.latency?.p50, bv: b.latency?.p50, lower: true },
     { label: "p95 (ms)", av: a.latency?.p95, bv: b.latency?.p95, lower: true },
     { label: "p99 (ms)", av: a.latency?.p99, bv: b.latency?.p99, lower: true },
@@ -625,8 +626,12 @@ function DeltaTable({
       <thead>
         <tr>
           <th>Metric</th>
-          <th>A ({a.scenario} · {a.pool ?? "?"})</th>
-          <th>B ({b.scenario} · {b.pool ?? "?"})</th>
+          <th>
+            A ({a.scenario} · {a.pool ?? "?"})
+          </th>
+          <th>
+            B ({b.scenario} · {b.pool ?? "?"})
+          </th>
           <th>Δ (B vs A)</th>
         </tr>
       </thead>
@@ -637,14 +642,17 @@ function DeltaTable({
               ? ((row.bv - row.av) / row.av) * 100
               : undefined;
           // For "lower is better": negative delta is good.
-          const better = delta !== undefined && (row.lower ? delta < 0 : delta > 0);
+          const better =
+            delta !== undefined && (row.lower ? delta < 0 : delta > 0);
           return (
             <tr key={row.label}>
               <td>{row.label}</td>
               <td>{row.av ?? "—"}</td>
               <td>{row.bv ?? "—"}</td>
               <td className={better ? "delta-positive" : "delta-negative"}>
-                {delta === undefined ? "—" : `${delta > 0 ? "+" : ""}${delta.toFixed(1)}%`}
+                {delta === undefined
+                  ? "—"
+                  : `${delta > 0 ? "+" : ""}${delta.toFixed(1)}%`}
               </td>
             </tr>
           );
@@ -766,9 +774,7 @@ function RunScenarioForm({ onStarted }: { onStarted: () => void }) {
           Pool
           <select
             value={pool}
-            onChange={(e) =>
-              setPool(e.target.value as "new" | "old" | "both")
-            }
+            onChange={(e) => setPool(e.target.value as "new" | "old" | "both")}
           >
             <option value="new">new (this branch)</option>
             <option value="old">old (workpool@0.4.6)</option>
@@ -791,11 +797,10 @@ function RunScenarioForm({ onStarted }: { onStarted: () => void }) {
         {busy ? "Starting…" : "Run"}
       </button>
       <p className="muted" style={{ fontSize: "0.8rem", marginTop: "1rem" }}>
-        Tip: pick “both” to run the same scenario back-to-back on old then
-        new, then compare them under “Compare”. The dashboard waits for each
-        run to finish (plus a short buffer for the runner's 5s reentry
-        guard) before starting the next, so the button stays busy for the
-        full duration.
+        Tip: pick “both” to run the same scenario back-to-back on old then new,
+        then compare them under “Compare”. The dashboard waits for each run to
+        finish (plus a short buffer for the runner's 5s reentry guard) before
+        starting the next, so the button stays busy for the full duration.
       </p>
     </div>
   );
