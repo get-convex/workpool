@@ -30,6 +30,10 @@ import { generateReport, recordCompleted, recordStarted } from "./stats.js";
 
 const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
 const RECOVERY_BATCH_SIZE = 32;
+// Cap per-iteration completions + starts. Larger batches push per-iteration
+// latency up without buying throughput: the loop re-fires immediately on
+// didWork, so smaller cheaper iterations carry the same work in aggregate.
+const MAIN_BATCH_SIZE = 64;
 const MS = 1;
 const SECOND = 1000 * MS;
 const MINUTE = 60 * SECOND;
@@ -39,8 +43,12 @@ export const STATUS_COOLDOWN = 2 * SECOND;
 export const COOLDOWN_CHECK_INTERVAL = 200 * MS;
 // Buffer applied when querying with cursors. Transactions that started
 // before ours may still be running and commit inserts at segments behind
-// a previously advanced cursor — the buffer lets us pick those up.
-const CURSOR_BUFFER_SEGMENTS = toSegment(30 * SECOND);
+// a previously advanced cursor — the buffer lets us pick those up. Most
+// commits land within milliseconds, so a small buffer covers nearly all
+// of them. The minute-cadence recovery iteration scans from segment 0
+// (the start of each pending table) to catch any very-late commit that
+// fell behind even this buffer.
+const CURSOR_BUFFER_SEGMENTS = toSegment(10 * SECOND);
 
 export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
   generation: 0n,
@@ -81,16 +89,18 @@ export const getPending = internalQuery({
     const completions = await ctx.db
       .query("pendingCompletion")
       .withIndex("segment", (q) => q.gte("segment", completionCursor))
-      .take(maxParallelism);
+      .take(Math.min(maxParallelism, MAIN_BATCH_SIZE));
     const cancelations = await ctx.db
       .query("pendingCancelation")
       .withIndex("segment", (q) => q.gte("segment", cancelationCursor))
       .take(CANCELLATION_BATCH_SIZE);
     // Available slots after we process this batch's completions, plus 1
     // for the +1 trick (detect overflow vs. a future-scheduled retry).
-    const startLimit = Math.max(
-      0,
-      maxParallelism - runningCount + completions.length,
+    // Cap at MAIN_BATCH_SIZE so a single iteration's per-item writes
+    // (delete pendingStart + scheduler.runAfter) don't grow unbounded.
+    const startLimit = Math.min(
+      MAIN_BATCH_SIZE,
+      Math.max(0, maxParallelism - runningCount + completions.length),
     );
     const excludedIds = [
       ...completions.map((c) => c.workId),
@@ -139,33 +149,51 @@ export const main = internalMutation({
     // Pass maxParallelism + runningCount so the query bounds each batch to
     // what we can actually consume this iteration. Apply CURSOR_BUFFER_SEGMENTS
     // so we still pick up out-of-order inserts that landed behind the cursor
-    // since our last scan.
-    const queryArgs = {
-      completionCursor:
-        state.segmentCursors.completion - CURSOR_BUFFER_SEGMENTS,
-      cancelationCursor:
-        state.segmentCursors.cancelation - CURSOR_BUFFER_SEGMENTS,
-      incomingCursor: state.segmentCursors.incoming - CURSOR_BUFFER_SEGMENTS,
-      maxParallelism: globals.maxParallelism,
-      runningCount: state.running.length,
-    };
+    // since our last scan. Once per recovery period (≈1min), scan from
+    // segment 0 to catch any very-late commit that fell behind the buffer
+    // — the pending tables only contain unprocessed work, so this stays
+    // bounded by the size of any backlog.
+    const isRecoveryIter =
+      state.running.length > 0 &&
+      segment - state.lastRecovery >= RECOVERY_PERIOD_SEGMENTS;
+    const queryArgs = isRecoveryIter
+      ? {
+          completionCursor: 0n,
+          cancelationCursor: 0n,
+          incomingCursor: 0n,
+          maxParallelism: globals.maxParallelism,
+          runningCount: state.running.length,
+        }
+      : {
+          completionCursor:
+            state.segmentCursors.completion - CURSOR_BUFFER_SEGMENTS,
+          cancelationCursor:
+            state.segmentCursors.cancelation - CURSOR_BUFFER_SEGMENTS,
+          incomingCursor:
+            state.segmentCursors.incoming - CURSOR_BUFFER_SEGMENTS,
+          maxParallelism: globals.maxParallelism,
+          runningCount: state.running.length,
+        };
 
     // Snapshot read — no read dependency, no OCC conflicts.
-    console.time("[main] getPending");
+    const snapLabel = `[main] getPending${isRecoveryIter ? "(recovery)" : ""}(${state.running.length}/${globals.maxParallelism})`;
+    console.time(snapLabel);
     const { allStarts, cancelations, completions } = await runSnapshotQuery(
       internal.loop.getPending,
       queryArgs,
     );
     const toStart = allStarts.filter((s) => s.segment <= segment);
-    console.timeEnd("[main] getPending");
+    console.timeEnd(snapLabel);
 
-    console.time("[main] pendingCompletion");
+    const compLabel = `[main] pendingCompletion(${completions.length})`;
+    console.time(compLabel);
     const toCancel = await handleCompletions(ctx, state, completions, console);
-    console.timeEnd("[main] pendingCompletion");
+    console.timeEnd(compLabel);
 
-    console.time("[main] pendingCancelation");
+    const cancLabel = `[main] pendingCancelation(${cancelations.length})`;
+    console.time(cancLabel);
     await handleCancelation(ctx, state, cancelations, console, toCancel);
-    console.timeEnd("[main] pendingCancelation");
+    console.timeEnd(cancLabel);
 
     if (state.running.length === 0) {
       // If there's nothing active, reset lastRecovery.
@@ -182,9 +210,10 @@ export const main = internalMutation({
     const actualCapacity = globals.maxParallelism - state.running.length;
     const pending: Doc<"pendingStart">[] =
       actualCapacity > 0 ? toStart.slice(0, actualCapacity) : [];
-    console.time("[main] pendingStart");
+    const startLabel = `[main] pendingStart(${pending.length})`;
+    console.time(startLabel);
     await handleStart(ctx, state, pending, console, globals);
-    console.timeEnd("[main] pendingStart");
+    console.timeEnd(startLabel);
 
     if (Date.now() - state.report.lastReportTs >= MINUTE) {
       // If minute rollover since last report, log report.
@@ -296,6 +325,9 @@ export const main = internalMutation({
           segment: target,
         },
       });
+      console.debug(
+        `[main] → scheduled(${state.running.length}/${globals.maxParallelism})`,
+      );
       return;
     }
 
@@ -303,6 +335,7 @@ export const main = internalMutation({
     await ctx.db.patch("runStatus", runStatus._id, {
       state: { kind: "idle", generation: state.generation },
     });
+    console.debug(`[main] → idle`);
   },
 });
 
