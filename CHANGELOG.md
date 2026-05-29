@@ -1,13 +1,21 @@
 # Changelog
 
-## 0.4.7 alpha
+## 0.4.7
 
 - Reduces database conflict retries (OCC conflicts) from enqueuing or completing
   work while tasks are being dispatched, improving throughput for workpools at
-  scale.
+  scale (uses a "snapshot query").
+- Changes the out-of-order commit buffer to 15 seconds from 30 to reduce the
+  number of "tombstones" read while finding new work, but checks for older work
+  once a minute.
 - Fixes a race condition where a task could get recovered twice if the scheduler
   is many minutes behind.
 - Allows throwing NonRetryableError to prevent retries.
+- Limits the batch size of starting work to 64: this doesn't limit how many
+  in-flight tasks there can be, just many can be started from one main loop
+  iteration. This enables setting a much higher parallelism limit on larger
+  deployments, without risking reading too much data in one transaction /
+  slowing down transactions.
 
 ## 0.4.6
 
