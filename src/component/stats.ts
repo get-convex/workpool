@@ -143,6 +143,39 @@ function recordReport(
 }
 
 /**
+ * Returns the currently running work items with summary details.
+ * Warning: this should not be used from a mutation, as it will cause conflicts.
+ */
+export const running = internalQuery({
+  args: {},
+  returns: v.array(
+    v.object({
+      workId: v.id("work"),
+      scheduledId: v.id("_scheduled_functions"),
+      fnName: v.string(),
+      started: v.number(),
+      attempts: v.number(),
+    }),
+  ),
+  handler: async (ctx) => {
+    const internalState = await ctx.db.query("internalState").unique();
+    if (!internalState) return [];
+    return Promise.all(
+      internalState.running.map(async ({ workId, scheduledId, started }) => {
+        const work = await ctx.db.get("work", workId);
+        return {
+          workId,
+          scheduledId,
+          fnName: work?.fnName ?? "<unknown>",
+          started,
+          attempts: work?.attempts ?? 0,
+        };
+      }),
+    );
+  },
+});
+
+/**
  * Warning: this should not be used from a mutation, as it will cause conflicts.
  * Use this while developing to see the state of the queue.
  */
