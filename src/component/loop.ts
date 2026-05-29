@@ -198,7 +198,7 @@ export const main = internalMutation({
     if (state.running.length === 0) {
       // If there's nothing active, reset lastRecovery.
       state.lastRecovery = segment;
-    } else if (segment - state.lastRecovery >= RECOVERY_PERIOD_SEGMENTS) {
+    } else if (isRecoveryIter) {
       // Otherwise schedule recovery for any old jobs.
       await handleRecovery(ctx, state, console);
       state.lastRecovery = segment;
