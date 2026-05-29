@@ -8,7 +8,10 @@ import {
 import {
   type Config,
   DEFAULT_MAX_PARALLELISM,
+  fnType,
   getCurrentSegment,
+  retryBehavior,
+  vOnCompleteFnContext,
 } from "./shared.js";
 import { createLogger, type Logger, logLevel, shouldLog } from "./logging.js";
 import { internal } from "./_generated/api.js";
@@ -141,6 +144,101 @@ function recordReport(
     permanentFailureRate: Number(permanentFailureRate.toFixed(4)),
   });
 }
+
+/**
+ * Returns the currently running work items with summary details.
+ * Warning: this should not be used from a mutation, as it will cause conflicts.
+ */
+export const running = internalQuery({
+  args: {},
+  returns: v.array(
+    v.object({
+      workId: v.id("work"),
+      scheduledId: v.id("_scheduled_functions"),
+      fnName: v.string(),
+      started: v.number(),
+      attempts: v.number(),
+    }),
+  ),
+  handler: async (ctx) => {
+    const internalState = await ctx.db.query("internalState").unique();
+    if (!internalState) return [];
+    return Promise.all(
+      internalState.running.map(async ({ workId, scheduledId, started }) => {
+        const work = await ctx.db.get(workId);
+        return {
+          workId,
+          scheduledId,
+          fnName: work?.fnName ?? "<unknown>",
+          started,
+          attempts: work?.attempts ?? 0,
+        };
+      }),
+    );
+  },
+});
+
+/**
+ * Returns full details for a specific work item, including args.
+ * Args may be stored inline on the work doc or in a separate payload doc.
+ */
+export const workItem = internalQuery({
+  args: { workId: v.id("work") },
+  returns: v.union(
+    v.null(),
+    v.object({
+      workId: v.id("work"),
+      fnName: v.string(),
+      fnType,
+      fnHandle: v.string(),
+      fnArgs: v.any(),
+      attempts: v.number(),
+      enqueuedAt: v.number(),
+      canceled: v.optional(v.boolean()),
+      retryBehavior: v.optional(retryBehavior),
+      onComplete: v.optional(vOnCompleteFnContext),
+      payloadSize: v.optional(v.number()),
+      running: v.optional(
+        v.object({
+          scheduledId: v.id("_scheduled_functions"),
+          started: v.number(),
+        }),
+      ),
+    }),
+  ),
+  handler: async (ctx, { workId }) => {
+    const work = await ctx.db.get(workId);
+    if (!work) return null;
+    let fnArgs = work.fnArgs;
+    if (fnArgs === undefined && work.payloadId) {
+      const payload = await ctx.db.get(work.payloadId);
+      fnArgs = payload?.args;
+    }
+    const internalState = await ctx.db.query("internalState").unique();
+    const runningEntry = internalState?.running.find(
+      (r) => r.workId === workId,
+    );
+    return {
+      workId: work._id,
+      fnName: work.fnName,
+      fnType: work.fnType,
+      fnHandle: work.fnHandle,
+      fnArgs,
+      attempts: work.attempts,
+      enqueuedAt: work._creationTime,
+      canceled: work.canceled,
+      retryBehavior: work.retryBehavior,
+      onComplete: work.onComplete,
+      payloadSize: work.payloadSize,
+      running: runningEntry
+        ? {
+            scheduledId: runningEntry.scheduledId,
+            started: runningEntry.started,
+          }
+        : undefined,
+    };
+  },
+});
 
 /**
  * Warning: this should not be used from a mutation, as it will cause conflicts.
