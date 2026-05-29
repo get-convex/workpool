@@ -48,7 +48,7 @@ export const COOLDOWN_CHECK_INTERVAL = 200 * MS;
 // of them. The minute-cadence recovery iteration scans from segment 0
 // (the start of each pending table) to catch any very-late commit that
 // fell behind even this buffer.
-const CURSOR_BUFFER_SEGMENTS = toSegment(10 * SECOND);
+const CURSOR_BUFFER_SEGMENTS = toSegment(15 * SECOND);
 
 export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
   generation: 0n,
