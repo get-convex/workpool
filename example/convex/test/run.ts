@@ -6,7 +6,7 @@ import {
 import { v } from "convex/values";
 import { Id } from "../_generated/dataModel";
 import { assert } from "convex-helpers";
-import { components } from "../_generated/api";
+import { getComponent } from "./pool";
 
 export async function runStatus(
   ctx: QueryCtx,
@@ -31,28 +31,32 @@ export const start = internalMutation({
   args: {
     scenario: v.string(),
     parameters: v.any(),
+    pool: v.optional(v.union(v.literal("new"), v.literal("old"))),
   },
   handler: async (ctx, args) => {
     // Check for in-flight tasks from the latest run
     const latestRun = await ctx.db.query("runs").order("desc").first();
 
     if (latestRun) {
-      // Check if there are any in-flight tasks
+      // Check if there are any in-flight tasks. Allow concurrent runs when
+      // pools differ — runs are scoped to a single pool, so a new "new"
+      // pool run won't trample an in-flight "old" pool run (or vice versa).
       const status = await runStatus(ctx, latestRun);
+      const samePool = (latestRun.pool ?? "new") === (args.pool ?? "new");
 
-      if (["running", "pending"].includes(status)) {
+      if (samePool && ["running", "pending"].includes(status)) {
         throw new Error(
           `Cannot start new run: previous run ${latestRun.scenario} is ${status} (started at ${new Date(latestRun.startTime).toISOString()})`,
         );
       }
-      if (latestRun.startTime + 5_000 > Date.now()) {
+      if (samePool && latestRun.startTime + 5_000 > Date.now()) {
         throw new Error(
           `Cannot start new run: previous run ${latestRun.scenario} was started less than 5 seconds ago (started at ${new Date(latestRun.startTime).toISOString()})`,
         );
       }
     }
     if (args.parameters.maxParallelism !== undefined) {
-      await ctx.runMutation(components.testWorkpool.config.update, {
+      await ctx.runMutation(getComponent(args.pool ?? "new").config.update, {
         maxParallelism: args.parameters.maxParallelism,
       });
     }
@@ -63,6 +67,7 @@ export const start = internalMutation({
       scenario: args.scenario,
       parameters: args.parameters,
       taskCount: args.parameters.taskCount,
+      pool: args.pool ?? "new",
     });
 
     return runId;
@@ -96,6 +101,46 @@ export const status = internalQuery({
     const status = await runStatus(ctx, latestRun);
 
     return { run: latestRun, status };
+  },
+});
+
+// runId-scoped metrics — necessary for concurrent runs where the "latest"
+// run is ambiguous. Same payload as `metrics` for the caller's runId.
+export const metricsForRun = internalQuery({
+  args: { runId: v.id("runs") },
+  handler: async (ctx, { runId }) => {
+    const run = await ctx.db.get("runs", runId);
+    if (!run) return null;
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("runId", (q) => q.eq("runId", run._id))
+      .collect();
+    const status = await runStatus(ctx, run);
+    const completedCount = tasks.length;
+    const taskCount = run.taskCount ?? 0;
+    const latencies = tasks
+      .filter((t) => t.enqueuedAt !== undefined)
+      .map((t) => t.endTime - t.enqueuedAt!)
+      .sort((a, b) => a - b);
+    const endTimes = tasks.map((t) => t.endTime);
+    const lastEndTime = endTimes.length ? Math.max(...endTimes) : undefined;
+    const totalDurationMs = lastEndTime
+      ? lastEndTime - run.startTime
+      : undefined;
+    return {
+      status,
+      completedCount,
+      taskCount,
+      ...(totalDurationMs !== undefined && { totalDurationMs }),
+      ...(latencies.length > 0 && {
+        latency: {
+          p50: percentile(latencies, 50),
+          p95: percentile(latencies, 95),
+          p99: percentile(latencies, 99),
+          max: latencies[latencies.length - 1],
+        },
+      }),
+    };
   },
 });
 
