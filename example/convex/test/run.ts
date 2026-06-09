@@ -6,7 +6,7 @@ import {
 import { v } from "convex/values";
 import { Id } from "../_generated/dataModel";
 import { assert } from "convex-helpers";
-import { getComponent } from "./pool";
+import { getComponent, vPoolKind } from "./pool";
 
 export async function runStatus(
   ctx: QueryCtx,
@@ -31,18 +31,19 @@ export const start = internalMutation({
   args: {
     scenario: v.string(),
     parameters: v.any(),
-    pool: v.optional(v.union(v.literal("new"), v.literal("old"))),
+    pool: v.optional(vPoolKind),
   },
   handler: async (ctx, args) => {
+    const pool = args.pool ?? "new";
     // Check for in-flight tasks from the latest run
     const latestRun = await ctx.db.query("runs").order("desc").first();
 
     if (latestRun) {
       // Check if there are any in-flight tasks. Allow concurrent runs when
-      // pools differ — runs are scoped to a single pool, so a new "new"
-      // pool run won't trample an in-flight "old" pool run (or vice versa).
+      // pools differ — runs are scoped to a single pool, so a run on one
+      // version doesn't trample an in-flight run on another.
       const status = await runStatus(ctx, latestRun);
-      const samePool = (latestRun.pool ?? "new") === (args.pool ?? "new");
+      const samePool = latestRun.pool === pool;
 
       if (samePool && ["running", "pending"].includes(status)) {
         throw new Error(
@@ -56,7 +57,7 @@ export const start = internalMutation({
       }
     }
     if (args.parameters.maxParallelism !== undefined) {
-      await ctx.runMutation(getComponent(args.pool ?? "new").config.update, {
+      await ctx.runMutation(getComponent(pool).config.update, {
         maxParallelism: args.parameters.maxParallelism,
       });
     }
@@ -67,7 +68,7 @@ export const start = internalMutation({
       scenario: args.scenario,
       parameters: args.parameters,
       taskCount: args.parameters.taskCount,
-      pool: args.pool ?? "new",
+      pool,
     });
 
     return runId;
