@@ -78,6 +78,11 @@ export async function recoveryHandler(
       });
       continue;
     }
+    // Queries run inside an action wrapper; if the action itself dies before
+    // it can report a result, retry indefinitely. An error thrown by the
+    // query function is caught inside the wrapper and reported as a normal
+    // failure, so it never reaches recovery.
+    const transient = work.fnType === "query";
     // This will find everything that timed out, failed ungracefully, was
     // canceled, or succeeded without a return value.
     switch (scheduled.state.kind) {
@@ -87,6 +92,7 @@ export async function recoveryHandler(
           workId: job.workId,
           runResult: scheduled.state,
           attempt: job.attempt,
+          transient,
         });
         break;
       }
@@ -96,6 +102,7 @@ export async function recoveryHandler(
           workId: job.workId,
           runResult: { kind: "failed", error: "Canceled via scheduler" },
           attempt: job.attempt,
+          transient,
         });
         break;
       }
