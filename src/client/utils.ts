@@ -1,27 +1,26 @@
 import {
-  type FunctionArgs,
   type FunctionReference,
-  type FunctionReturnType,
   type FunctionType,
   type FunctionVisibility,
+  type GenericActionCtx,
+  type GenericDataModel,
+  type GenericMutationCtx,
+  type GenericQueryCtx,
   getFunctionAddress,
   getFunctionName,
 } from "convex/server";
 
 /* Type utils follow */
 
-export type RunQueryCtx = {
-  runQuery: <Query extends FunctionReference<"query", "internal">>(
-    query: Query,
-    args: FunctionArgs<Query>,
-  ) => Promise<FunctionReturnType<Query>>;
-};
-export type RunMutationCtx = RunQueryCtx & {
-  runMutation: <Mutation extends FunctionReference<"mutation", "internal">>(
-    mutation: Mutation,
-    args: FunctionArgs<Mutation>,
-  ) => Promise<FunctionReturnType<Mutation>>;
-};
+export type QueryCtx = Pick<GenericQueryCtx<GenericDataModel>, "runQuery">;
+export type MutationCtx = Pick<
+  GenericMutationCtx<GenericDataModel>,
+  "runQuery" | "runMutation"
+>;
+export type ActionCtx = Pick<
+  GenericActionCtx<GenericDataModel>,
+  "runQuery" | "runMutation" | "runAction"
+>;
 
 export function safeFunctionName(
   f: FunctionReference<FunctionType, FunctionVisibility>,

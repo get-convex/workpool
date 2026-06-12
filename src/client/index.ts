@@ -32,8 +32,9 @@ import {
   vResult,
 } from "../component/shared.js";
 import {
-  type RunMutationCtx,
-  type RunQueryCtx,
+  type ActionCtx,
+  type MutationCtx,
+  type QueryCtx,
   safeFunctionName,
 } from "./utils.js";
 export { NonRetryableError, isNonRetryableError } from "../component/errors.js";
@@ -90,7 +91,7 @@ export class Workpool {
    * @returns The ID of the work that was enqueued.
    */
   async enqueueAction<Args extends DefaultFunctionArgs, ReturnType>(
-    ctx: RunMutationCtx,
+    ctx: MutationCtx | ActionCtx,
     fn: FunctionReference<"action", FunctionVisibility, Args, ReturnType>,
     fnArgs: Args,
     options?: RetryOption & EnqueueOptions,
@@ -120,7 +121,7 @@ export class Workpool {
    * @returns The IDs of the work that was enqueued.
    */
   async enqueueActionBatch<Args extends DefaultFunctionArgs, ReturnType>(
-    ctx: RunMutationCtx,
+    ctx: MutationCtx | ActionCtx,
     fn: FunctionReference<"action", FunctionVisibility, Args, ReturnType>,
     argsArray: Array<Args>,
     options?: RetryOption & EnqueueOptions,
@@ -151,7 +152,7 @@ export class Workpool {
    *   and scheduling via `runAt` or `runAfter`.
    */
   async enqueueMutation<Args extends DefaultFunctionArgs, ReturnType>(
-    ctx: RunMutationCtx,
+    ctx: MutationCtx | ActionCtx,
     fn: FunctionReference<"mutation", FunctionVisibility, Args, ReturnType>,
     fnArgs: Args,
     options?: EnqueueOptions,
@@ -173,7 +174,7 @@ export class Workpool {
    *   and scheduling via `runAt` or `runAfter`.
    */
   async enqueueMutationBatch<Args extends DefaultFunctionArgs, ReturnType>(
-    ctx: RunMutationCtx,
+    ctx: MutationCtx | ActionCtx,
     fn: FunctionReference<"mutation", FunctionVisibility, Args, ReturnType>,
     argsArray: Array<Args>,
     options?: EnqueueOptions,
@@ -197,7 +198,7 @@ export class Workpool {
    *   and scheduling via `runAt` or `runAfter`.
    */
   async enqueueQuery<Args extends DefaultFunctionArgs, ReturnType>(
-    ctx: RunMutationCtx,
+    ctx: MutationCtx | ActionCtx,
     fn: FunctionReference<"query", FunctionVisibility, Args, ReturnType>,
     fnArgs: Args,
     options?: EnqueueOptions,
@@ -220,7 +221,7 @@ export class Workpool {
    *   and scheduling via `runAt` or `runAfter`.
    */
   async enqueueQueryBatch<Args extends DefaultFunctionArgs, ReturnType>(
-    ctx: RunMutationCtx,
+    ctx: MutationCtx | ActionCtx,
     fn: FunctionReference<"query", FunctionVisibility, Args, ReturnType>,
     argsArray: Array<Args>,
     options?: EnqueueOptions,
@@ -238,7 +239,7 @@ export class Workpool {
    * @param ctx - The mutation or action context that can call ctx.runMutation.
    * @param id - The ID of the work to cancel.
    */
-  async cancel(ctx: RunMutationCtx, id: WorkId): Promise<void> {
+  async cancel(ctx: MutationCtx | ActionCtx, id: WorkId): Promise<void> {
     await ctx.runMutation(this.component.lib.cancel, {
       id,
       logLevel: this.options.logLevel,
@@ -250,7 +251,7 @@ export class Workpool {
    * @param ctx - The mutation or action context that can call ctx.runMutation.
    */
   async cancelAll(
-    ctx: RunMutationCtx,
+    ctx: MutationCtx | ActionCtx,
     options?: { limit?: number },
   ): Promise<void> {
     await ctx.runMutation(this.component.lib.cancelAll, {
@@ -269,7 +270,10 @@ export class Workpool {
    * - `{ state: "running", previousAttempts: number }`
    * - `{ state: "finished" }`
    */
-  async status(ctx: RunQueryCtx, id: WorkId): Promise<Status> {
+  async status(
+    ctx: QueryCtx | MutationCtx | ActionCtx,
+    id: WorkId,
+  ): Promise<Status> {
     return ctx.runQuery(this.component.lib.status, { id });
   }
 
@@ -280,7 +284,10 @@ export class Workpool {
    * @param ids - The IDs of the work to get the status of.
    * @returns The status of the work items.
    */
-  async statusBatch(ctx: RunQueryCtx, ids: WorkId[]): Promise<Status[]> {
+  async statusBatch(
+    ctx: QueryCtx | MutationCtx | ActionCtx,
+    ids: WorkId[],
+  ): Promise<Status[]> {
     return ctx.runQuery(this.component.lib.statusBatch, { ids });
   }
 
@@ -555,7 +562,7 @@ export async function enqueueBatch<
   ReturnType,
 >(
   component: WorkpoolComponent,
-  ctx: RunMutationCtx,
+  ctx: MutationCtx | ActionCtx,
   fnType: FnType,
   fn: FunctionReference<FnType, FunctionVisibility, Args, ReturnType>,
   fnArgsArray: Array<Args>,
@@ -617,7 +624,7 @@ export async function enqueue<
   ReturnType,
 >(
   component: WorkpoolComponent,
-  ctx: RunMutationCtx,
+  ctx: MutationCtx | ActionCtx,
   fnType: FnType,
   fn: FunctionReference<FnType, FunctionVisibility, Args, ReturnType>,
   fnArgs: Args,
