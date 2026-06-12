@@ -568,6 +568,10 @@ async function beginWork(
       {
         ...args,
         fnType: work.fnType,
+        hasOnSuccess: Boolean(
+          work.onComplete?.kind === "byOutcome" &&
+          work.onComplete.onSuccessHandle,
+        ),
       },
     );
   } else {
