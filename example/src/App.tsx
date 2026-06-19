@@ -19,10 +19,21 @@ import {
 type RunId = Id<"runs">;
 type Tab = "history" | "detail" | "compare" | "run";
 
-type PoolKind = "new" | "old";
+type PoolKind = "new" | "0.4.6" | "0.4.2";
+// Legacy values still appear on historical run docs.
+type PoolValue = PoolKind | "0.4.7" | "old";
 
-function PoolBadge({ pool }: { pool?: PoolKind }) {
-  const cls = pool ?? "none";
+const POOL_CSS_CLASS: Record<PoolValue | "none", string> = {
+  new: "new",
+  "0.4.7": "new",
+  "0.4.6": "old",
+  old: "old",
+  "0.4.2": "older",
+  none: "none",
+};
+
+function PoolBadge({ pool }: { pool?: PoolValue }) {
+  const cls = POOL_CSS_CLASS[pool ?? "none"];
   return <span className={`pool-badge ${cls}`}>{pool ?? "—"}</span>;
 }
 
@@ -36,7 +47,10 @@ function fmtTime(t: number): string {
   return new Date(t).toLocaleString();
 }
 
-type CompareIds = [RunId | null, RunId | null];
+type CompareIds = [RunId | null, RunId | null, RunId | null];
+
+const SLOT_LABELS = ["A", "B", "C"] as const;
+const SLOT_COLORS = ["#4f8cff", "#ff8c4f", "#5cc97a"] as const;
 
 type UrlState = {
   tab: Tab;
@@ -71,8 +85,8 @@ function parseUrlHash(hash: string): Partial<UrlState> {
   }
   const compareMatch = h.match(/^compare\/(.+)$/);
   if (compareMatch) {
-    const parts = compareMatch[1].split(",").slice(0, 2);
-    const ids: CompareIds = [null, null];
+    const parts = compareMatch[1].split(",").slice(0, 3);
+    const ids: CompareIds = [null, null, null];
     parts.forEach((p, i) => {
       if (p) ids[i] = p as RunId;
     });
@@ -86,7 +100,7 @@ function readHashState(): UrlState {
   return {
     tab: parsed.tab ?? "history",
     selectedRunId: parsed.selectedRunId ?? null,
-    compareIds: parsed.compareIds ?? [null, null],
+    compareIds: parsed.compareIds ?? [null, null, null],
   };
 }
 
@@ -157,8 +171,8 @@ function App() {
             setSelectedRunId(id);
             setTab("detail");
           }}
-          onCompare={(a, b) => {
-            setCompareIds([a, b]);
+          onCompare={(ids) => {
+            setCompareIds(ids);
             setTab("compare");
           }}
         />
@@ -175,11 +189,22 @@ function History({
   onCompare,
 }: {
   onPick: (id: RunId) => void;
-  onCompare: (a: RunId, b: RunId) => void;
+  onCompare: (ids: CompareIds) => void;
 }) {
   const runs = useQuery(api.test.dashboard.listRuns, { limit: 100 });
-  const [compareA, setCompareA] = useState<RunId | null>(null);
-  const [compareB, setCompareB] = useState<RunId | null>(null);
+  const [slots, setSlots] = useState<CompareIds>([null, null, null]);
+  const setSlot = (i: 0 | 1 | 2, id: RunId | null) => {
+    const next = [...slots] as CompareIds;
+    next[i] = id;
+    // Clear duplicates in other slots.
+    for (let j = 0; j < 3; j++) {
+      if (j !== i && next[j] === id) next[j] = null;
+    }
+    setSlots(next);
+  };
+
+  const picked = slots.filter((s): s is RunId => s !== null);
+  const canCompare = picked.length >= 2;
 
   if (runs === undefined) return <p className="muted">Loading…</p>;
   if (runs.length === 0)
@@ -190,20 +215,23 @@ function History({
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem" }}>
         <button
           className="primary"
-          disabled={!compareA || !compareB || compareA === compareB}
-          onClick={() => onCompare(compareA!, compareB!)}
+          disabled={!canCompare}
+          onClick={() => onCompare(slots)}
         >
           Compare selected
         </button>
         <span className="muted" style={{ alignSelf: "center" }}>
-          {compareA && compareB ? "two runs selected" : "select A and B"}
+          {picked.length === 0
+            ? "select up to 3 runs (A, B, C)"
+            : `${picked.length} selected${picked.length < 2 ? " — need at least 2" : ""}`}
         </span>
       </div>
       <table>
         <thead>
           <tr>
-            <th>A</th>
-            <th>B</th>
+            {SLOT_LABELS.map((l) => (
+              <th key={l}>{l}</th>
+            ))}
             <th>Scenario</th>
             <th>Pool</th>
             <th>Status</th>
@@ -220,10 +248,8 @@ function History({
             <HistoryRow
               key={r._id}
               row={r}
-              compareA={compareA}
-              compareB={compareB}
-              setCompareA={setCompareA}
-              setCompareB={setCompareB}
+              slots={slots}
+              setSlot={setSlot}
               onPick={onPick}
             />
           ))}
@@ -243,17 +269,13 @@ type HistoryRowData = {
 
 function HistoryRow({
   row,
-  compareA,
-  compareB,
-  setCompareA,
-  setCompareB,
+  slots,
+  setSlot,
   onPick,
 }: {
   row: HistoryRowData;
-  compareA: RunId | null;
-  compareB: RunId | null;
-  setCompareA: (id: RunId) => void;
-  setCompareB: (id: RunId) => void;
+  slots: CompareIds;
+  setSlot: (i: 0 | 1 | 2, id: RunId | null) => void;
   onPick: (id: RunId) => void;
 }) {
   const run = useQuery(api.test.dashboard.getRun, { runId: row._id });
@@ -265,25 +287,19 @@ function HistoryRow({
         onPick(row._id);
       }}
     >
-      <td>
-        <input
-          type="radio"
-          name="a"
-          checked={compareA === row._id}
-          onChange={() => setCompareA(row._id)}
-        />
-      </td>
-      <td>
-        <input
-          type="radio"
-          name="b"
-          checked={compareB === row._id}
-          onChange={() => setCompareB(row._id)}
-        />
-      </td>
+      {SLOT_LABELS.map((label, i) => (
+        <td key={label}>
+          <input
+            type="radio"
+            name={`slot-${label}`}
+            checked={slots[i] === row._id}
+            onChange={() => setSlot(i as 0 | 1 | 2, row._id)}
+          />
+        </td>
+      ))}
       <td>{row.scenario}</td>
       <td>
-        <PoolBadge pool={row.pool as PoolKind | undefined} />
+        <PoolBadge pool={row.pool as PoolValue | undefined} />
       </td>
       <td className={run ? `status-${run.status}` : "muted"}>
         {run ? run.status : "…"}
@@ -316,7 +332,7 @@ function RunDetail({ runId }: { runId: RunId }) {
       <div className="card">
         <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
           <h2 style={{ margin: 0 }}>{run.scenario}</h2>
-          <PoolBadge pool={run.pool as PoolKind | undefined} />
+          <PoolBadge pool={run.pool as PoolValue | undefined} />
           <span className={`status-${run.status}`}>{run.status}</span>
           <span className="muted">{fmtTime(run.startTime)}</span>
         </div>
@@ -429,13 +445,16 @@ function Compare({
   ids,
   setIds,
 }: {
-  ids: [RunId | null, RunId | null];
-  setIds: (ids: [RunId | null, RunId | null]) => void;
+  ids: CompareIds;
+  setIds: (ids: CompareIds) => void;
 }) {
   const runs = useQuery(api.test.dashboard.listRuns, { limit: 100 });
-  const [a, b] = ids;
+  const [a, b, c] = ids;
+
   const runA = useQuery(api.test.dashboard.getRun, a ? { runId: a } : "skip");
   const runB = useQuery(api.test.dashboard.getRun, b ? { runId: b } : "skip");
+  const runC = useQuery(api.test.dashboard.getRun, c ? { runId: c } : "skip");
+
   const tA = useQuery(
     api.test.dashboard.throughputOverTime,
     a ? { runId: a, bucketMs: 500 } : "skip",
@@ -444,83 +463,99 @@ function Compare({
     api.test.dashboard.throughputOverTime,
     b ? { runId: b, bucketMs: 500 } : "skip",
   );
-  const cA = useQuery(api.test.dashboard.latencyCdf, a ? { runId: a } : "skip");
-  const cB = useQuery(api.test.dashboard.latencyCdf, b ? { runId: b } : "skip");
+  const tC = useQuery(
+    api.test.dashboard.throughputOverTime,
+    c ? { runId: c, bucketMs: 500 } : "skip",
+  );
+
+  const cdfA = useQuery(
+    api.test.dashboard.latencyCdf,
+    a ? { runId: a } : "skip",
+  );
+  const cdfB = useQuery(
+    api.test.dashboard.latencyCdf,
+    b ? { runId: b } : "skip",
+  );
+  const cdfC = useQuery(
+    api.test.dashboard.latencyCdf,
+    c ? { runId: c } : "skip",
+  );
+
+  const runsBySlot = [runA, runB, runC];
+  const throughputsBySlot = [tA, tB, tC];
+  const cdfsBySlot = [cdfA, cdfB, cdfC];
 
   const throughputData = useMemo(() => {
-    const aPts = tA?.points ?? [];
-    const bPts = tB?.points ?? [];
-    const len = Math.max(aPts.length, bPts.length);
-    const out: Array<{
-      tMs: number;
-      aCompleted?: number;
-      bCompleted?: number;
-    }> = [];
+    const ptsBySlot = throughputsBySlot.map((t) => t?.points ?? []);
+    const len = Math.max(0, ...ptsBySlot.map((p) => p.length));
+    const out: Array<Record<string, number | undefined>> = [];
     for (let i = 0; i < len; i++) {
-      const tMs = (aPts[i]?.tMs ?? bPts[i]?.tMs ?? i * 500) as number;
-      out.push({
-        tMs,
-        aCompleted: aPts[i]?.completed,
-        bCompleted: bPts[i]?.completed,
+      const tMs =
+        ptsBySlot.find((p) => p[i] !== undefined)?.[i]?.tMs ?? i * 500;
+      const row: Record<string, number | undefined> = { tMs };
+      ptsBySlot.forEach((pts, slotIdx) => {
+        row[`completed_${SLOT_LABELS[slotIdx]}`] = pts[i]?.completed;
       });
+      out.push(row);
     }
     return out;
-  }, [tA, tB]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tA, tB, tC]);
 
-  // Merge CDFs by ms axis: zip both sorted arrays into points with optional aPct/bPct.
   const cdfData = useMemo(() => {
-    const aArr = cA ?? [];
-    const bArr = cB ?? [];
-    const points: Array<{ ms: number; aPct?: number; bPct?: number }> = [];
-    aArr.forEach((p) => points.push({ ms: p.ms, aPct: p.pct }));
-    bArr.forEach((p) => points.push({ ms: p.ms, bPct: p.pct }));
-    points.sort((x, y) => x.ms - y.ms);
+    const points: Array<Record<string, number | undefined>> = [];
+    cdfsBySlot.forEach((arr, slotIdx) => {
+      (arr ?? []).forEach((p) => {
+        points.push({ ms: p.ms, [`pct_${SLOT_LABELS[slotIdx]}`]: p.pct });
+      });
+    });
+    points.sort((x, y) => (x.ms ?? 0) - (y.ms ?? 0));
     return points;
-  }, [cA, cB]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cdfA, cdfB, cdfC]);
+
+  const setSlot = (i: 0 | 1 | 2, value: RunId | null) => {
+    const next = [...ids] as CompareIds;
+    next[i] = value;
+    setIds(next);
+  };
+
+  const loadedRuns = runsBySlot.filter(
+    (r): r is NonNullable<typeof runA> => !!r,
+  );
 
   return (
     <>
       <div className="card">
         <div className="form-row">
-          <label>
-            Run A
-            <select
-              value={a ?? ""}
-              onChange={(e) =>
-                setIds([(e.target.value || null) as RunId | null, b])
-              }
-            >
-              <option value="">— select —</option>
-              {(runs ?? []).map((r) => (
-                <option key={r._id} value={r._id}>
-                  {r.scenario} [{r.pool ?? "?"}] · {fmtTime(r.startTime)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Run B
-            <select
-              value={b ?? ""}
-              onChange={(e) =>
-                setIds([a, (e.target.value || null) as RunId | null])
-              }
-            >
-              <option value="">— select —</option>
-              {(runs ?? []).map((r) => (
-                <option key={r._id} value={r._id}>
-                  {r.scenario} [{r.pool ?? "?"}] · {fmtTime(r.startTime)}
-                </option>
-              ))}
-            </select>
-          </label>
+          {SLOT_LABELS.map((label, i) => (
+            <label key={label}>
+              <span style={{ color: SLOT_COLORS[i] }}>● </span>Run {label}
+              <select
+                value={ids[i] ?? ""}
+                onChange={(e) =>
+                  setSlot(
+                    i as 0 | 1 | 2,
+                    (e.target.value || null) as RunId | null,
+                  )
+                }
+              >
+                <option value="">— select —</option>
+                {(runs ?? []).map((r) => (
+                  <option key={r._id} value={r._id}>
+                    {r.scenario} [{r.pool ?? "?"}] · {fmtTime(r.startTime)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ))}
         </div>
       </div>
 
-      {runA && runB && (
+      {loadedRuns.length >= 2 && (
         <div className="card">
           <h2>Summary delta</h2>
-          <DeltaTable a={runA} b={runB} />
+          <DeltaTable runs={runsBySlot} />
         </div>
       )}
 
@@ -539,20 +574,18 @@ function Compare({
               <YAxis />
               <Tooltip />
               <Legend />
-              <Line
-                type="monotone"
-                dataKey="aCompleted"
-                stroke="#4f8cff"
-                dot={false}
-                name="A"
-              />
-              <Line
-                type="monotone"
-                dataKey="bCompleted"
-                stroke="#ff8c4f"
-                dot={false}
-                name="B"
-              />
+              {SLOT_LABELS.map((label, i) =>
+                ids[i] ? (
+                  <Line
+                    key={label}
+                    type="monotone"
+                    dataKey={`completed_${label}`}
+                    stroke={SLOT_COLORS[i]}
+                    dot={false}
+                    name={label}
+                  />
+                ) : null,
+              )}
             </LineChart>
           </ResponsiveContainer>
         </ChartCard>
@@ -573,22 +606,19 @@ function Compare({
               <YAxis domain={[0, 100]} unit="%" />
               <Tooltip />
               <Legend />
-              <Line
-                type="monotone"
-                dataKey="aPct"
-                stroke="#4f8cff"
-                dot={false}
-                connectNulls
-                name="A"
-              />
-              <Line
-                type="monotone"
-                dataKey="bPct"
-                stroke="#ff8c4f"
-                dot={false}
-                connectNulls
-                name="B"
-              />
+              {SLOT_LABELS.map((label, i) =>
+                ids[i] ? (
+                  <Line
+                    key={label}
+                    type="monotone"
+                    dataKey={`pct_${label}`}
+                    stroke={SLOT_COLORS[i]}
+                    dot={false}
+                    connectNulls
+                    name={label}
+                  />
+                ) : null,
+              )}
             </LineChart>
           </ResponsiveContainer>
         </ChartCard>
@@ -597,63 +627,82 @@ function Compare({
   );
 }
 
-function DeltaTable({
-  a,
-  b,
-}: {
-  a: NonNullable<ReturnType<typeof useQuery<typeof api.test.dashboard.getRun>>>;
-  b: NonNullable<ReturnType<typeof useQuery<typeof api.test.dashboard.getRun>>>;
-}) {
+type RunDoc = NonNullable<
+  ReturnType<typeof useQuery<typeof api.test.dashboard.getRun>>
+>;
+
+function DeltaTable({ runs }: { runs: Array<RunDoc | null | undefined> }) {
   const rows: Array<{
     label: string;
-    av?: number;
-    bv?: number;
+    pick: (r: RunDoc) => number | undefined;
     lower: boolean;
   }> = [
     {
       label: "Total duration (ms)",
-      av: a.totalDurationMs,
-      bv: b.totalDurationMs,
+      pick: (r) => r.totalDurationMs,
       lower: true,
     },
-    { label: "p50 (ms)", av: a.latency?.p50, bv: b.latency?.p50, lower: true },
-    { label: "p95 (ms)", av: a.latency?.p95, bv: b.latency?.p95, lower: true },
-    { label: "p99 (ms)", av: a.latency?.p99, bv: b.latency?.p99, lower: true },
-    { label: "max (ms)", av: a.latency?.max, bv: b.latency?.max, lower: true },
+    { label: "p50 (ms)", pick: (r) => r.latency?.p50, lower: true },
+    { label: "p95 (ms)", pick: (r) => r.latency?.p95, lower: true },
+    { label: "p99 (ms)", pick: (r) => r.latency?.p99, lower: true },
+    { label: "max (ms)", pick: (r) => r.latency?.max, lower: true },
   ];
+
+  // Find the first present run to act as the baseline for deltas.
+  const baselineIdx = runs.findIndex((r) => !!r);
+  const baseline = baselineIdx >= 0 ? runs[baselineIdx] : null;
+  const baselineLabel = baselineIdx >= 0 ? SLOT_LABELS[baselineIdx] : "—";
+
   return (
     <table>
       <thead>
         <tr>
           <th>Metric</th>
-          <th>
-            A ({a.scenario} · {a.pool ?? "?"})
-          </th>
-          <th>
-            B ({b.scenario} · {b.pool ?? "?"})
-          </th>
-          <th>Δ (B vs A)</th>
+          {runs.map((r, i) =>
+            r ? (
+              <th key={SLOT_LABELS[i]} style={{ color: SLOT_COLORS[i] }}>
+                {SLOT_LABELS[i]} ({r.scenario} · {r.pool ?? "?"})
+              </th>
+            ) : null,
+          )}
+          {runs.map((r, i) =>
+            r && i !== baselineIdx ? (
+              <th key={`d-${SLOT_LABELS[i]}`}>
+                Δ {SLOT_LABELS[i]} vs {baselineLabel}
+              </th>
+            ) : null,
+          )}
         </tr>
       </thead>
       <tbody>
         {rows.map((row) => {
-          const delta =
-            row.av !== undefined && row.bv !== undefined && row.av !== 0
-              ? ((row.bv - row.av) / row.av) * 100
-              : undefined;
-          // For "lower is better": negative delta is good.
-          const better =
-            delta !== undefined && (row.lower ? delta < 0 : delta > 0);
+          const baseVal = baseline ? row.pick(baseline) : undefined;
           return (
             <tr key={row.label}>
               <td>{row.label}</td>
-              <td>{row.av ?? "—"}</td>
-              <td>{row.bv ?? "—"}</td>
-              <td className={better ? "delta-positive" : "delta-negative"}>
-                {delta === undefined
-                  ? "—"
-                  : `${delta > 0 ? "+" : ""}${delta.toFixed(1)}%`}
-              </td>
+              {runs.map((r, i) =>
+                r ? <td key={SLOT_LABELS[i]}>{row.pick(r) ?? "—"}</td> : null,
+              )}
+              {runs.map((r, i) => {
+                if (!r || i === baselineIdx) return null;
+                const v = row.pick(r);
+                const delta =
+                  v !== undefined && baseVal !== undefined && baseVal !== 0
+                    ? ((v - baseVal) / baseVal) * 100
+                    : undefined;
+                const better =
+                  delta !== undefined && (row.lower ? delta < 0 : delta > 0);
+                return (
+                  <td
+                    key={`d-${SLOT_LABELS[i]}`}
+                    className={better ? "delta-positive" : "delta-negative"}
+                  >
+                    {delta === undefined
+                      ? "—"
+                      : `${delta > 0 ? "+" : ""}${delta.toFixed(1)}%`}
+                  </td>
+                );
+              })}
             </tr>
           );
         })}
@@ -715,7 +764,7 @@ type ScenarioName = keyof typeof SCENARIO_PRESETS;
 function RunScenarioForm({ onStarted }: { onStarted: () => void }) {
   const runScenarios = useAction(api.test.dashboard.runScenarios);
   const [scenario, setScenario] = useState<ScenarioName>("burstyBatches");
-  const [pool, setPool] = useState<"new" | "old" | "both">("new");
+  const [pool, setPool] = useState<PoolKind | "all">("new");
   const [paramsText, setParamsText] = useState<string>(
     JSON.stringify(SCENARIO_PRESETS[scenario], null, 2),
   );
@@ -739,8 +788,8 @@ function RunScenarioForm({ onStarted }: { onStarted: () => void }) {
     }
     setBusy(true);
     try {
-      const launches: Array<"new" | "old"> =
-        pool === "both" ? ["old", "new"] : [pool];
+      const launches: Array<PoolKind> =
+        pool === "all" ? ["0.4.2", "0.4.6", "new"] : [pool];
       const argsList = launches.map((p) => ({
         ...parsed,
         pool: p,
@@ -774,11 +823,12 @@ function RunScenarioForm({ onStarted }: { onStarted: () => void }) {
           Pool
           <select
             value={pool}
-            onChange={(e) => setPool(e.target.value as "new" | "old" | "both")}
+            onChange={(e) => setPool(e.target.value as PoolKind | "all")}
           >
-            <option value="new">new (this branch)</option>
-            <option value="old">old (workpool@0.4.6)</option>
-            <option value="both">both (sequential)</option>
+            <option value="new">new (this branch, 0.4.7-α)</option>
+            <option value="0.4.6">0.4.6 (published, with cooldown)</option>
+            <option value="0.4.2">0.4.2 (pre-cooldown)</option>
+            <option value="all">all (sequential)</option>
           </select>
         </label>
       </div>
@@ -797,10 +847,11 @@ function RunScenarioForm({ onStarted }: { onStarted: () => void }) {
         {busy ? "Starting…" : "Run"}
       </button>
       <p className="muted" style={{ fontSize: "0.8rem", marginTop: "1rem" }}>
-        Tip: pick “both” to run the same scenario back-to-back on old then new,
-        then compare them under “Compare”. The dashboard waits for each run to
-        finish (plus a short buffer for the runner's 5s reentry guard) before
-        starting the next, so the button stays busy for the full duration.
+        Tip: pick “all” to run the same scenario back-to-back on each version
+        (0.4.2 → 0.4.6 → new), then compare them under “Compare”. The dashboard
+        waits for each run to finish (plus a short buffer for the runner's 5s
+        reentry guard) before starting the next, so the button stays busy for
+        the full duration.
       </p>
     </div>
   );
