@@ -1,9 +1,10 @@
 import { v, type Infer } from "convex/values";
+import { env } from "./_generated/server.js";
 
 export const DEFAULT_LOG_LEVEL: LogLevel = "REPORT";
 
 // NOTE: the ordering here is important! A config level of "INFO" will log
-// "INFO", "REPORT", "WARN",and "ERROR" events.
+// "INFO", "REPORT", "WARN", and "ERROR" events.
 export const logLevel = v.union(
   v.literal("DEBUG"),
   v.literal("TRACE"),
@@ -43,9 +44,12 @@ const WARN = logLevelByName["WARN"];
 const ERROR = logLevelByName["ERROR"];
 
 export function createLogger(level?: LogLevel): Logger {
-  const levelIndex = logLevelByName[level ?? DEFAULT_LOG_LEVEL];
+  // `LOG_LEVEL` env var (validated in convex.config.ts) takes precedence over
+  // the level passed by the caller.
+  const resolvedLevel = env.LOG_LEVEL ?? level ?? DEFAULT_LOG_LEVEL;
+  const levelIndex = logLevelByName[resolvedLevel];
   if (levelIndex === undefined) {
-    throw new Error(`Invalid log level: ${level}`);
+    throw new Error(`Invalid log level: ${resolvedLevel}`);
   }
   return {
     debug: (...args: unknown[]) => {

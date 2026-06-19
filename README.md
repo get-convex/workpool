@@ -272,8 +272,8 @@ import { defineApp } from "convex/server";
 import workpool from "@convex-dev/workpool/convex.config.js";
 
 const app = defineApp();
-app.use(workpool, { name: "emailWorkpool" });
-app.use(workpool, { name: "scrapeWorkpool" });
+app.use(workpool, { name: "emailWorkpool", env: {} });
+app.use(workpool, { name: "scrapeWorkpool", env: {} });
 export default app;
 ```
 
@@ -288,8 +288,35 @@ Check out the [docstrings](./src/client/index.ts), but notable options include:
   workflows.
 - `retryActionsByDefault`: Whether to retry actions that fail by default.
 - `defaultRetryBehavior`: The default retry behavior for enqueued actions.
+- `logLevel`: How verbose the workpool's logging is (`DEBUG`, `TRACE`, `INFO`,
+  `REPORT`, `WARN`, or `ERROR`). See [below](#setting-the-log-level) for how to
+  override it without a code change.
 
 You can override the retry behavior per-call with the `retry` option.
+
+#### Setting the log level
+
+The workpool component declares an optional `LOG_LEVEL` environment variable. If
+it's set to a valid log level, it takes precedence over the `logLevel` passed via
+the client or `config.update`. This is handy for turning on verbose logging in
+production without redeploying.
+
+Bind it from your app's `convex.config.ts`:
+
+```ts
+// convex/convex.config.ts
+import { defineApp } from "convex/server";
+import workpool from "@convex-dev/workpool/convex.config.js";
+
+const app = defineApp();
+app.use(workpool, { env: { LOG_LEVEL: "DEBUG" } });
+export default app;
+```
+
+You can also bind it by reference to one of your app's own env vars
+(`app.use(workpool, { env: { LOG_LEVEL: app.env.MY_LOG_LEVEL } })`).
+
+If you name the component and don't want to bind `LOG_LEVEL`, pass `env: {}`.
 
 If you don't specify a `maxParallelism` as a Class-level option, you can specify
 it at runtime by calling

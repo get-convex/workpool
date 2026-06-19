@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import {
+  env,
   internalMutation,
   internalQuery,
   type MutationCtx,
@@ -73,7 +74,7 @@ export async function generateReport(
   state: Doc<"internalState">,
   { maxParallelism, logLevel }: Config,
 ) {
-  if (!shouldLog(logLevel, "REPORT")) {
+  if (!shouldLog(env.LOG_LEVEL ?? logLevel, "REPORT")) {
     // Don't waste time if we're not going to log.
     return;
   }
