@@ -1,4 +1,3 @@
-import { convexTest } from "convex-test";
 import type { WithoutSystemFields } from "convex/server";
 import {
   afterEach,
@@ -11,51 +10,45 @@ import {
 } from "vitest";
 import { api, internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
-import schema from "./schema.js";
 import { DEFAULT_MAX_PARALLELISM, getCurrentSegment } from "./shared.js";
-import { STATUS_COOLDOWN } from "./loop.js";
+import { WORKER_NAME } from "./shared.js";
+import { setupTest } from "./setup.test.js";
 
-const modules = import.meta.glob("./**/*.ts");
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 
 /**
- * Behavior tests for the main loop, designed from first principles around
- * what an external observer can see:
+ * Behavior tests for the main loop, now driven by @convex-dev/batch-worker.
+ * Designed around what an external observer can see:
  *
  *   - api.lib.status     — public-facing state of a single work item
- *   - runStatus.state    — loop lifecycle (running / scheduled / idle)
  *   - pending* tables    — work in flight that the loop will process
  *   - state.running      — slots currently occupied by workers
  *
- * These tests do NOT assert on implementation specifics like cursor
- * positions, segment values, or which scheduler call was made — those
- * change when the loop's internals change, and they're not the contract.
+ * The loop's lifecycle (running/idle/scheduled), generation guard, and
+ * liveness recovery are owned by batch-worker and are NOT asserted here.
  *
  * Setup conventions:
  *   - vi.useFakeTimers() so time advances deterministically
- *   - The loop is driven manually via runMain(); convex-test doesn't
- *     auto-flush scheduled functions
- *   - simulateCompletion() pretends a worker finished its job by
- *     calling internal.complete.complete; this is how production gets
- *     work into pendingCompletion, so it's the correct seam for testing
+ *   - The loop is driven manually via runLoop(): query `getBatch`, and if it
+ *     returns work, run the `main` worker mutation with that batch. This is
+ *     exactly what batch-worker does for us in production.
+ *   - simulateCompletion() pretends a worker finished its job by calling
+ *     internal.complete.complete (how production gets work into
+ *     pendingCompletion), so it's the correct seam for testing.
  */
 describe("loop", () => {
-  async function setupTest() {
-    const t = convexTest(schema, modules);
+  let t: ReturnType<typeof setupTest>;
+
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    t = setupTest();
     await t.run(async (ctx) => {
       await ctx.db.insert("globals", {
         logLevel: "WARN",
         maxParallelism: DEFAULT_MAX_PARALLELISM,
       });
     });
-    return t;
-  }
-  let t: Awaited<ReturnType<typeof setupTest>>;
-
-  beforeEach(async () => {
-    vi.useFakeTimers();
-    t = await setupTest();
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -63,7 +56,7 @@ describe("loop", () => {
 
   // ── helpers ──────────────────────────────────────────────────────────
 
-  /** Seed an empty running loop: internalState + runStatus=running. */
+  /** Seed an empty internalState singleton. */
   async function initialize(opts: { maxParallelism?: number } = {}) {
     if (opts.maxParallelism !== undefined) {
       await t.run(async (ctx) => {
@@ -76,7 +69,7 @@ describe("loop", () => {
     }
     await t.run(async (ctx) => {
       await ctx.db.insert("internalState", {
-        generation: 1n,
+        generation: 0n,
         segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
         lastRecovery: 0n,
         report: {
@@ -89,7 +82,6 @@ describe("loop", () => {
         },
         running: [],
       });
-      await ctx.db.insert("runStatus", { state: { kind: "running" } });
     });
   }
 
@@ -115,13 +107,19 @@ describe("loop", () => {
     });
   }
 
-  /** Drive the main loop one iteration with the current generation. */
-  async function runMain() {
-    const generation = await t.run(async (ctx) => {
-      const s = await ctx.db.query("internalState").unique();
-      return s?.generation ?? 0n;
+  /**
+   * Drive one loop iteration the way batch-worker does: get the next batch,
+   * and if there's work, run the worker mutation with it. Returns the batch
+   * result so tests can inspect the idle/work decision.
+   */
+  async function runLoop() {
+    const result = await t.query(internal.loop.getBatch, {
+      name: WORKER_NAME,
     });
-    await t.mutation(internal.loop.main, { generation });
+    if (result.kind === "work") {
+      await t.mutation(internal.loop.run, result.batch);
+    }
+    return result;
   }
 
   /** Pretend a worker finished a job by inserting pendingCompletion. */
@@ -142,7 +140,6 @@ describe("loop", () => {
   async function observe() {
     return t.run(async (ctx) => {
       const state = await ctx.db.query("internalState").unique();
-      const runStatus = await ctx.db.query("runStatus").unique();
       const pendingStart = await ctx.db.query("pendingStart").collect();
       const pendingCompletion = await ctx.db
         .query("pendingCompletion")
@@ -152,8 +149,7 @@ describe("loop", () => {
         .collect();
       return {
         running: state?.running ?? [],
-        generation: state?.generation ?? 0n,
-        runStatus: runStatus?.state,
+        lastRecovery: state?.lastRecovery ?? 0n,
         pendingStart,
         pendingCompletion,
         pendingCancelation,
@@ -170,11 +166,11 @@ describe("loop", () => {
   // ────────────────────────────────────────────────────────────────────
 
   describe("forward progress", () => {
-    it("starts a pending work item when main runs", async () => {
+    it("starts a pending work item when the loop runs", async () => {
       await initialize();
       const workId = await enqueueWork();
 
-      await runMain();
+      await runLoop();
 
       const o = await observe();
       expect(o.pendingStart).toHaveLength(0);
@@ -185,14 +181,14 @@ describe("loop", () => {
     it("removes work from running once a successful completion is processed", async () => {
       await initialize();
       const workId = await enqueueWork();
-      await runMain();
+      await runLoop();
 
       await simulateCompletion(
         workId,
         { kind: "success", returnValue: null },
         0,
       );
-      await runMain();
+      await runLoop();
 
       const o = await observe();
       expect(o.running).toHaveLength(0);
@@ -204,10 +200,10 @@ describe("loop", () => {
     it("treats a final failure (no retry policy) as terminal", async () => {
       await initialize();
       const workId = await enqueueWork();
-      await runMain();
+      await runLoop();
 
       await simulateCompletion(workId, { kind: "failed", error: "boom" }, 0);
-      await runMain();
+      await runLoop();
 
       const o = await observe();
       expect(o.running).toHaveLength(0);
@@ -219,7 +215,7 @@ describe("loop", () => {
       const ids = [];
       for (let i = 0; i < 3; i++) ids.push(await enqueueWork());
 
-      await runMain();
+      await runLoop();
 
       const o = await observe();
       expect(o.running).toHaveLength(3);
@@ -236,7 +232,7 @@ describe("loop", () => {
       await initialize({ maxParallelism: 3 });
       for (let i = 0; i < 7; i++) await enqueueWork();
 
-      await runMain();
+      await runLoop();
 
       const o = await observe();
       expect(o.running).toHaveLength(3);
@@ -248,7 +244,7 @@ describe("loop", () => {
       const ids = [];
       for (let i = 0; i < 4; i++) ids.push(await enqueueWork());
 
-      await runMain();
+      await runLoop();
       let o = await observe();
       expect(o.running).toHaveLength(2);
       expect(o.pendingStart).toHaveLength(2);
@@ -260,7 +256,7 @@ describe("loop", () => {
         { kind: "success", returnValue: null },
         0,
       );
-      await runMain();
+      await runLoop();
 
       o = await observe();
       expect(o.running).toHaveLength(2);
@@ -311,7 +307,7 @@ describe("loop", () => {
       // New pending work arrives while we're already over capacity.
       await enqueueWork();
 
-      await runMain();
+      await runLoop();
 
       const o = await observe();
       // No new starts — already over capacity.
@@ -334,11 +330,11 @@ describe("loop", () => {
           base: 2,
         },
       });
-      await runMain();
+      await runLoop();
 
       // Worker reports failure on first attempt.
       await simulateCompletion(workId, { kind: "failed", error: "boom" }, 0);
-      await runMain();
+      await runLoop();
 
       // Work doc still exists; pendingStart was re-inserted with backoff segment.
       const o = await observe();
@@ -359,14 +355,14 @@ describe("loop", () => {
           base: 2,
         },
       });
-      await runMain();
+      await runLoop();
 
       // Worker reports failure (would normally retry).
       await simulateCompletion(workId, { kind: "failed", error: "boom" }, 0);
       // Cancel arrives before main can process the retry.
       await t.mutation(api.lib.cancel, { id: workId });
 
-      await runMain();
+      await runLoop();
 
       const o = await observe();
       // Loop's direct effect: no retry was queued, work is marked canceled.
@@ -388,7 +384,7 @@ describe("loop", () => {
       const workId = await enqueueWork();
       await t.mutation(api.lib.cancel, { id: workId });
 
-      await runMain();
+      await runLoop();
 
       const o = await observe();
       expect(o.pendingStart).toHaveLength(0);
@@ -402,11 +398,11 @@ describe("loop", () => {
     it("marks an already-running work as canceled", async () => {
       await initialize();
       const workId = await enqueueWork();
-      await runMain(); // start it
+      await runLoop(); // start it
       expect((await observe()).running).toHaveLength(1);
 
       await t.mutation(api.lib.cancel, { id: workId });
-      await runMain(); // process the cancellation
+      await runLoop(); // process the cancellation
 
       const work = await t.run(async (ctx) => ctx.db.get("work", workId));
       expect(work?.canceled).toBe(true);
@@ -415,13 +411,13 @@ describe("loop", () => {
     it("is a graceful no-op for already-finished work", async () => {
       await initialize();
       const workId = await enqueueWork();
-      await runMain();
+      await runLoop();
       await simulateCompletion(
         workId,
         { kind: "success", returnValue: null },
         0,
       );
-      await runMain();
+      await runLoop();
 
       // Work doc already gone — cancel should not throw.
       await t.mutation(api.lib.cancel, { id: workId });
@@ -431,236 +427,43 @@ describe("loop", () => {
   });
 
   // ────────────────────────────────────────────────────────────────────
-  // Lifecycle: runStatus transitions
+  // getBatch: the work-vs-idle decision and its scheduling hints
   // ────────────────────────────────────────────────────────────────────
 
-  describe("lifecycle", () => {
-    it("transitions running -> idle when there's nothing to do (past cooldown)", async () => {
+  describe("getBatch", () => {
+    it("returns idle when there's nothing to do", async () => {
       await initialize();
-      // No pending work, cursors at 0 → far in the past, past cooldown.
-      vi.setSystemTime(Date.now() + STATUS_COOLDOWN + SECOND);
-
-      await runMain();
-
-      expect((await observe()).runStatus).toMatchObject({ kind: "idle" });
+      const result = await t.query(internal.loop.getBatch, {
+        name: WORKER_NAME,
+      });
+      expect(result.kind).toBe("idle");
+      // Nothing running and no future work → no wake-up hint.
+      if (result.kind === "idle") {
+        expect(result.timeoutMs).toBeUndefined();
+      }
     });
 
-    it("stays running during the cooldown window", async () => {
+    it("returns a work batch when a pending start is ready", async () => {
       await initialize();
       const workId = await enqueueWork();
-      await runMain(); // process the work; cursors advance to ~now
-
-      // Complete it so there's no work in flight.
-      await simulateCompletion(
-        workId,
-        { kind: "success", returnValue: null },
-        0,
-      );
-      await runMain(); // process completion; cursors at ~now
-
-      // Within cooldown — should stay running.
-      const o = await observe();
-      expect(o.runStatus).toMatchObject({ kind: "running" });
+      const result = await t.query(internal.loop.getBatch, {
+        name: WORKER_NAME,
+      });
+      assert(result.kind === "work");
+      expect(result.batch.starts.map((s) => s.workId)).toEqual([workId]);
+      expect(result.batch.recovery).toBe(false);
     });
 
-    it("transitions to scheduled (saturated=false) when only future-scheduled work remains", async () => {
+    it("idles with a timeoutMs when only future-scheduled work remains", async () => {
       await initialize();
-      // A retry-style pendingStart in the future.
-      const future = getCurrentSegment() + 1000n;
+      const future = getCurrentSegment() + 1000n; // 100s out
       await enqueueWork({}, future);
-      // Cursors at 0 → past cooldown, so we're not held in cooldown.
 
-      await runMain();
-
-      const o = await observe();
-      expect(o.runStatus?.kind).toBe("scheduled");
-      if (o.runStatus?.kind === "scheduled") {
-        expect(o.runStatus.segment).toBeLessThanOrEqual(future);
-        // No running jobs; capacity isn't full → saturated must be false.
-        expect(o.runStatus.saturated).toBe(false);
-      }
-    });
-  });
-
-  // ────────────────────────────────────────────────────────────────────
-  // Saturated state: scheduled with running.length == maxParallelism
-  // The flag changes how kickMainLoop behaves (no enqueue-kicks; yes
-  // completion-kicks).
-  // ────────────────────────────────────────────────────────────────────
-
-  describe("saturated", () => {
-    /**
-     * Pre-populate state.running with N entries, each backed by a real work
-     * doc + scheduled worker (so recovery checks don't fire). Useful for
-     * exercising main when the loop is already at-capacity.
-     */
-    async function fillRunningTo(count: number): Promise<Id<"work">[]> {
-      const ids: Id<"work">[] = [];
-      const entries: {
-        workId: Id<"work">;
-        scheduledId: Id<"_scheduled_functions">;
-        started: number;
-      }[] = [];
-      for (let i = 0; i < count; i++) {
-        const workId = await t.run(async (ctx) =>
-          ctx.db.insert("work", {
-            fnType: "action",
-            fnHandle: "test_handle",
-            fnName: "test_handle",
-            fnArgs: {},
-            attempts: 0,
-          }),
-        );
-        const scheduledId = await t.run(async (ctx) =>
-          ctx.scheduler.runAfter(0, internal.worker.runActionWrapper, {
-            workId,
-            fnHandle: "test_handle",
-            fnArgs: {},
-            logLevel: "WARN",
-            attempt: 0,
-          }),
-        );
-        ids.push(workId);
-        entries.push({ workId, scheduledId, started: Date.now() });
-      }
-      await t.run(async (ctx) => {
-        const s = await ctx.db.query("internalState").unique();
-        assert(s);
-        await ctx.db.patch("internalState", s._id, { running: entries });
+      const result = await t.query(internal.loop.getBatch, {
+        name: WORKER_NAME,
       });
-      return ids;
-    }
-
-    it("records saturated=true when transitioning to scheduled at full capacity", async () => {
-      await initialize({ maxParallelism: 3 });
-      // Fill to capacity. No completions, no future starts → main has
-      // nothing to do this iteration but jobs are running, so it should
-      // schedule itself (e.g. for recovery) with saturated=true.
-      await fillRunningTo(3);
-
-      await runMain();
-
-      const o = await observe();
-      assert(o.runStatus);
-      expect(o.runStatus.kind).toBe("scheduled");
-      if (o.runStatus.kind === "scheduled") {
-        expect(o.runStatus.saturated).toBe(true);
-      }
-    });
-
-    it("records saturated=false when scheduling with under-capacity running jobs", async () => {
-      await initialize({ maxParallelism: 5 });
-      // Fewer running jobs than max → not saturated.
-      await fillRunningTo(2);
-
-      await runMain();
-
-      const o = await observe();
-      assert(o.runStatus);
-      expect(o.runStatus.kind).toBe("scheduled");
-      if (o.runStatus.kind === "scheduled") {
-        expect(o.runStatus.saturated).toBe(false);
-      }
-    });
-
-    it("clears saturated when a completion frees a slot", async () => {
-      // Saturated → completion arrives → kick wakes main → main runs and
-      // sees a freed slot → next scheduled state has saturated=false.
-      await initialize({ maxParallelism: 2 });
-      const ids = await fillRunningTo(2);
-      await runMain(); // first transition: scheduled, saturated=true
-      expect((await observe()).runStatus).toMatchObject({
-        kind: "scheduled",
-        saturated: true,
-      });
-
-      // A worker completes — frees a slot.
-      await simulateCompletion(
-        ids[0],
-        { kind: "success", returnValue: null },
-        0,
-      );
-      await runMain();
-
-      const o = await observe();
-      assert(o.runStatus);
-      // After processing the completion, running.length is 1 < 2, so any
-      // subsequent scheduled state should NOT be saturated.
-      if (o.runStatus.kind === "scheduled") {
-        expect(o.runStatus.saturated).toBe(false);
-      } else {
-        // Or we might be in 'running' (within cooldown) — also fine; just
-        // ensure we did not stay saturated=true.
-        expect(o.runStatus.kind).not.toBe("idle");
-      }
-    });
-
-    it("does not start new work while saturated, even when pendingStart accumulates", async () => {
-      // Demonstrates that the capacity-aware query honors the running cap:
-      // when running == max, getPending returns zero starts, so new
-      // enqueues sit in pendingStart until a slot opens.
-      await initialize({ maxParallelism: 2 });
-      await fillRunningTo(2);
-
-      // New work arrives while saturated.
-      const newWorkId = await enqueueWork();
-
-      await runMain();
-
-      const o = await observe();
-      // No new starts — we're at max capacity.
-      expect(o.running).toHaveLength(2);
-      expect(o.pendingStart.map((p) => p.workId)).toContain(newWorkId);
-      assert(o.runStatus);
-      if (o.runStatus.kind === "scheduled") {
-        expect(o.runStatus.saturated).toBe(true);
-      }
-    });
-
-    it("stays saturated when a completion frees a slot but more work is waiting", async () => {
-      // Externally observable: a completion arriving while saturated, with
-      // more pendingStart queued, should leave runStatus = scheduled +
-      // saturated=true. The freed slot gets refilled from pendingStart in
-      // the same iteration, so running.length stays at max and the visible
-      // saturated state doesn't drop.
-      await initialize({ maxParallelism: 2 });
-      const ids = await fillRunningTo(2);
-      // Two more items waiting behind the at-capacity loop.
-      await enqueueWork();
-      await enqueueWork();
-
-      // First main iteration arrives at the saturated end state.
-      await runMain();
-      expect((await observe()).runStatus).toMatchObject({
-        kind: "scheduled",
-        saturated: true,
-      });
-
-      // A worker completes — frees a slot, but pendingStart still has work.
-      await simulateCompletion(
-        ids[0],
-        { kind: "success", returnValue: null },
-        0,
-      );
-
-      // First iteration after the completion does work (processes
-      // completion + starts a new pending), so didWork=true and main
-      // self-reschedules with runStatus = "running".
-      await runMain();
-      // Advance past the cooldown so the next iteration actually records
-      // the end-of-run state instead of holding "running" via cooldown.
-      vi.setSystemTime(Date.now() + STATUS_COOLDOWN + SECOND);
-      await runMain();
-
-      const o = await observe();
-      assert(o.runStatus);
-      // Slot was refilled from pendingStart → running back at max →
-      // saturated=true is the externally observed state again.
-      expect(o.running).toHaveLength(2);
-      expect(o.runStatus).toMatchObject({
-        kind: "scheduled",
-        saturated: true,
-      });
+      assert(result.kind === "idle");
+      expect(result.timeoutMs).toBeGreaterThan(0);
     });
   });
 
@@ -669,7 +472,7 @@ describe("loop", () => {
   // ────────────────────────────────────────────────────────────────────
 
   describe("recovery", () => {
-    it("flags running entries whose worker has been silent past the threshold", async () => {
+    it("flags a recovery iteration and advances lastRecovery for silent workers", async () => {
       await initialize();
       // Pre-populate state.running with an old entry.
       const workId = await t.run(async (ctx) => {
@@ -708,16 +511,18 @@ describe("loop", () => {
         return wid;
       });
 
-      await runMain();
+      // getBatch should flag this as a recovery iteration.
+      const batchResult = await t.query(internal.loop.getBatch, {
+        name: WORKER_NAME,
+      });
+      assert(batchResult.kind === "work");
+      expect(batchResult.batch.recovery).toBe(true);
 
-      // We can't directly verify "recovery was scheduled" without inspecting
-      // the scheduler queue, but we can verify lastRecovery was advanced.
+      await runLoop();
+
       const after = await observe();
-      const state = await t.run(async (ctx) =>
-        ctx.db.query("internalState").unique(),
-      );
-      assert(state);
-      expect(state.lastRecovery).toBeGreaterThan(0n);
+      // lastRecovery advanced past 0.
+      expect(after.lastRecovery).toBeGreaterThan(0n);
       // Work is still in running (recovery removes it via complete, which
       // happens in a separately-scheduled mutation).
       expect(after.running.map((r) => r.workId)).toContain(workId);
@@ -725,64 +530,29 @@ describe("loop", () => {
   });
 
   // ────────────────────────────────────────────────────────────────────
-  // Generation safety: stale main calls cannot clobber state
-  // ────────────────────────────────────────────────────────────────────
-
-  describe("generation safety", () => {
-    it("rejects main calls with the wrong generation", async () => {
-      await initialize();
-      // Current generation is 1n. Calling with 99n should error.
-      await t.mutation(internal.loop.main, { generation: 99n });
-      const generation = await t.run(async (ctx) => {
-        const state = await ctx.db.query("internalState").first();
-        return state?.generation;
-      });
-      expect(generation).toBe(1n);
-    });
-
-    it("increments the generation each time main runs", async () => {
-      await initialize();
-      const before = (await observe()).generation;
-      await runMain();
-      const after = (await observe()).generation;
-      expect(after).toBeGreaterThan(before);
-    });
-  });
-
-  // ────────────────────────────────────────────────────────────────────
-  // Backwards compatibility with the pre-merge API
+  // Backwards compatibility with the pre-migration API
   // ────────────────────────────────────────────────────────────────────
 
   describe("backwards compatibility", () => {
-    it("main accepts (and ignores) a legacy `segment` arg", async () => {
+    it("internal.loop.main forwarder resumes the loop without error", async () => {
       await initialize();
       const workId = await enqueueWork();
 
-      // The legacy callsites pass `segment`; the new main treats it as
-      // optional. Calls should still process work as expected.
-      await t.mutation(internal.loop.main, {
-        generation: 1n,
-        segment: 12345n,
-      });
+      // A pre-migration scheduled call lands here after deploy. It just pings
+      // batch-worker (no-op in tests) and must not throw.
+      await t.mutation(internal.loop.main, { generation: 1n, segment: 123n });
 
+      // Work is still pending; pumping the loop processes it as usual.
+      await runLoop();
       expect((await observe()).running.map((r) => r.workId)).toEqual([workId]);
     });
 
-    it("updateRunStatus schedules a main call (forwards in-flight upgrade traffic)", async () => {
+    it("internal.loop.updateRunStatus forwarder does not throw", async () => {
       await initialize();
-      // A pre-upgrade scheduled call lands here after deploy.
       await t.mutation(internal.loop.updateRunStatus, {
         generation: 1n,
-        segment: 12345n,
+        segment: 123n,
       });
-      // The forwarder should have scheduled main; we don't drain the
-      // full pipeline (that's covered by the other tests). Just verify
-      // a main call was queued.
-      const scheduled = await t.run(async (ctx) =>
-        ctx.db.system.query("_scheduled_functions").collect(),
-      );
-      const mainCalls = scheduled.filter((s) => s.name.endsWith("loop:main"));
-      expect(mainCalls.length).toBeGreaterThan(0);
     });
   });
 });

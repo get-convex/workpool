@@ -53,7 +53,7 @@ export const enqueue = mutation({
   handler: async (ctx, { config, ...itemArgs }) => {
     const globals = await getOrUpdateGlobals(ctx, config);
     const console = createLogger(globals.logLevel);
-    await kickMainLoop(ctx, "enqueue", globals);
+    await kickMainLoop(ctx, "enqueue");
     return await enqueueHandler(ctx, console, itemArgs);
   },
 });
@@ -129,7 +129,7 @@ export const enqueueBatch = mutation({
   handler: async (ctx, { config, items }) => {
     const globals = await getOrUpdateGlobals(ctx, config);
     const console = createLogger(globals.logLevel);
-    await kickMainLoop(ctx, "enqueue", globals);
+    await kickMainLoop(ctx, "enqueue");
     return Promise.all(items.map((item) => enqueueHandler(ctx, console, item)));
   },
 });
@@ -143,7 +143,7 @@ export const cancel = mutation({
     const globals = await getOrUpdateGlobals(ctx, { logLevel });
     const shouldCancel = await shouldCancelWorkItem(ctx, id, globals.logLevel);
     if (shouldCancel) {
-      await kickMainLoop(ctx, "cancel", globals);
+      await kickMainLoop(ctx, "cancel");
       await ctx.db.insert("pendingCancelation", {
         workId: id,
         segment: getCurrentSegment(),
@@ -174,7 +174,7 @@ export const cancelAll = mutation({
       ),
     );
     if (shouldCancel.some((c) => c)) {
-      await kickMainLoop(ctx, "cancel", globals);
+      await kickMainLoop(ctx, "cancel");
     }
     const segment = getCurrentSegment();
     await Promise.all(

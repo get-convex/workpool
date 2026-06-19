@@ -1,4 +1,3 @@
-import { convexTest } from "convex-test";
 import type { WithoutSystemFields } from "convex/server";
 import {
   afterEach,
@@ -12,16 +11,16 @@ import {
 import { api, internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import type { MutationCtx } from "./_generated/server.js";
-import schema from "./schema.js";
 import {
   DEFAULT_MAX_PARALLELISM,
+  fromSegment,
   getCurrentSegment,
   getNextSegment,
   SECOND,
+  WORKER_NAME,
 } from "./shared.js";
 import { RECOVERY_PERIOD_SEGMENTS } from "./loop.js";
-
-const modules = import.meta.glob("./**/*.ts");
+import { setupTest } from "./setup.test.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -169,16 +168,7 @@ const S12_CANCELED_AWAITING_COMPLETE: CompositeState = {
 const ACTION_RECOVERY_THRESHOLD_MS = 5 * 60 * 1000;
 
 describe("state machine", () => {
-  function setupTest() {
-    return convexTest(schema, modules);
-  }
-
   let t: ReturnType<typeof setupTest>;
-  let generation: bigint;
-
-  function nextGen() {
-    return generation++;
-  }
 
   async function makeDummyWork(
     ctx: MutationCtx,
@@ -221,7 +211,7 @@ describe("state machine", () => {
     },
   ): Promise<{ workId: Id<"work">; segment: bigint }> {
     // Default to the current segment so pendingStart entries are eligible
-    // to start in the same iteration; main reads pendingStart with
+    // to start in the same iteration; loop reads pendingStart with
     // segment <= getCurrentSegment().
     const seg = opts?.segment ?? getCurrentSegment();
     const workId = await t.run<Id<"work">>(async (ctx) => {
@@ -256,7 +246,7 @@ describe("state machine", () => {
         ? getCurrentSegment() - RECOVERY_PERIOD_SEGMENTS - 1n
         : getCurrentSegment();
       await ctx.db.insert("internalState", {
-        generation,
+        generation: 0n,
         segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
         lastRecovery,
         report: {
@@ -265,14 +255,10 @@ describe("state machine", () => {
           failed: 0,
           retries: 0,
           canceled: 0,
-          conflicted: 0,
           lastReportTs: Date.now(),
         },
         running: runningEntry,
       });
-
-      // runStatus
-      await ctx.db.insert("runStatus", { state: { kind: "running" } });
 
       // pendingStart
       if (state.pendingStart) {
@@ -347,12 +333,15 @@ describe("state machine", () => {
     });
   }
 
-  /** Run main loop at given segment. */
-  async function runMain(segment: bigint) {
-    await t.mutation(internal.loop.main, {
-      generation: nextGen(),
-      segment,
+  /** Drive one loop iteration the way batch-worker does. */
+  async function runLoop(segment: bigint) {
+    vi.setSystemTime(fromSegment(segment));
+    const result = await t.query(internal.loop.getBatch, {
+      name: WORKER_NAME,
     });
+    if (result.kind === "work") {
+      await t.mutation(internal.loop.run, result.batch);
+    }
   }
 
   /** Run complete with given result. */
@@ -375,7 +364,6 @@ describe("state machine", () => {
   beforeEach(async () => {
     vi.useFakeTimers();
     t = setupTest();
-    generation = 1n;
     await t.run(async (ctx) => {
       await ctx.db.insert("globals", {
         logLevel: "ERROR",
@@ -389,13 +377,13 @@ describe("state machine", () => {
   });
 
   // =========================================================================
-  // main loop transitions
+  // loop transitions
   // =========================================================================
 
-  describe("main loop transitions", () => {
+  describe("loop transitions", () => {
     it("S1 enqueued -> S2 running: starts work", async () => {
       const { workId, segment } = await setupState(S1_ENQUEUED);
-      await runMain(segment);
+      await runLoop(segment);
       const s = await observeState(workId);
       expect(s.work).toBeTruthy();
       expect(s.pendingStart).toBe(false);
@@ -406,7 +394,7 @@ describe("state machine", () => {
 
     it("S10 re-enqueued -> S2 running: starts retry work", async () => {
       const { workId, segment } = await setupState(S10_REENQUEUED);
-      await runMain(segment);
+      await runLoop(segment);
       const s = await observeState(workId);
       expect(s.work).toBeTruthy();
       expect(s.pendingStart).toBe(false);
@@ -415,7 +403,7 @@ describe("state machine", () => {
 
     it("S3 completing (success, no retry) -> finished: removes from running", async () => {
       const { workId, segment } = await setupState(S3_COMPLETING_NO_RETRY);
-      await runMain(segment);
+      await runLoop(segment);
       const s = await observeState(workId);
       expect(s.work).toBe(false);
       expect(s.pendingStart).toBe(false);
@@ -426,7 +414,7 @@ describe("state machine", () => {
 
     it("S3 completing (failed, no retry) -> finished: removes from running", async () => {
       const { workId, segment } = await setupState(S3_COMPLETING_FAILED_FINAL);
-      await runMain(segment);
+      await runLoop(segment);
       const s = await observeState(workId);
       expect(s.work).toBe(false);
       expect(s.running).toBe(false);
@@ -435,19 +423,19 @@ describe("state machine", () => {
 
     it("S5 completing (will retry) -> retried: reschedules and may restart immediately", async () => {
       const { workId, segment } = await setupState(S5_COMPLETING_WILL_RETRY);
-      await runMain(segment);
+      await runLoop(segment);
       const s = await observeState(workId);
       expect(s.work).toBeTruthy();
       expect(s.pendingCompletion).toBe(false);
       // With small backoff (100ms), the retry pendingStart may be picked up
-      // immediately by handleStart in the same main pass. Either way, the
+      // immediately by handleStart in the same loop pass. Either way, the
       // job should be progressing: either in pendingStart or running.
       expect(s.pendingStart || s.running).toBe(true);
     });
 
     it("S7 cancel-pending -> canceled: deletes pendingStart, marks canceled", async () => {
       const { workId, segment } = await setupState(S7_CANCEL_PENDING);
-      await runMain(segment);
+      await runLoop(segment);
       const s = await observeState(workId);
       expect(s.pendingStart).toBe(false);
       expect(s.pendingCancelation).toBe(false);
@@ -459,7 +447,7 @@ describe("state machine", () => {
 
     it("S8 cancel-running -> S12 canceled, still running", async () => {
       const { workId, segment } = await setupState(S8_CANCEL_RUNNING);
-      await runMain(segment);
+      await runLoop(segment);
       const s = await observeState(workId);
       expect(s.pendingCancelation).toBe(false);
       expect(s.running).toBe(true);
@@ -469,7 +457,7 @@ describe("state machine", () => {
 
     it("S9 canceled+retrying -> does not retry, cancels instead", async () => {
       const { workId, segment } = await setupState(S9_CANCELED_RETRYING);
-      await runMain(segment);
+      await runLoop(segment);
       const s = await observeState(workId);
       expect(s.running).toBe(false);
       expect(s.pendingCompletion).toBe(false);
@@ -479,7 +467,7 @@ describe("state machine", () => {
 
     it("S2 running (no pending events) -> S2 no change", async () => {
       const { workId, segment } = await setupState(S2_RUNNING);
-      await runMain(segment);
+      await runLoop(segment);
       const s = await observeState(workId);
       expect(s.running).toBe(true);
       assert(s.work);
@@ -490,7 +478,7 @@ describe("state machine", () => {
       const { workId, segment } = await setupState(
         S12_CANCELED_AWAITING_COMPLETE,
       );
-      await runMain(segment);
+      await runLoop(segment);
       const s = await observeState(workId);
       expect(s.running).toBe(true);
       assert(s.work);
@@ -682,7 +670,7 @@ describe("state machine", () => {
         { oldForRecovery: true },
       );
       const recoverySeg = getCurrentSegment() + RECOVERY_PERIOD_SEGMENTS + 1n;
-      await runMain(recoverySeg);
+      await runLoop(recoverySeg);
       const s = await observeState(workId);
       expect(s.running).toBe(false);
     });
@@ -702,7 +690,7 @@ describe("state machine", () => {
         { oldForRecovery: true },
       );
       const recoverySeg = getCurrentSegment() + RECOVERY_PERIOD_SEGMENTS + 1n;
-      await runMain(recoverySeg);
+      await runLoop(recoverySeg);
       const s = await observeState(workId);
       expect(s.pendingCompletion).toBe(false);
       expect(s.running).toBe(false);
@@ -716,7 +704,7 @@ describe("state machine", () => {
       });
       const recoverySeg = getCurrentSegment() + RECOVERY_PERIOD_SEGMENTS + 1n;
       // Should not throw
-      await runMain(recoverySeg);
+      await runLoop(recoverySeg);
       const s = await observeState(workId);
       // Job should still be tracked (recovery saw function as completed/running)
       expect(s.running).toBe(true);
@@ -727,7 +715,7 @@ describe("state machine", () => {
         oldForRecovery: true,
       });
       const recoverySeg = getCurrentSegment() + RECOVERY_PERIOD_SEGMENTS + 1n;
-      await runMain(recoverySeg);
+      await runLoop(recoverySeg);
       const s = await observeState(workId);
       // Should still be in a valid state
       assert(s.work);
@@ -740,7 +728,7 @@ describe("state machine", () => {
   // =========================================================================
 
   describe("invalid states", () => {
-    it("work absent + pendingStart -> main handles gracefully (no throw)", async () => {
+    it("work absent + pendingStart -> loop handles gracefully (no throw)", async () => {
       const { workId, segment } = await setupState({
         work: false,
         pendingStart: true,
@@ -749,7 +737,7 @@ describe("state machine", () => {
         pendingCancelation: false,
       });
       // After fix-missing-items, beginWork returns null instead of throwing
-      await runMain(segment);
+      await runLoop(segment);
       const s = await observeState(workId);
       // pendingStart should be consumed
       expect(s.pendingStart).toBe(false);
@@ -767,12 +755,12 @@ describe("state machine", () => {
         pendingCompletion: false,
         pendingCancelation: false,
       });
-      await runMain(segment);
+      await runLoop(segment);
       const s = await observeState(workId);
       expect(s.running).toBe(true);
       // BUG: handleStart skips the start but does NOT delete the pendingStart
       // entry (returns null before the delete call). This means the orphaned
-      // pendingStart will be picked up again on the next main loop iteration.
+      // pendingStart will be picked up again on the next loop iteration.
       expect(s.pendingStart).toBe(true);
     });
 
@@ -804,10 +792,10 @@ describe("state machine", () => {
   // =========================================================================
 
   describe("multi-step / interleaved transitions", () => {
-    it("completion + new enqueue -> main processes both in one pass", async () => {
+    it("completion + new enqueue -> loop processes both in one pass", async () => {
       const seg = getCurrentSegment();
       const { workId: w1 } = await setupState(S1_ENQUEUED, { segment: seg });
-      await runMain(seg);
+      await runLoop(seg);
       // w1 is now running
       await runComplete(w1, { kind: "success" }, 0);
 
@@ -824,8 +812,8 @@ describe("state machine", () => {
         return id;
       });
 
-      // Run main again - should process completion of w1 AND start w2
-      await runMain(seg);
+      // Run loop again - should process completion of w1 AND start w2
+      await runLoop(seg);
       const s1 = await observeState(w1);
       const s2 = await observeState(w2);
 
@@ -834,7 +822,7 @@ describe("state machine", () => {
       expect(s2.running).toBe(true);
     });
 
-    it("two jobs complete(retry) before main -> main retries both", async () => {
+    it("two jobs complete(retry) before loop -> loop retries both", async () => {
       const seg = getCurrentSegment();
       const ids = await t.run(async (ctx) => {
         const w1 = await ctx.db.insert("work", {
@@ -876,7 +864,7 @@ describe("state machine", () => {
           },
         );
         await ctx.db.insert("internalState", {
-          generation,
+          generation: 0n,
           segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
           lastRecovery: getCurrentSegment(),
           report: {
@@ -885,7 +873,6 @@ describe("state machine", () => {
             failed: 0,
             retries: 0,
             canceled: 0,
-            conflicted: 0,
             lastReportTs: Date.now(),
           },
           running: [
@@ -893,11 +880,10 @@ describe("state machine", () => {
             { workId: w2, scheduledId: s2, started: Date.now() },
           ],
         });
-        await ctx.db.insert("runStatus", { state: { kind: "running" } });
         return { w1, w2 };
       });
 
-      // Both complete with failure before main runs
+      // Both complete with failure before loop runs
       await runComplete(ids.w1, { kind: "failed" }, 0);
       await runComplete(ids.w2, { kind: "failed" }, 0);
 
@@ -908,14 +894,14 @@ describe("state machine", () => {
       expect(s1Before.pendingCompletion.retry).toBe(true);
       expect(s2Before.pendingCompletion.retry).toBe(true);
 
-      // First main pass: process pendingCompletions, queue retry
+      // First loop pass: process pendingCompletions, queue retry
       // pendingStart entries (segment = now + jittered backoff, so they
       // can land in the next segment and be ineligible this iteration).
-      await runMain(seg);
+      await runLoop(seg);
       // Advance past the retry backoff window so the retry pendingStart
       // segments are <= getCurrentSegment().
       vi.setSystemTime(Date.now() + SECOND);
-      await runMain(getCurrentSegment());
+      await runLoop(getCurrentSegment());
 
       const s1After = await observeState(ids.w1);
       const s2After = await observeState(ids.w2);
@@ -936,7 +922,7 @@ describe("state machine", () => {
     it("cancel arrives while retry completion is pending -> cancel wins", async () => {
       const { workId, segment } = await setupState(S5_COMPLETING_WILL_RETRY);
 
-      // Cancel arrives before main processes the completion
+      // Cancel arrives before loop processes the completion
       await t.run(async (ctx) => {
         await ctx.db.insert("pendingCancelation", {
           workId,
@@ -944,7 +930,7 @@ describe("state machine", () => {
         });
       });
 
-      await runMain(segment);
+      await runLoop(segment);
       const s = await observeState(workId);
       expect(s.pendingStart).toBe(false);
       expect(s.running).toBe(false);
@@ -972,7 +958,7 @@ describe("state machine", () => {
         });
 
         await ctx.db.insert("internalState", {
-          generation,
+          generation: 0n,
           segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
           lastRecovery: getCurrentSegment(),
           report: {
@@ -981,19 +967,17 @@ describe("state machine", () => {
             failed: 0,
             retries: 0,
             canceled: 0,
-            conflicted: 0,
             lastReportTs: Date.now(),
           },
           running: [],
         });
-        await ctx.db.insert("runStatus", { state: { kind: "running" } });
         return wId;
       });
 
       // BUG: handleCancelation processes duplicate pendingCancelation entries
       // in parallel. Both find the same pendingStart and try to delete it,
       // causing a "Delete on non-existent doc" crash.
-      await expect(runMain(seg)).rejects.toThrow();
+      await expect(runLoop(seg)).rejects.toThrow();
     });
 
     it("complete(success) + cancel interleaved -> cancel is no-op (work already gone)", async () => {
@@ -1003,13 +987,13 @@ describe("state machine", () => {
       // Cancel after work was already deleted by complete
       await t.mutation(api.lib.cancel, { id: workId });
 
-      await runMain(segment);
+      await runLoop(segment);
       const s = await observeState(workId);
       expect(s.work).toBe(false);
       expect(s.running).toBe(false);
     });
 
-    it("retry with large backoff -> pendingStart not picked up in same main pass", async () => {
+    it("retry with large backoff -> pendingStart not picked up in same loop pass", async () => {
       const seg = getNextSegment();
       const workId = await t.run<Id<"work">>(async (ctx) => {
         const wId = await ctx.db.insert("work", {
@@ -1032,7 +1016,7 @@ describe("state machine", () => {
           },
         );
         await ctx.db.insert("internalState", {
-          generation,
+          generation: 0n,
           segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
           lastRecovery: getCurrentSegment(),
           report: {
@@ -1041,12 +1025,10 @@ describe("state machine", () => {
             failed: 0,
             retries: 0,
             canceled: 0,
-            conflicted: 0,
             lastReportTs: Date.now(),
           },
           running: [{ workId: wId, scheduledId: sId, started: Date.now() }],
         });
-        await ctx.db.insert("runStatus", { state: { kind: "running" } });
         await ctx.db.insert("pendingCompletion", {
           workId: wId,
           segment: seg,
@@ -1056,7 +1038,7 @@ describe("state machine", () => {
         return wId;
       });
 
-      await runMain(seg);
+      await runLoop(seg);
       const s = await observeState(workId);
       expect(s.pendingCompletion).toBe(false);
       expect(s.running).toBe(false);
@@ -1065,24 +1047,24 @@ describe("state machine", () => {
       assert(s.work);
     });
 
-    it("main crash recovery: state recoverable after restart", async () => {
+    it("loop crash recovery: state recoverable after restart", async () => {
       const seg = getCurrentSegment();
       const { workId } = await setupState(S1_ENQUEUED, { segment: seg });
 
-      await runMain(seg);
+      await runLoop(seg);
       expect((await observeState(workId)).running).toBe(true);
 
       await runComplete(workId, { kind: "success" }, 0);
 
-      // New main picks up completion
+      // New loop picks up completion
       const seg2 = getCurrentSegment();
-      await runMain(seg2);
+      await runLoop(seg2);
       const s = await observeState(workId);
       expect(s.work).toBe(false);
       expect(s.running).toBe(false);
     });
 
-    it("all three pending queues populated -> main processes all in order", async () => {
+    it("all three pending queues populated -> loop processes all in order", async () => {
       const seg = getCurrentSegment();
       const ids = await t.run(async (ctx) => {
         // Job 1: in running, has pendingCompletion
@@ -1124,7 +1106,7 @@ describe("state machine", () => {
         });
 
         await ctx.db.insert("internalState", {
-          generation,
+          generation: 0n,
           segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
           lastRecovery: getCurrentSegment(),
           report: {
@@ -1133,12 +1115,10 @@ describe("state machine", () => {
             failed: 0,
             retries: 0,
             canceled: 0,
-            conflicted: 0,
             lastReportTs: Date.now(),
           },
           running: [{ workId: w1, scheduledId: s1, started: Date.now() }],
         });
-        await ctx.db.insert("runStatus", { state: { kind: "running" } });
 
         await ctx.db.insert("pendingCompletion", {
           workId: w1,
@@ -1156,7 +1136,7 @@ describe("state machine", () => {
         return { w1, w2, w3 };
       });
 
-      await runMain(seg);
+      await runLoop(seg);
 
       const s1 = await observeState(ids.w1);
       const s2 = await observeState(ids.w2);
@@ -1203,7 +1183,7 @@ describe("state machine", () => {
           },
         );
         await ctx.db.insert("internalState", {
-          generation,
+          generation: 0n,
           segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
           lastRecovery: getCurrentSegment(),
           report: {
@@ -1212,12 +1192,10 @@ describe("state machine", () => {
             failed: 0,
             retries: 0,
             canceled: 0,
-            conflicted: 0,
             lastReportTs: Date.now(),
           },
           running: [{ workId: wId, scheduledId: sId, started: Date.now() }],
         });
-        await ctx.db.insert("runStatus", { state: { kind: "running" } });
 
         // Pending retry + pending cancel at the same time
         await ctx.db.insert("pendingCompletion", {
@@ -1234,7 +1212,7 @@ describe("state machine", () => {
         return wId;
       });
 
-      await runMain(seg);
+      await runLoop(seg);
       const s = await observeState(workId);
       // Cancel should win: no retry, no pendingStart
       expect(s.pendingStart).toBe(false);

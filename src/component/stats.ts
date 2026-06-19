@@ -9,9 +9,10 @@ import {
   type Config,
   DEFAULT_MAX_PARALLELISM,
   getCurrentSegment,
+  WORKER_NAME,
 } from "./shared.js";
 import { createLogger, type Logger, logLevel, shouldLog } from "./logging.js";
-import { internal } from "./_generated/api.js";
+import { components, internal } from "./_generated/api.js";
 import schema from "./schema.js";
 import { paginator } from "convex-helpers/server/pagination";
 
@@ -194,15 +195,16 @@ export const diagnostics = internalQuery({
     const pendingCancelation = await (
       ctx.db.query("pendingCancelation") as any
     ).count();
-    const runStatus = await ctx.db.query("runStatus").unique();
+    const runStatus = await ctx.runQuery(components.batchWorker.lib.status, {
+      name: WORKER_NAME,
+    });
     return {
       canceling: pendingCancelation,
       waiting: pendingStart,
       running: inProgressWork - pendingCompletion,
       completing: pendingCompletion,
       spareCapacity: maxParallelism - inProgressWork,
-      runStatus: runStatus?.state.kind,
-      generation: internalState?.generation,
+      runStatus: runStatus?.kind,
     };
   },
 });

@@ -8,15 +8,18 @@ import {
   it,
   vi,
 } from "vitest";
-import { api } from "./_generated/api.js";
+import batchWorker from "@convex-dev/batch-worker/test";
+import { api, components, internal } from "./_generated/api.js";
 import { completeHandler } from "./complete.js";
 import schema from "./schema.js";
+import { WORKER_NAME } from "./shared.js";
 
 const modules = import.meta.glob("./**/*.ts");
 
 describe("complete", () => {
   async function setupTest() {
     const t = convexTest(schema, modules);
+    batchWorker.register(t);
     return t;
   }
 
@@ -38,6 +41,60 @@ describe("complete", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
+
+  async function workerStatus() {
+    return await t.query(components.batchWorker.lib.status, {
+      name: WORKER_NAME,
+    });
+  }
+
+  async function seedSaturatedRunningWork(retryBehavior?: {
+    maxAttempts: number;
+    initialBackoffMs: number;
+    base: number;
+  }) {
+    return await t.run(async (ctx) => {
+      const globals = await ctx.db.query("globals").unique();
+      assert(globals);
+      await ctx.db.patch("globals", globals._id, { maxParallelism: 1 });
+
+      const workId = await ctx.db.insert("work", {
+        fnType: "mutation",
+        fnHandle: "testHandle",
+        fnName: "testFunction",
+        fnArgs: { test: "data" },
+        attempts: 0,
+        ...(retryBehavior ? { retryBehavior } : {}),
+      });
+      const scheduledId = await ctx.scheduler.runAfter(
+        60_000,
+        internal.worker.runMutationWrapper,
+        {
+          workId,
+          fnHandle: "testHandle",
+          fnArgs: { test: "data" },
+          fnType: "mutation",
+          logLevel: "WARN",
+          attempt: 0,
+        },
+      );
+      await ctx.db.insert("internalState", {
+        generation: 0n,
+        segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
+        lastRecovery: 0n,
+        report: {
+          completed: 0,
+          succeeded: 0,
+          failed: 0,
+          retries: 0,
+          canceled: 0,
+          lastReportTs: Date.now(),
+        },
+        running: [{ workId, scheduledId, started: Date.now() }],
+      });
+      return workId;
+    });
+  }
 
   describe("completeHandler", () => {
     it("should process a successful job and delete the work", async () => {
@@ -282,6 +339,64 @@ describe("complete", () => {
           .withIndex("workId", (q) => q.eq("workId", workId))
           .collect();
         expect(pendingCompletions).toHaveLength(0);
+      });
+    });
+
+    it("should ping after inserting a terminal completion even when saturated", async () => {
+      const workId = await seedSaturatedRunningWork();
+      expect(await workerStatus()).toBeNull();
+
+      await t.run(async (ctx) => {
+        await completeHandler(ctx, {
+          jobs: [
+            {
+              workId,
+              runResult: { kind: "success", returnValue: "test result" },
+              attempt: 0,
+            },
+          ],
+        });
+      });
+
+      expect((await workerStatus())?.kind).toBe("running");
+      await t.run(async (ctx) => {
+        const pendingCompletions = await ctx.db
+          .query("pendingCompletion")
+          .withIndex("workId", (q) => q.eq("workId", workId))
+          .collect();
+        expect(pendingCompletions).toHaveLength(1);
+        expect(pendingCompletions[0].retry).toBe(false);
+      });
+    });
+
+    it("should ping after inserting a retry completion even when saturated", async () => {
+      const workId = await seedSaturatedRunningWork({
+        maxAttempts: 3,
+        initialBackoffMs: 100,
+        base: 2,
+      });
+      expect(await workerStatus()).toBeNull();
+
+      await t.run(async (ctx) => {
+        await completeHandler(ctx, {
+          jobs: [
+            {
+              workId,
+              runResult: { kind: "failed", error: "test error" },
+              attempt: 0,
+            },
+          ],
+        });
+      });
+
+      expect((await workerStatus())?.kind).toBe("running");
+      await t.run(async (ctx) => {
+        const pendingCompletions = await ctx.db
+          .query("pendingCompletion")
+          .withIndex("workId", (q) => q.eq("workId", workId))
+          .collect();
+        expect(pendingCompletions).toHaveLength(1);
+        expect(pendingCompletions[0].retry).toBe(true);
       });
     });
 

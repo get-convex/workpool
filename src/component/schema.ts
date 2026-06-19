@@ -14,10 +14,11 @@ const segment = v.int64();
 export default defineSchema({
   // Written from kickLoop, read everywhere.
   globals: defineTable(vConfig),
-  // Singleton, only read & written by `main`.
+  // Singleton, only read & written by `run`.
   internalState: defineTable({
-    // Ensure that only one main is running at a time.
-    generation: v.int64(),
+    // @deprecated batch-worker now owns the generation guard. We keep writing
+    // `0n` for rollback compatibility with older workpool versions.
+    generation: v.optional(v.int64()),
     // Track where we've scanned to, so we skip tombstones on re-scan.
     segmentCursors: v.object({
       incoming: segment,
@@ -40,22 +41,6 @@ export default defineSchema({
         scheduledId: v.id("_scheduled_functions"),
         started: v.number(),
       }),
-    ),
-  }),
-
-  // Singleton, written by `main` when scheduling, by client or worker otherwise.
-  // Safe to read from kickLoop, since it should update infrequently.
-  runStatus: defineTable({
-    state: v.union(
-      v.object({ kind: v.literal("running") }),
-      v.object({
-        kind: v.literal("scheduled"),
-        segment,
-        scheduledId: v.id("_scheduled_functions"),
-        saturated: v.boolean(),
-        generation: v.int64(),
-      }),
-      v.object({ kind: v.literal("idle"), generation: v.int64() }),
     ),
   }),
 

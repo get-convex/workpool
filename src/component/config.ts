@@ -9,9 +9,9 @@ export const MAX_PARALLELISM_SOFT_LIMIT = 100;
 export const update = mutation({
   args: vConfig.partial(),
   handler: async (ctx, args) => {
-    const { globals, previousValue } = await _getOrUpdateGlobals(ctx, args);
+    const { previousValue } = await _getOrUpdateGlobals(ctx, args);
     if (args.maxParallelism && args.maxParallelism > previousValue) {
-      await kickMainLoop(ctx, "kick", globals);
+      await kickMainLoop(ctx, "kick");
     }
   },
 });
