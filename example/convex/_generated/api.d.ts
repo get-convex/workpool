@@ -10,7 +10,11 @@
 
 import type * as crons from "../crons.js";
 import type * as example from "../example.js";
+import type * as http from "../http.js";
+import type * as staticHosting from "../staticHosting.js";
+import type * as test_dashboard from "../test/dashboard.js";
 import type * as test_nonRetryable from "../test/nonRetryable.js";
+import type * as test_pool from "../test/pool.js";
 import type * as test_run from "../test/run.js";
 import type * as test_scenarios_bigArgs from "../test/scenarios/bigArgs.js";
 import type * as test_scenarios_bigContext from "../test/scenarios/bigContext.js";
@@ -30,7 +34,11 @@ import type {
 declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   example: typeof example;
+  http: typeof http;
+  staticHosting: typeof staticHosting;
+  "test/dashboard": typeof test_dashboard;
   "test/nonRetryable": typeof test_nonRetryable;
+  "test/pool": typeof test_pool;
   "test/run": typeof test_run;
   "test/scenarios/bigArgs": typeof test_scenarios_bigArgs;
   "test/scenarios/bigContext": typeof test_scenarios_bigContext;
@@ -74,4 +82,5 @@ export declare const components: {
   serializedPool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"serializedPool">;
   testWorkpool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"testWorkpool">;
   oldWorkpool: import("@convex-dev/workpool-old/_generated/component.js").ComponentApi<"oldWorkpool">;
+  selfHosting: import("@convex-dev/static-hosting/_generated/component.js").ComponentApi<"selfHosting">;
 };

@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0e0e10"/>
+      <stop offset="100%" stop-color="#1a1d24"/>
+    </linearGradient>
+    <linearGradient id="bar1" x1="0" x2="1">
+      <stop offset="0%" stop-color="#4f8cff"/>
+      <stop offset="100%" stop-color="#4f8cff" stop-opacity="0.2"/>
+    </linearGradient>
+    <linearGradient id="bar2" x1="0" x2="1">
+      <stop offset="0%" stop-color="#5cc97a"/>
+      <stop offset="100%" stop-color="#5cc97a" stop-opacity="0.2"/>
+    </linearGradient>
+    <linearGradient id="bar3" x1="0" x2="1">
+      <stop offset="0%" stop-color="#ff8c4f"/>
+      <stop offset="100%" stop-color="#ff8c4f" stop-opacity="0.2"/>
+    </linearGradient>
+    <linearGradient id="bar4" x1="0" x2="1">
+      <stop offset="0%" stop-color="#b8a352"/>
+      <stop offset="100%" stop-color="#b8a352" stop-opacity="0.2"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#bg)"/>
+
+  <g opacity="0.15" stroke="#ffffff" stroke-width="1">
+    <line x1="80" y1="490" x2="1120" y2="490"/>
+    <line x1="80" y1="430" x2="1120" y2="430"/>
+    <line x1="80" y1="370" x2="1120" y2="370"/>
+    <line x1="80" y1="310" x2="1120" y2="310"/>
+    <line x1="80" y1="250" x2="1120" y2="250"/>
+  </g>
+
+  <g>
+    <rect x="80"  y="370" width="120" height="120" fill="url(#bar1)" rx="4"/>
+    <rect x="220" y="310" width="120" height="180" fill="url(#bar2)" rx="4"/>
+    <rect x="360" y="250" width="120" height="240" fill="url(#bar3)" rx="4"/>
+    <rect x="500" y="290" width="120" height="200" fill="url(#bar4)" rx="4"/>
+  </g>
+
+  <text x="80" y="170" fill="#ffffff" font-size="84" font-weight="700" letter-spacing="-2">workpool</text>
+  <text x="80" y="230" fill="#9aa3b2" font-size="32" font-weight="500">async work, queued &amp; paced — for Convex</text>
+
+  <g transform="translate(720, 280)">
+    <g fill="none" stroke-width="6" stroke-linecap="round">
+      <circle cx="60"  cy="60"  r="22" stroke="#4f8cff"/>
+      <circle cx="200" cy="60"  r="22" stroke="#5cc97a"/>
+      <circle cx="60"  cy="200" r="22" stroke="#b8a352"/>
+      <circle cx="200" cy="200" r="22" stroke="#ff8c4f"/>
+      <circle cx="340" cy="60"  r="22" stroke="#4f8cff" opacity="0.5"/>
+      <circle cx="340" cy="200" r="22" stroke="#5cc97a" opacity="0.5"/>
+      <path d="M82 60 H178 M60 82 V178 M200 82 V178 M82 200 H178 M222 60 H318 M222 200 H318" stroke="#3a3f4b"/>
+    </g>
+  </g>
+
+  <text x="80" y="580" fill="#5cc97a" font-size="24" font-weight="600">$ npm install @convex-dev/workpool</text>
+</svg>
