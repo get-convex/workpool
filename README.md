@@ -297,9 +297,9 @@ You can override the retry behavior per-call with the `retry` option.
 #### Setting the log level
 
 The workpool component declares an optional `LOG_LEVEL` environment variable. If
-it's set to a valid log level, it takes precedence over the `logLevel` passed via
-the client or `config.update`. This is handy for turning on verbose logging in
-production without redeploying.
+it's set to a valid log level, it takes precedence over the `logLevel` passed
+via the client or `config.update`. This is handy for turning on verbose logging
+in production without redeploying.
 
 Bind it from your app's `convex.config.ts`:
 
