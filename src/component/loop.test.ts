@@ -227,6 +227,47 @@ describe("loop", () => {
       expect(o.running).toHaveLength(3);
       expect(new Set(o.running.map((r) => r.workId))).toEqual(new Set(ids));
     });
+
+    it("starts action and query work through one batch action wrapper", async () => {
+      await initialize({ maxParallelism: 5 });
+      const actionId = await enqueueWork({ fnType: "action" });
+      const queryId = await enqueueWork({ fnType: "query" });
+      const mutationId = await enqueueWork({ fnType: "mutation" });
+
+      await runLoop();
+
+      const o = await observe();
+      const actionRunning = o.running.find((r) => r.workId === actionId);
+      const queryRunning = o.running.find((r) => r.workId === queryId);
+      const mutationRunning = o.running.find((r) => r.workId === mutationId);
+      assert(actionRunning);
+      assert(queryRunning);
+      assert(mutationRunning);
+      expect(actionRunning.scheduledId).toBe(queryRunning.scheduledId);
+      expect(mutationRunning.scheduledId).not.toBe(actionRunning.scheduledId);
+    });
+
+    it("chunks action and query starts into runWork batches of 32", async () => {
+      await initialize({ maxParallelism: 64 });
+      for (let i = 0; i < 33; i++) {
+        await enqueueWork({ fnType: i % 2 === 0 ? "action" : "query" });
+      }
+
+      await runLoop();
+
+      const o = await observe();
+      expect(o.running).toHaveLength(33);
+      const countsByScheduledId = new Map<string, number>();
+      for (const { scheduledId } of o.running) {
+        countsByScheduledId.set(
+          scheduledId,
+          (countsByScheduledId.get(scheduledId) ?? 0) + 1,
+        );
+      }
+      expect([...countsByScheduledId.values()].sort((a, b) => a - b)).toEqual([
+        1, 32,
+      ]);
+    });
   });
 
   // ────────────────────────────────────────────────────────────────────
