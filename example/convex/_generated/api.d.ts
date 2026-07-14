@@ -23,6 +23,7 @@ import type * as test_scenarios_burstyBatches from "../test/scenarios/burstyBatc
 import type * as test_scenarios_overhead from "../test/scenarios/overhead.js";
 import type * as test_scenarios_sustained from "../test/scenarios/sustained.js";
 import type * as test_scenarios_throughput from "../test/scenarios/throughput.js";
+import type * as test_scenarios_timeout from "../test/scenarios/timeout.js";
 import type * as test_work from "../test/work.js";
 
 import type {
@@ -47,6 +48,7 @@ declare const fullApi: ApiFromModules<{
   "test/scenarios/overhead": typeof test_scenarios_overhead;
   "test/scenarios/sustained": typeof test_scenarios_sustained;
   "test/scenarios/throughput": typeof test_scenarios_throughput;
+  "test/scenarios/timeout": typeof test_scenarios_timeout;
   "test/work": typeof test_work;
 }>;
 
