@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.8
+
+- Reduces "generation mismatch" errors and unnecessary "kick"s from healthchecks
+
 ## 0.4.7
 
 - Reduces database conflict retries (OCC conflicts) from enqueuing or completing
