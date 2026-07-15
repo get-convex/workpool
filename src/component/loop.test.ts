@@ -732,9 +732,12 @@ describe("loop", () => {
     it("rejects main calls with the wrong generation", async () => {
       await initialize();
       // Current generation is 1n. Calling with 99n should error.
-      await expect(
-        t.mutation(internal.loop.main, { generation: 99n }),
-      ).rejects.toThrow(/generation mismatch/);
+      await t.mutation(internal.loop.main, { generation: 99n });
+      const generation = await t.run(async (ctx) => {
+        const state = await ctx.db.query("internalState").first();
+        return state?.generation;
+      });
+      expect(generation).toBe(1n);
     });
 
     it("increments the generation each time main runs", async () => {

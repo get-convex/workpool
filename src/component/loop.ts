@@ -128,11 +128,14 @@ export const main = internalMutation({
   args: { generation: v.int64(), segment: v.optional(v.int64()) },
   handler: async (ctx, { generation }) => {
     // State will be modified and patched at the end of the function.
+    const globals = await getGlobals(ctx);
+    const console = createLogger(globals.logLevel);
     const state = await getOrCreateState(ctx);
     if (generation !== state.generation) {
-      throw new Error(
+      console.error(
         `generation mismatch: ${generation} !== ${state.generation}`,
       );
+      return;
     }
     state.generation++;
     const runStatus = await getOrCreateRunningStatus(ctx);
@@ -142,8 +145,6 @@ export const main = internalMutation({
       });
     }
 
-    const globals = await getGlobals(ctx);
-    const console = createLogger(globals.logLevel);
     const segment = getCurrentSegment();
 
     // Pass maxParallelism + runningCount so the query bounds each batch to
