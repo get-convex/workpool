@@ -88,6 +88,15 @@ export const forceKick = internalMutation({
   args: {},
   handler: async (ctx) => {
     const runStatus = await getOrCreateRunStatus(ctx);
+    if (runStatus.state.kind === "scheduled") {
+      const scheduled = await ctx.db.system.get(
+        "_scheduled_functions",
+        runStatus.state.scheduledId,
+      );
+      if (scheduled && scheduled.state.kind === "pending") {
+        await ctx.scheduler.cancel(runStatus.state.scheduledId);
+      }
+    }
     await ctx.db.delete("runStatus", runStatus._id);
     await kickMainLoop(ctx, "kick");
   },
