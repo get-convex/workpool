@@ -161,10 +161,9 @@ export default internalAction({
     const pollStart = Date.now();
     let metrics: Record<string, unknown> | null = null;
     while (Date.now() - pollStart < pollTimeoutMs) {
-      metrics = (await ctx.runQuery(internal.test.run.metrics)) as Record<
-        string,
-        unknown
-      > | null;
+      metrics = (await ctx.runQuery(internal.test.run.metrics, {
+        runId,
+      })) as Record<string, unknown> | null;
       if (metrics && metrics.status === "completed") break;
       await new Promise((r) => setTimeout(r, 100));
     }
