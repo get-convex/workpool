@@ -8,11 +8,17 @@ import {
   it,
   vi,
 } from "vitest";
-import { api, internal } from "./_generated/api.js";
+import { api, components, internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
-import { DEFAULT_MAX_PARALLELISM, getCurrentSegment } from "./shared.js";
-import { WORKER_NAME } from "./shared.js";
+import { RECOVERY_PERIOD_SEGMENTS } from "./loop.js";
 import { setupTest } from "./setup.test.js";
+import {
+  DEFAULT_MAX_PARALLELISM,
+  fromSegment,
+  getCurrentSegment,
+  toSegment,
+  WORKER_NAME,
+} from "./shared.js";
 
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
@@ -465,6 +471,25 @@ describe("loop", () => {
       assert(result.kind === "idle");
       expect(result.timeoutMs).toBeGreaterThan(0);
     });
+
+    it("idles with a timeoutMs for the next recovery scan when that's sooner than future work", async () => {
+      await initialize();
+      await enqueueWork();
+      await runLoop(); // start it: running=1, lastRecovery=now
+
+      // Future work well past the ~1min recovery period.
+      await enqueueWork({}, getCurrentSegment() + toSegment(5 * MINUTE));
+
+      const result = await t.query(internal.loop.getBatch, {
+        name: WORKER_NAME,
+      });
+      assert(result.kind === "idle");
+      const { lastRecovery } = await observe();
+      const untilNextRecovery =
+        fromSegment(lastRecovery + RECOVERY_PERIOD_SEGMENTS) - Date.now();
+      expect(result.timeoutMs).toBe(untilNextRecovery);
+      expect(result.timeoutMs).toBeLessThan(5 * MINUTE);
+    });
   });
 
   // ────────────────────────────────────────────────────────────────────
@@ -534,25 +559,34 @@ describe("loop", () => {
   // ────────────────────────────────────────────────────────────────────
 
   describe("backwards compatibility", () => {
-    it("internal.loop.main forwarder resumes the loop without error", async () => {
-      await initialize();
-      const workId = await enqueueWork();
+    async function workerStatus() {
+      const status = await t.query(components.batchWorker.lib.status, {
+        name: WORKER_NAME,
+      });
+      return status?.kind ?? null;
+    }
 
-      // A pre-migration scheduled call lands here after deploy. It just pings
-      // batch-worker (no-op in tests) and must not throw.
+    it("internal.loop.main forwarder resumes the batch-worker loop", async () => {
+      await initialize();
+      expect(await workerStatus()).toBeNull(); // loop not running yet
+
+      // A pre-migration scheduled call lands here after deploy. It pings
+      // batch-worker, which registers and starts the loop.
       await t.mutation(internal.loop.main, { generation: 1n, segment: 123n });
 
-      // Work is still pending; pumping the loop processes it as usual.
-      await runLoop();
-      expect((await observe()).running.map((r) => r.workId)).toEqual([workId]);
+      expect(await workerStatus()).toBe("running");
     });
 
-    it("internal.loop.updateRunStatus forwarder does not throw", async () => {
+    it("internal.loop.updateRunStatus forwarder resumes the batch-worker loop", async () => {
       await initialize();
+      expect(await workerStatus()).toBeNull();
+
       await t.mutation(internal.loop.updateRunStatus, {
         generation: 1n,
         segment: 123n,
       });
+
+      expect(await workerStatus()).toBe("running");
     });
   });
 });
