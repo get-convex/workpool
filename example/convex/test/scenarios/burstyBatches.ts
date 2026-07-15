@@ -35,7 +35,7 @@ const parameters = {
  *   npx convex run --push test/scenarios/burstyBatches:default '{}'
  *
  * Poll metrics while running or after:
- *   npx convex run test/run:metrics
+ *   npx convex run test/run:metrics '{"runId":"..."}' # omit runId for latest
  */
 export default internalAction({
   args: parameters,
@@ -132,16 +132,16 @@ export default internalAction({
       `All ${taskCount} tasks enqueued in ${enqueueTotal}ms. Waiting for completion...`,
     );
 
-    // Poll for completion
+    // Poll for completion by runId so concurrent old/new runs don't read each
+    // other's latest-run metrics.
     const pollInterval = 500;
     const timeout = 60_000;
     const pollStart = Date.now();
     let metrics: Record<string, unknown> | null = null;
     while (Date.now() - pollStart < timeout) {
-      metrics = (await ctx.runQuery(internal.test.run.metrics)) as Record<
-        string,
-        unknown
-      > | null;
+      metrics = (await ctx.runQuery(internal.test.run.metrics, {
+        runId,
+      })) as Record<string, unknown> | null;
       if (metrics && metrics.status === "completed") break;
       await new Promise((resolve) => setTimeout(resolve, pollInterval));
     }

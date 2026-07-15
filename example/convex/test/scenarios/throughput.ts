@@ -107,7 +107,7 @@ export default internalAction({
     const pollStart = Date.now();
     let metrics: Record<string, unknown> | null = null;
     while (Date.now() - pollStart < pollTimeoutMs) {
-      metrics = (await ctx.runQuery(internal.test.run.metricsForRun, {
+      metrics = (await ctx.runQuery(internal.test.run.metrics, {
         runId,
       })) as Record<string, unknown> | null;
       if (metrics && metrics.status === "completed") break;
