@@ -19,6 +19,7 @@ import {
   boundScheduledTime,
   type Config,
   DEFAULT_MAX_PARALLELISM,
+  DEFAULT_RETRY_BEHAVIOR,
   fromSegment,
   getCurrentSegment,
   max,
@@ -382,7 +383,7 @@ async function handleCompletions(
           console.warn(`[main] ${c.workId} is gone, but trying to complete`);
           return;
         }
-        const retried = await rescheduleJob(ctx, work, console);
+        const retried = await rescheduleJob(ctx, work, console, c.transient);
         if (retried) {
           state.report.retries++;
           recordCompleted(console, work, "retrying", undefined);
@@ -562,7 +563,13 @@ async function beginWork(
       internal.worker.runActionWrapper,
       args,
     );
-  } else if (work.fnType === "mutation" || work.fnType === "query") {
+  } else if (work.fnType === "query") {
+    scheduleId = await ctx.scheduler.runAfter(
+      0,
+      internal.worker.runQueryFromActionWrapper,
+      args,
+    );
+  } else if (work.fnType === "mutation") {
     scheduleId = await ctx.scheduler.runAfter(
       0,
       internal.worker.runMutationWrapper,
@@ -587,6 +594,7 @@ async function rescheduleJob(
   ctx: MutationCtx,
   work: Doc<"work">,
   console: Logger,
+  transient?: boolean,
 ): Promise<boolean> {
   const pendingCancelation = await ctx.db
     .query("pendingCancelation")
@@ -600,7 +608,7 @@ async function rescheduleJob(
   if (work.canceled) {
     return false;
   }
-  if (!work.retryBehavior) {
+  if (!transient && !work.retryBehavior) {
     console.warn(`[main] ${work._id} has no retryBehavior so not retrying`);
     return false;
   }
@@ -613,9 +621,12 @@ async function rescheduleJob(
     console.error(`[main] ${work._id} already in pendingStart so not retrying`);
     return false;
   }
+  // Recovery is gated by RECOVERY_THRESHOLD_MS (5 min), so transient retries
+  // already pace themselves; use a short fixed backoff if no behavior is set.
+  const retryBehavior = work.retryBehavior ?? DEFAULT_RETRY_BEHAVIOR;
   const backoffMs =
-    work.retryBehavior.initialBackoffMs *
-    Math.pow(work.retryBehavior.base, work.attempts - 1);
+    retryBehavior.initialBackoffMs *
+    Math.pow(retryBehavior.base, Math.max(0, work.attempts - 1));
   const nextAttempt = withJitter(backoffMs);
   const startTime = boundScheduledTime(Date.now() + nextAttempt, console);
   const segment = toSegment(startTime);

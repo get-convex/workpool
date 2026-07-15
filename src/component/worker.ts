@@ -22,6 +22,7 @@ export const runMutationWrapper = internalMutation({
     fnHandle: v.string(),
     payloadId: v.optional(v.id("payload")),
     fnArgs: v.optional(v.record(v.string(), v.any())),
+    // "query" retained for in-flight scheduled jobs from older deploys.
     fnType: v.union(v.literal("query"), v.literal("mutation")),
     logLevel,
     attempt: v.number(),
@@ -62,6 +63,45 @@ export const runMutationWrapper = internalMutation({
         ],
       });
     }
+  },
+});
+
+// Queries run inside an action so transient action failures (host loss,
+// timeout) can be detected by recovery and retried indefinitely. An error
+// thrown from the query itself is caught here and reported as a normal
+// failure, which honors the configured retryBehavior.
+export const runQueryFromActionWrapper = internalAction({
+  args: {
+    workId: v.id("work"),
+    fnHandle: v.string(),
+    fnArgs: v.optional(v.record(v.string(), v.any())),
+    payloadId: v.optional(v.id("payload")),
+    logLevel,
+    attempt: v.number(),
+  },
+  handler: async (ctx, { workId, attempt, ...args }) => {
+    const console = createLogger(args.logLevel);
+
+    let fnArgs = args.fnArgs;
+    if (fnArgs === undefined) {
+      assert(args.payloadId);
+      fnArgs = await ctx.runQuery(internal.worker.getWorkArgs, {
+        payloadId: args.payloadId,
+      });
+    }
+
+    const fnHandle = args.fnHandle as FunctionHandle<"query">;
+    let runResult: RunResult;
+    try {
+      const returnValue = await ctx.runQuery(fnHandle, fnArgs);
+      runResult = { kind: "success", returnValue };
+    } catch (e: unknown) {
+      console.error(e);
+      runResult = { kind: "failed", error: formatError(e) };
+    }
+    await ctx.scheduler.runAfter(0, internal.complete.complete, {
+      jobs: [{ workId, runResult, attempt }],
+    });
   },
 });
 

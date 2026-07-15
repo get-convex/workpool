@@ -559,4 +559,130 @@ describe("complete", () => {
       });
     });
   });
+
+  describe("transient", () => {
+    it("does not increment attempts and forces retry past maxAttempts", async () => {
+      const workId = await t.mutation(api.lib.enqueue, {
+        fnHandle: "testHandle",
+        fnName: "testFunction",
+        fnArgs: { test: "data" },
+        fnType: "query",
+        runAt: Date.now(),
+        config: { maxParallelism: 10, logLevel: "WARN" },
+        retryBehavior: { maxAttempts: 2, initialBackoffMs: 100, base: 2 },
+      });
+
+      // Drive attempts up to and past maxAttempts via transient failures.
+      await t.run(async (ctx) => {
+        const work = await ctx.db.get(workId);
+        assert(work);
+        await ctx.db.patch(work._id, { attempts: 5 });
+      });
+
+      await t.run(async (ctx) => {
+        await completeHandler(ctx, {
+          jobs: [
+            {
+              workId,
+              runResult: { kind: "failed", error: "host crashed" },
+              attempt: 5,
+              transient: true,
+            },
+          ],
+        });
+      });
+
+      await t.run(async (ctx) => {
+        const work = await ctx.db.get(workId);
+        expect(work).not.toBeNull();
+        // attempts NOT incremented for transient.
+        expect(work?.attempts).toBe(5);
+
+        const pcs = await ctx.db
+          .query("pendingCompletion")
+          .withIndex("workId", (q) => q.eq("workId", workId))
+          .collect();
+        expect(pcs).toHaveLength(1);
+        expect(pcs[0].retry).toBe(true);
+        expect(pcs[0].transient).toBe(true);
+      });
+    });
+
+    it("retries transient failures even with no retryBehavior set", async () => {
+      const workId = await t.mutation(api.lib.enqueue, {
+        fnHandle: "testHandle",
+        fnName: "testFunction",
+        fnArgs: { test: "data" },
+        fnType: "query",
+        runAt: Date.now(),
+        config: { maxParallelism: 10, logLevel: "WARN" },
+        // No retryBehavior provided.
+      });
+
+      await t.run(async (ctx) => {
+        await completeHandler(ctx, {
+          jobs: [
+            {
+              workId,
+              runResult: { kind: "failed", error: "scheduler timed out" },
+              attempt: 0,
+              transient: true,
+            },
+          ],
+        });
+      });
+
+      await t.run(async (ctx) => {
+        const work = await ctx.db.get(workId);
+        // Work is preserved for retry.
+        expect(work).not.toBeNull();
+        expect(work?.attempts).toBe(0);
+
+        const pcs = await ctx.db
+          .query("pendingCompletion")
+          .withIndex("workId", (q) => q.eq("workId", workId))
+          .collect();
+        expect(pcs).toHaveLength(1);
+        expect(pcs[0].retry).toBe(true);
+        expect(pcs[0].transient).toBe(true);
+      });
+    });
+
+    it("non-transient failure with no retryBehavior still terminates", async () => {
+      const workId = await t.mutation(api.lib.enqueue, {
+        fnHandle: "testHandle",
+        fnName: "testFunction",
+        fnArgs: { test: "data" },
+        fnType: "query",
+        runAt: Date.now(),
+        config: { maxParallelism: 10, logLevel: "WARN" },
+      });
+
+      await t.run(async (ctx) => {
+        await completeHandler(ctx, {
+          jobs: [
+            {
+              workId,
+              runResult: { kind: "failed", error: "user threw" },
+              attempt: 0,
+            },
+          ],
+        });
+      });
+
+      await t.run(async (ctx) => {
+        const work = await ctx.db.get(workId);
+        // Work deleted: terminal failure, no retries.
+        expect(work).toBeNull();
+
+        const pcs = await ctx.db
+          .query("pendingCompletion")
+          .withIndex("workId", (q) => q.eq("workId", workId))
+          .collect();
+        expect(pcs).toHaveLength(1);
+        expect(pcs[0].retry).toBe(false);
+        expect(pcs[0].transient).toBeFalsy();
+      });
+    });
+  });
 });
