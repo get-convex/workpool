@@ -46,11 +46,6 @@ export const healthcheck = internalMutation({
             getCurrentSegment()
           ) {
             kick = true;
-          } else {
-            const pending = await checkPending();
-            if (pending === "completion") {
-              kick = true;
-            }
           }
           break;
       }
