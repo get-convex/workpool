@@ -199,10 +199,12 @@ export async function completeHandler(
     }),
   );
   if (pendingCompletions.length > 0) {
-    const source = pendingCompletions.some((c) => c.retry)
-      ? "retry"
-      : "complete";
-    await kickMainLoop(ctx, source);
+    await kickMainLoop(
+      ctx,
+      pendingCompletions.some((completion) => completion.retry)
+        ? "retry"
+        : "complete",
+    );
     const segment = getCurrentSegment();
     await Promise.all(
       pendingCompletions.map((completion) =>

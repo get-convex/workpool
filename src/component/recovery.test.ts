@@ -19,6 +19,7 @@ import {
 import { internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import type { MutationCtx } from "./_generated/server.js";
+import batchWorker from "@convex-dev/batch-worker/test";
 import { recoveryHandler } from "./recovery.js";
 import schema from "./schema.js";
 import { modules } from "./setup.test.js";
@@ -26,6 +27,7 @@ import { modules } from "./setup.test.js";
 describe("recovery", () => {
   async function setupTest() {
     const t = convexTest(schema, modules);
+    batchWorker.register(t);
     return t;
   }
 

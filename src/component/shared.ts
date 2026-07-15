@@ -10,6 +10,8 @@ export const fnType = v.union(
 );
 
 export const DEFAULT_MAX_PARALLELISM = 10;
+/** The batch-worker queue name. A single workpool instance uses one queue. */
+export const WORKER_NAME = "main";
 const SEGMENT_MS = 100;
 export const SECOND = 1000;
 export const MINUTE = 60 * SECOND;

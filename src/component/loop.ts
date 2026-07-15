@@ -1,12 +1,14 @@
 import type { WithoutSystemFields } from "convex/server";
-import { v } from "convex/values";
-import { runSnapshotQuery } from "./future.js";
+import { type Infer, v } from "convex/values";
+import { type BatchResult, vBatchResult } from "@convex-dev/batch-worker";
 import { internal } from "./_generated/api.js";
+import { kickMainLoop } from "./kick.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import {
   internalMutation,
   internalQuery,
   type MutationCtx,
+  type QueryCtx,
 } from "./_generated/server.js";
 import type { CompleteJob } from "./complete.js";
 import {
@@ -16,31 +18,32 @@ import {
   type LogLevel,
 } from "./logging.js";
 import {
-  boundScheduledTime,
   type Config,
   DEFAULT_MAX_PARALLELISM,
   fromSegment,
   getCurrentSegment,
-  max,
-  min,
+  MINUTE,
+  SECOND,
   type RunResult,
   toSegment,
+  vResult,
 } from "./shared.js";
 import { generateReport, recordCompleted, recordStarted } from "./stats.js";
 
 const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
 const RECOVERY_BATCH_SIZE = 32;
 // Cap per-iteration completions + starts. Larger batches push per-iteration
-// latency up without buying throughput: the loop re-fires immediately on
-// didWork, so smaller cheaper iterations carry the same work in aggregate.
+// latency up without buying throughput: the loop re-fires immediately while
+// it's draining, so smaller cheaper iterations carry the same work in aggregate.
 const MAIN_BATCH_SIZE = 64;
-const MS = 1;
-const SECOND = 1000 * MS;
-const MINUTE = 60 * SECOND;
 const RECOVERY_THRESHOLD_MS = 5 * MINUTE; // attempt to recover jobs this old.
 export const RECOVERY_PERIOD_SEGMENTS = toSegment(1 * MINUTE); // how often to check.
+// While the queue is idle we keep the loop warm for this long (measured from
+// when it last saw work) so a trickle of new work doesn't thrash the run
+// status, re-polling this often during that window — preserving the old loop's
+// cooldown behavior, now expressed via batch-worker's idle hints.
 export const STATUS_COOLDOWN = 2 * SECOND;
-export const COOLDOWN_CHECK_INTERVAL = 200 * MS;
+export const COOLDOWN_CHECK_INTERVAL = 200;
 // Buffer applied when querying with cursors. Transactions that started
 // before ours may still be running and commit inserts at segments behind
 // a previously advanced cursor — the buffer lets us pick those up. Most
@@ -65,143 +68,195 @@ export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
   running: [],
 };
 
-/**
- * Single query that returns everything the main loop needs to process.
- */
-export const getPending = internalQuery({
-  args: {
-    completionCursor: v.int64(),
-    cancelationCursor: v.int64(),
-    incomingCursor: v.int64(),
-    maxParallelism: v.number(),
-    runningCount: v.number(),
-  },
-  handler: async (
-    ctx,
-    {
-      completionCursor,
-      cancelationCursor,
-      incomingCursor,
-      maxParallelism,
-      runningCount,
-    },
-  ) => {
-    const completions = await ctx.db
-      .query("pendingCompletion")
-      .withIndex("segment", (q) => q.gte("segment", completionCursor))
-      .take(Math.min(maxParallelism, MAIN_BATCH_SIZE));
-    const cancelations = await ctx.db
-      .query("pendingCancelation")
-      .withIndex("segment", (q) => q.gte("segment", cancelationCursor))
-      .take(CANCELLATION_BATCH_SIZE);
-    // Available slots after we process this batch's completions, plus 1
-    // for the +1 trick (detect overflow vs. a future-scheduled retry).
-    // Cap at MAIN_BATCH_SIZE so a single iteration's per-item writes
-    // (delete pendingStart + scheduler.runAfter) don't grow unbounded.
-    const startLimit = Math.min(
-      MAIN_BATCH_SIZE,
-      Math.max(0, maxParallelism - runningCount + completions.length),
-    );
-    const excludedIds = [
-      ...completions.map((c) => c.workId),
-      ...cancelations.map((c) => c.workId),
-    ];
-    const allStarts =
-      startLimit === 0
-        ? []
-        : await ctx.db
-            .query("pendingStart")
-            .withIndex("segment", (q) => q.gte("segment", incomingCursor))
-            // eslint-disable-next-line @convex-dev/no-filter-in-query
-            .filter((q) =>
-              q.and(...excludedIds.map((id) => q.neq(q.field("workId"), id))),
-            )
-            .take(startLimit + 1);
-    return { completions, cancelations, allStarts };
-  },
+// ── The work query / worker mutation contract with batch-worker ────────────
+// `getBatch` (the work query) decides whether there's work to do and, if so,
+// hands a `batch` to `run` (the worker mutation). batch-worker drives the
+// loop: it runs `getBatch`, runs `run` with the batch, re-runs to drain, and
+// sleeps/idles per the hints `getBatch` returns. batch-worker also owns the
+// generation guard (one loop chain at a time) and the liveness monitor that
+// restarts the loop if it dies — so this module no longer schedules or
+// recovers itself.
+
+const vCompletion = v.object({
+  _id: v.id("pendingCompletion"),
+  workId: v.id("work"),
+  runResult: vResult,
+  retry: v.boolean(),
+  segment: v.int64(),
 });
+type Completion = Infer<typeof vCompletion>;
 
-// There should only ever be at most one of these scheduled or running.
-export const main = internalMutation({
-  // `segment` is kept for backwards compatibility with in-flight scheduled
-  // calls from before the upgrade — it's no longer used internally.
-  args: { generation: v.int64(), segment: v.optional(v.int64()) },
-  handler: async (ctx, { generation }) => {
-    // State will be modified and patched at the end of the function.
+const vCancelation = v.object({
+  _id: v.id("pendingCancelation"),
+  workId: v.id("work"),
+  segment: v.int64(),
+});
+type Cancelation = Infer<typeof vCancelation>;
+
+const vStart = v.object({
+  _id: v.id("pendingStart"),
+  workId: v.id("work"),
+  segment: v.int64(),
+});
+type Start = Infer<typeof vStart>;
+
+/** The shape `getBatch` hands to `run`. */
+const batchFields = {
+  // The segment at query time — what "now" was when the batch was built.
+  segment: v.int64(),
+  // Whether this iteration should run the periodic work-recovery scan.
+  recovery: v.boolean(),
+  completions: v.array(vCompletion),
+  cancelations: v.array(vCancelation),
+  starts: v.array(vStart),
+};
+type Batch = Infer<ReturnType<typeof v.object<typeof batchFields>>>;
+
+/**
+ * The work query (batch-worker contract). Decides whether there's work to do,
+ * and hands `run` a batch when there is. When there's nothing to do, returns
+ * `idle` with hints for when to look again (next future start / next recovery
+ * scan), plus a short cooldown so a trickle of work doesn't thrash the loop.
+ *
+ * batch-worker runs this as a snapshot read while draining and re-reads it with
+ * a real dependency before going idle, so we just read the tables directly.
+ */
+export const getBatch = internalQuery({
+  args: { name: v.string() },
+  returns: vBatchResult(v.object(batchFields)),
+  handler: async (ctx): Promise<BatchResult<Batch>> => {
     const globals = await getGlobals(ctx);
-    const console = createLogger(globals.logLevel);
-    const state = await getOrCreateState(ctx);
-    if (generation !== state.generation) {
-      console.error(
-        `generation mismatch: ${generation} !== ${state.generation}`,
-      );
-      return;
-    }
-    state.generation++;
-    const runStatus = await getOrCreateRunningStatus(ctx);
-    if (runStatus.state.kind !== "running") {
-      await ctx.db.patch("runStatus", runStatus._id, {
-        state: { kind: "running" },
-      });
-    }
-
+    const state = await ctx.db.query("internalState").unique();
+    const running = state?.running ?? INITIAL_STATE.running;
+    const cursors = state?.segmentCursors ?? INITIAL_STATE.segmentCursors;
+    const lastRecovery = state?.lastRecovery ?? INITIAL_STATE.lastRecovery;
     const segment = getCurrentSegment();
 
-    // Pass maxParallelism + runningCount so the query bounds each batch to
-    // what we can actually consume this iteration. Apply CURSOR_BUFFER_SEGMENTS
-    // so we still pick up out-of-order inserts that landed behind the cursor
-    // since our last scan. Once per recovery period (≈1min), scan from
-    // segment 0 to catch any very-late commit that fell behind the buffer
-    // — the pending tables only contain unprocessed work, so this stays
-    // bounded by the size of any backlog.
+    // Once per recovery period (≈1min), scan from segment 0 to catch any
+    // very-late commit that fell behind the cursor buffer, and to recover any
+    // stuck running jobs. Otherwise scan from the cursors (minus a buffer for
+    // out-of-order inserts that landed behind the cursor since the last scan).
     const isRecoveryIter =
-      state.running.length > 0 &&
-      segment - state.lastRecovery >= RECOVERY_PERIOD_SEGMENTS;
+      running.length > 0 && segment - lastRecovery >= RECOVERY_PERIOD_SEGMENTS;
     const queryArgs = isRecoveryIter
       ? {
           completionCursor: 0n,
           cancelationCursor: 0n,
           incomingCursor: 0n,
           maxParallelism: globals.maxParallelism,
-          runningCount: state.running.length,
+          runningCount: running.length,
         }
       : {
-          completionCursor:
-            state.segmentCursors.completion - CURSOR_BUFFER_SEGMENTS,
-          cancelationCursor:
-            state.segmentCursors.cancelation - CURSOR_BUFFER_SEGMENTS,
-          incomingCursor:
-            state.segmentCursors.incoming - CURSOR_BUFFER_SEGMENTS,
+          completionCursor: cursors.completion - CURSOR_BUFFER_SEGMENTS,
+          cancelationCursor: cursors.cancelation - CURSOR_BUFFER_SEGMENTS,
+          incomingCursor: cursors.incoming - CURSOR_BUFFER_SEGMENTS,
           maxParallelism: globals.maxParallelism,
-          runningCount: state.running.length,
+          runningCount: running.length,
         };
 
-    // Snapshot read — no read dependency, no OCC conflicts.
-    const snapLabel = `[main] getPending${isRecoveryIter ? "(recovery)" : ""}(${state.running.length}/${globals.maxParallelism})`;
-    console.time(snapLabel);
-    const { allStarts, cancelations, completions } = await runSnapshotQuery(
-      internal.loop.getPending,
+    const { allStarts, cancelations, completions } = await queryPending(
+      ctx,
       queryArgs,
     );
-    const toStart = allStarts.filter((s) => s.segment <= segment);
-    console.timeEnd(snapLabel);
+    const starts = allStarts.filter((s) => s.segment <= segment);
 
-    const compLabel = `[main] pendingCompletion(${completions.length})`;
+    const hasWork =
+      completions.length > 0 ||
+      cancelations.length > 0 ||
+      starts.length > 0 ||
+      isRecoveryIter;
+
+    if (hasWork) {
+      const batch: Batch = {
+        segment,
+        recovery: isRecoveryIter,
+        completions: completions.map((c) => ({
+          _id: c._id,
+          workId: c.workId,
+          runResult: c.runResult,
+          retry: c.retry,
+          segment: c.segment,
+        })),
+        cancelations: cancelations.map((c) => ({
+          _id: c._id,
+          workId: c.workId,
+          segment: c.segment,
+        })),
+        starts: starts.map((s) => ({
+          _id: s._id,
+          workId: s.workId,
+          segment: s.segment,
+        })),
+      };
+      return { kind: "work" as const, batch };
+    }
+
+    // Nothing to do now. Figure out when to wake up next: the sooner of the
+    // earliest future-scheduled start and (if jobs are running) the next
+    // recovery scan. A ping still wakes us sooner.
+    const futureStart = allStarts.find((s) => s.segment > segment);
+    const waits: number[] = [];
+    if (futureStart) {
+      waits.push(fromSegment(futureStart.segment) - Date.now());
+    }
+    if (running.length > 0) {
+      const nextRecovery = lastRecovery + RECOVERY_PERIOD_SEGMENTS;
+      waits.push(fromSegment(nextRecovery) - Date.now());
+    }
+    const timeoutMs =
+      waits.length > 0 ? Math.max(0, Math.min(...waits)) : undefined;
+    // Go (interruptibly) idle after the short cooldown. batch-worker confirms
+    // with a real read before going idle, and every enqueue/complete/cancel
+    // pings us to wake a waiting loop promptly. `timeoutMs` is a backstop for
+    // future-scheduled work and the periodic recovery scan.
+    return {
+      kind: "idle" as const,
+      cooldownMs: STATUS_COOLDOWN,
+      pollIntervalMs: COOLDOWN_CHECK_INTERVAL,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    };
+  },
+});
+
+/**
+ * The worker mutation (batch-worker contract). Processes one batch from
+ * `getBatch`: applies completions, cancelations, the periodic recovery scan,
+ * and starts new work — then advances the cursors and persists state.
+ * Returning `null` tells batch-worker to re-run immediately to keep draining.
+ */
+export const run = internalMutation({
+  args: batchFields,
+  returns: v.null(),
+  handler: async (ctx, batch) => {
+    const state = await getOrCreateState(ctx);
+    const globals = await getGlobals(ctx);
+    const console = createLogger(globals.logLevel);
+    const segment = getCurrentSegment();
+
+    const compLabel = `[main] pendingCompletion(${batch.completions.length})`;
     console.time(compLabel);
-    const toCancel = await handleCompletions(ctx, state, completions, console);
+    const toCancel = await handleCompletions(
+      ctx,
+      state,
+      batch.completions,
+      console,
+    );
     console.timeEnd(compLabel);
 
-    const cancLabel = `[main] pendingCancelation(${cancelations.length})`;
+    const cancLabel = `[main] pendingCancelation(${batch.cancelations.length})`;
     console.time(cancLabel);
-    await handleCancelation(ctx, state, cancelations, console, toCancel);
+    await handleCancelation(ctx, state, batch.cancelations, console, toCancel);
     console.timeEnd(cancLabel);
 
     if (state.running.length === 0) {
       // If there's nothing active, reset lastRecovery.
       state.lastRecovery = segment;
-    } else if (isRecoveryIter) {
+    } else if (batch.recovery) {
       // Otherwise schedule recovery for any old jobs.
+      const recoveryLabel = `[main] recovery(${state.running.length})`;
+      console.time(recoveryLabel);
       await handleRecovery(ctx, state, console);
+      console.timeEnd(recoveryLabel);
       state.lastRecovery = segment;
     }
 
@@ -209,8 +264,8 @@ export const main = internalMutation({
     // Slice to actual available capacity (completions may have freed slots).
     // Guard against negative numbers in case running.length > maxParallelism.
     const actualCapacity = globals.maxParallelism - state.running.length;
-    const pending: Doc<"pendingStart">[] =
-      actualCapacity > 0 ? toStart.slice(0, actualCapacity) : [];
+    const pending =
+      actualCapacity > 0 ? batch.starts.slice(0, actualCapacity) : [];
     const startLabel = `[main] pendingStart(${pending.length})`;
     console.time(startLabel);
     await handleStart(ctx, state, pending, console, globals);
@@ -224,7 +279,10 @@ export const main = internalMutation({
         // It's been a while, let's start fresh.
         lastReportTs = Date.now();
       }
+      const reportLabel = "[main] report";
+      console.time(reportLabel);
       await generateReport(ctx, console, state, globals);
+      console.timeEnd(reportLabel);
       state.report = {
         completed: 0,
         succeeded: 0,
@@ -235,131 +293,87 @@ export const main = internalMutation({
       };
     }
 
-    // Advance cursors to skip tombstones on next scan. Only do this when
-    // we actually did work — the cursor doubles as the cooldown signal
-    // ("how long since we last processed something").
-    const didWork =
-      completions.length > 0 || cancelations.length > 0 || pending.length > 0;
-    if (didWork) {
-      state.segmentCursors.completion = completions.at(-1)?.segment ?? segment;
-      state.segmentCursors.cancelation =
-        cancelations.at(-1)?.segment ?? segment;
-      if (pending.length > 0) {
-        state.segmentCursors.incoming = pending.at(-1)!.segment;
-      } else if (actualCapacity > 0) {
-        // We have no more pending work, update to now
-        state.segmentCursors.incoming = segment;
-      }
+    // Advance cursors to skip tombstones on next scan, but only for the
+    // queues we actually drained this iteration.
+    if (batch.completions.length > 0) {
+      state.segmentCursors.completion = batch.completions.at(-1)!.segment;
+    }
+    if (batch.cancelations.length > 0) {
+      state.segmentCursors.cancelation = batch.cancelations.at(-1)!.segment;
+    }
+    if (pending.length > 0) {
+      state.segmentCursors.incoming = pending.at(-1)!.segment;
+    } else if (actualCapacity > 0 && batch.starts.length === 0) {
+      // No more pending work to start and we had capacity — advance to now.
+      state.segmentCursors.incoming = segment;
     }
 
     await ctx.db.replace("internalState", state._id, state);
-
-    // ── Schedule next iteration ──
-    if (didWork) {
-      // More work might have arrived while we were processing. Check again.
-      await ctx.scheduler.runAfter(0, internal.loop.main, {
-        generation: state.generation,
-      });
-      return;
-    }
-
-    // Nothing found in snapshot. Re-read with a real dependency so a
-    // concurrent insert forces an OCC retry. Override runningCount so it
-    // reflects post-recovery state — otherwise a stale count can leave
-    // startLimit pinned to 0 and miss now-runnable pendingStart.
-    console.debug("[main] no work — confirming with read dependency");
-    const confirm = await ctx.runQuery(internal.loop.getPending, {
-      ...queryArgs,
-      runningCount: state.running.length,
-    });
-    const confirmStarts = confirm.allStarts;
-    const confirmStartsNow = confirmStarts.filter((s) => s.segment <= segment);
-    const confirmFuture = confirmStarts.find((s) => s.segment > segment);
-    if (
-      confirm.completions.length > 0 ||
-      confirm.cancelations.length > 0 ||
-      confirmStartsNow.length > 0
-    ) {
-      await ctx.scheduler.runAfter(0, internal.loop.main, {
-        generation: state.generation,
-      });
-      return;
-    }
-
-    // Cooldown: if any cursor was active within STATUS_COOLDOWN, stay running.
-    const { incoming, completion, cancelation } = state.segmentCursors;
-    const latestCursor = fromSegment(
-      max(incoming, max(completion, cancelation)),
-    );
-    if (Date.now() - latestCursor < STATUS_COOLDOWN) {
-      const remaining = STATUS_COOLDOWN - (Date.now() - latestCursor);
-      console.debug(
-        `[main] cooldown: ${remaining}ms remaining, checking again in ${COOLDOWN_CHECK_INTERVAL}ms`,
-      );
-      await ctx.scheduler.runAt(
-        Date.now() + COOLDOWN_CHECK_INTERVAL,
-        internal.loop.main,
-        { generation: state.generation },
-      );
-      return;
-    }
-
-    if (state.running.length > 0 || confirmFuture) {
-      // Jobs are running and/or there's future-scheduled work.
-      // Schedule for the future start or next recovery, whichever is sooner.
-      const nextRecoverySegment = state.lastRecovery + RECOVERY_PERIOD_SEGMENTS;
-      const target = confirmFuture
-        ? min(confirmFuture.segment, nextRecoverySegment)
-        : nextRecoverySegment;
-
-      const scheduledId = await ctx.scheduler.runAt(
-        boundScheduledTime(fromSegment(target), console),
-        internal.loop.main,
-        { generation: state.generation },
-      );
-      await ctx.db.patch("runStatus", runStatus._id, {
-        state: {
-          kind: "scheduled",
-          scheduledId,
-          saturated: state.running.length >= globals.maxParallelism,
-          generation: state.generation,
-          segment: target,
-        },
-      });
-      console.debug(
-        `[main] → scheduled(${state.running.length}/${globals.maxParallelism})`,
-      );
-      return;
-    }
-
-    // Nothing to do — go idle.
-    await ctx.db.patch("runStatus", runStatus._id, {
-      state: { kind: "idle", generation: state.generation },
-    });
-    console.debug(`[main] → idle`);
+    // Return null: batch-worker re-runs `getBatch` immediately to drain, and
+    // idles (per getBatch's hints) once there's nothing left.
+    return null;
   },
 });
 
-/**
- * @deprecated Forwarder for in-flight scheduled calls from before the
- * upgrade. The scheduling logic has been merged into `main`.
- */
-export const updateRunStatus = internalMutation({
-  args: { generation: v.int64(), segment: v.int64() },
-  handler: async (ctx, { generation }) => {
-    await ctx.scheduler.runAfter(0, internal.loop.main, { generation });
+/** Read the three pending tables the loop processes. */
+async function queryPending(
+  ctx: QueryCtx,
+  {
+    completionCursor,
+    cancelationCursor,
+    incomingCursor,
+    maxParallelism,
+    runningCount,
+  }: {
+    completionCursor: bigint;
+    cancelationCursor: bigint;
+    incomingCursor: bigint;
+    maxParallelism: number;
+    runningCount: number;
   },
-});
+) {
+  const completions = await ctx.db
+    .query("pendingCompletion")
+    .withIndex("segment", (q) => q.gte("segment", completionCursor))
+    .take(Math.min(maxParallelism, MAIN_BATCH_SIZE));
+  const cancelations = await ctx.db
+    .query("pendingCancelation")
+    .withIndex("segment", (q) => q.gte("segment", cancelationCursor))
+    .take(CANCELLATION_BATCH_SIZE);
+  // Available slots after we process this batch's completions, plus 1
+  // for the +1 trick (detect overflow vs. a future-scheduled retry).
+  // Cap at MAIN_BATCH_SIZE so a single iteration's per-item writes
+  // (delete pendingStart + scheduler.runAfter) don't grow unbounded.
+  const startLimit = Math.min(
+    MAIN_BATCH_SIZE,
+    Math.max(0, maxParallelism - runningCount + completions.length),
+  );
+  const excludedIds = [
+    ...completions.map((c) => c.workId),
+    ...cancelations.map((c) => c.workId),
+  ];
+  const allStarts =
+    startLimit === 0
+      ? []
+      : await ctx.db
+          .query("pendingStart")
+          .withIndex("segment", (q) => q.gte("segment", incomingCursor))
+          // eslint-disable-next-line @convex-dev/no-filter-in-query
+          .filter((q) =>
+            q.and(...excludedIds.map((id) => q.neq(q.field("workId"), id))),
+          )
+          .take(startLimit + 1);
+  return { completions, cancelations, allStarts };
+}
 
 /**
  * Handles the completion of pending completions.
  * This only processes work that succeeded or failed, not canceled.
- * Accepts pre-fetched completion docs (from snapshot query).
  */
 async function handleCompletions(
   ctx: MutationCtx,
   state: Doc<"internalState">,
-  completed: Doc<"pendingCompletion">[],
+  completed: Completion[],
   console: Logger,
 ) {
   // Completions that were going to be retried but have since been canceled.
@@ -416,12 +430,12 @@ async function handleCompletions(
 }
 
 /**
- * Handles cancelation. Accepts pre-fetched cancelation docs.
+ * Handles cancelation.
  */
 async function handleCancelation(
   ctx: MutationCtx,
   state: Doc<"internalState">,
-  canceled: Doc<"pendingCancelation">[],
+  canceled: Cancelation[],
   console: Logger,
   toCancel: CompleteJob[],
 ) {
@@ -434,6 +448,9 @@ async function handleCancelation(
     ...(
       await Promise.all(
         canceled.map(async ({ _id, workId }) => {
+          if (!(await ctx.db.get("pendingCancelation", _id))) {
+            return null;
+          }
           await ctx.db.delete("pendingCancelation", _id);
           if (canceledWork.has(workId)) {
             // We shouldn't have multiple pending cancelations for the same work.
@@ -511,12 +528,12 @@ async function handleRecovery(
 }
 
 /**
- * Starts pending work. Accepts pre-fetched pendingStart docs.
+ * Starts pending work.
  */
 async function handleStart(
   ctx: MutationCtx,
   state: Doc<"internalState">,
-  pending: Doc<"pendingStart">[],
+  pending: Start[],
   console: Logger,
   { logLevel }: Config,
 ) {
@@ -528,6 +545,10 @@ async function handleStart(
         pending.map(async ({ _id, workId, segment }) => {
           if (state.running.some((r) => r.workId === workId)) {
             console.error(`[main] ${workId} already running (skipping start)`);
+            return null;
+          }
+          // Guard against a pendingStart a concurrent cancelation removed.
+          if (!(await ctx.db.get("pendingStart", _id))) {
             return null;
           }
           const lagMs = Date.now() - fromSegment(segment);
@@ -617,7 +638,7 @@ async function rescheduleJob(
     work.retryBehavior.initialBackoffMs *
     Math.pow(work.retryBehavior.base, work.attempts - 1);
   const nextAttempt = withJitter(backoffMs);
-  const startTime = boundScheduledTime(Date.now() + nextAttempt, console);
+  const startTime = Date.now() + nextAttempt;
   const segment = toSegment(startTime);
   await ctx.db.insert("pendingStart", {
     workId: work._id,
@@ -630,7 +651,7 @@ export function withJitter(delay: number) {
   return delay * (0.5 + Math.random());
 }
 
-async function getGlobals(ctx: MutationCtx) {
+async function getGlobals(ctx: QueryCtx) {
   const globals = await ctx.db.query("globals").unique();
   if (!globals) {
     return {
@@ -646,23 +667,34 @@ async function getOrCreateState(ctx: MutationCtx) {
   if (state) return state;
   const globals = await getGlobals(ctx);
   const console = createLogger(globals.logLevel);
-  console.error("No internalState in running loop! Re-creating empty one...");
+  console.debug("Creating initial internalState for main loop");
   return (await ctx.db.get(
     "internalState",
     await ctx.db.insert("internalState", INITIAL_STATE),
   ))!;
 }
 
-async function getOrCreateRunningStatus(ctx: MutationCtx) {
-  const runStatus = await ctx.db.query("runStatus").unique();
-  if (runStatus) return runStatus;
-  const globals = await getGlobals(ctx);
-  const console = createLogger(globals.logLevel);
-  console.error("No runStatus in running loop! Re-creating one...");
-  return (await ctx.db.get(
-    "runStatus",
-    await ctx.db.insert("runStatus", { state: { kind: "running" } }),
-  ))!;
-}
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const console = "THIS IS A REMINDER TO USE createLogger";
+
+/**
+ * @deprecated Forwarder for in-flight scheduled `internal.loop.main` calls from
+ * before the batch-worker migration. The real worker mutation is `run`.
+ */
+export const main = internalMutation({
+  args: { generation: v.optional(v.int64()), segment: v.optional(v.int64()) },
+  handler: async (ctx) => {
+    await kickMainLoop(ctx, "kick");
+  },
+});
+
+/**
+ * @deprecated Forwarder for in-flight scheduled `internal.loop.updateRunStatus`
+ * calls from before the batch-worker migration.
+ */
+export const updateRunStatus = internalMutation({
+  args: { generation: v.optional(v.int64()), segment: v.optional(v.int64()) },
+  handler: async (ctx) => {
+    await kickMainLoop(ctx, "kick");
+  },
+});

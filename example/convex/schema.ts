@@ -13,7 +13,7 @@ export default defineSchema({
     parameters: v.any(),
     taskCount: v.optional(v.number()),
     endTime: v.optional(v.number()),
-    pool: v.optional(v.union(v.literal("new"), v.literal("old"))),
+    pool: v.optional(v.string()),
   }),
   tasks: defineTable({
     runId: v.id("runs"),

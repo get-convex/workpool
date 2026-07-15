@@ -4,10 +4,9 @@ Concepts:
 
 - `segment`: A slice of time to process work. All work is bucketed into one.
   This enables us to batch work and avoid database conflicts.
-- `generation`: A monotonically increasing counter to ensure the loop is only
-  running one instance. If two loops start with the same generation, one will
-  successfully increase it, the other will retry and find that the generation
-  has changed and fail out.
+- `generation`: A monotonically increasing counter owned by batch-worker to
+  ensure only one loop chain runs for a worker at a time. The old workpool
+  generation field is deprecated and only accepted for pre-migration docs.
 - "Retention" is used to refer to situations where a query might have to read
   over a lot of "tombstones" - deleted data that hasn't been vacuumed from the
   underlying database yet. If there are frequent deletions, scanning across them
@@ -41,29 +40,22 @@ Notably:
 - The main loop federates changes to/from "running"
 - Canceling only impacts pending and retrying jobs.
 
-## Loop state machine
+## Loop scheduling
 
-```mermaid
-flowchart TD
-    idle -->|enqueue| running
-    running-->|"all started, leftover capacity"| scheduled
-    scheduled -->|"enqueue, cancel, saveResult, recovery"| running
-    running -->|"maxed out"| saturated
-    saturated -->|"cancel, saveResult, recovery"| running
-    running-->|"all done"| idle
-```
+The loop lifecycle is owned by `@convex-dev/batch-worker`. Workpool provides a
+`getBatch` query and a `run` worker mutation; batch-worker owns running/idle
+state, generation checks, cooldown polling, timeout wakeups, and monitor-based
+restart if the loop dies.
 
-- While the loop is running, the runStatus doesn't change, making it safer to
-  read from clients without database conflicts.
-- The "saturated" state is concretely "running" or "scheduled" at max
-  parallelism. There is a boolean set on "scheduled" to avoid clients from
-  kicking the main loop on enqueueing, which is unlikely to be productive, since
-  the next action needs to be something terminating.
+Workpool still avoids unproductive enqueue wakeups while saturated: if
+`internalState.running.length >= maxParallelism`, enqueue skips `ping`. Sources
+that can free capacity or change existing work (`complete`, `retry`, `cancel`,
+manual kicks, and maxParallelism increases) still ping.
 
 ## Retention optimization strategy
 
 - Producers (Client, Worker, Recovery) write to a future "segment".
-- Consumers (main) read the current segment.
+- Consumers (`run`) read the current segment.
   - On conflicts, producers will write to progressively higher segments, while
     the main loop will continue to read the segment originally called with. This
     means conflicts are less likely on each retry.

@@ -10,7 +10,6 @@
 
 import type * as complete from "../complete.js";
 import type * as config from "../config.js";
-import type * as crons from "../crons.js";
 import type * as danger from "../danger.js";
 import type * as errors from "../errors.js";
 import type * as future from "../future.js";
@@ -33,7 +32,6 @@ import { anyApi, componentsGeneric } from "convex/server";
 const fullApi: ApiFromModules<{
   complete: typeof complete;
   config: typeof config;
-  crons: typeof crons;
   danger: typeof danger;
   errors: typeof errors;
   future: typeof future;
@@ -73,4 +71,6 @@ export const internal: FilterApi<
   FunctionReference<any, "internal">
 > = anyApi as any;
 
-export const components = componentsGeneric() as unknown as {};
+export const components = componentsGeneric() as unknown as {
+  batchWorker: import("@convex-dev/batch-worker/_generated/component.js").ComponentApi<"batchWorker">;
+};

@@ -8,6 +8,7 @@ import {
   it,
   vi,
 } from "vitest";
+import batchWorker from "@convex-dev/batch-worker/test";
 import { api } from "./_generated/api.js";
 import type { Id } from "./_generated/dataModel.js";
 import schema from "./schema.js";
@@ -20,6 +21,7 @@ type WorkId = Id<"work">;
 describe("lib", () => {
   async function setupTest() {
     const t = convexTest(schema, modules);
+    batchWorker.register(t);
     return t;
   }
 

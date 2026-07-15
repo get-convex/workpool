@@ -21,18 +21,15 @@ const parameters = {
  * Tests the STATUS_COOLDOWN behavior and its effect on OCC conflicts.
  *
  * Each wave enqueues tasks individually via Promise.all, so every enqueue
- * runs kickMainLoop concurrently. kickMainLoop reads the `runStatus`
- * document and:
- *  - If "running": returns immediately (read-only, no conflict).
- *  - If "scheduled" or "idle": writes to `runStatus` to transition to
- *    "running" — concurrent writes cause OCC retries.
+ * runs kickMainLoop concurrently. batch-worker keeps loop lifecycle state in
+ * its own component tables and uses cooldown polling so bursts can be absorbed
+ * without every enqueue fighting to reschedule the loop.
  *
- * Without the cooldown, the loop transitions to scheduled/idle between
- * waves, so the next wave's concurrent enqueues all race to write
- * runStatus → OCC conflicts and retries.
+ * Without the cooldown, the loop transitions to idle between waves, so the
+ * next wave's concurrent enqueues all race to wake the worker.
  *
- * With the cooldown, runStatus stays "running" between waves, so
- * kickMainLoop short-circuits on a read — no writes, no conflicts.
+ * With the cooldown, batch-worker stays in its running/cooling-down path
+ * between waves, so pings are cheap no-ops while work is picked up promptly.
  *
  * Run:
  *   npx convex run --push test/scenarios/burstyBatches:default '{}'
