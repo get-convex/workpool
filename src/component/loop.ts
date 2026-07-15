@@ -380,11 +380,6 @@ async function handleCompletions(
   const toCancel: CompleteJob[] = [];
   await Promise.all(
     completed.map(async (c) => {
-      // Guard: getBatch and main run in separate transactions, so defend
-      // against a doc that was already processed/removed.
-      if (!(await ctx.db.get("pendingCompletion", c._id))) {
-        return;
-      }
       await ctx.db.delete("pendingCompletion", c._id);
 
       const running = state.running.find((r) => r.workId === c.workId);
