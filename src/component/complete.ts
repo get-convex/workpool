@@ -8,9 +8,8 @@ import { createLogger } from "./logging.js";
 import {
   getCurrentSegment,
   type OnCompleteArgs,
-  type RunResult,
-  vResult,
 } from "./shared.js";
+import { type RunResultInternal, vResultInternal } from "./schema.js";
 import { recordCompleted } from "./stats.js";
 import { assert } from "convex-helpers";
 
@@ -19,7 +18,7 @@ export type CompleteJob = Infer<typeof completeArgs.fields.jobs.element>;
 const completeArgs = v.object({
   jobs: v.array(
     v.object({
-      runResult: vResult,
+      runResult: vResultInternal,
       workId: v.id("work"),
       attempt: v.number(),
       nonRetryable: v.optional(v.boolean()),
@@ -39,7 +38,7 @@ export async function completeHandler(
     return;
   }
   const pendingCompletions: {
-    runResult: RunResult;
+    runResult: RunResultInternal;
     workId: Id<"work">;
     retry: boolean;
   }[] = [];
@@ -119,12 +118,19 @@ export async function completeHandler(
         return;
       }
       const maxAttempts = work.retryBehavior?.maxAttempts;
+      // stuckInScheduler is always retried — the function never ran, so
+      // nonRetryable / maxAttempts gates don't apply. Main loop will
+      // re-enqueue with 0 backoff.
       const retry =
-        job.runResult.kind === "failed" &&
-        !job.nonRetryable &&
-        !!maxAttempts &&
-        work.attempts < maxAttempts;
+        job.runResult.kind === "stuckInScheduler" ||
+        (job.runResult.kind === "failed" &&
+          !job.nonRetryable &&
+          !!maxAttempts &&
+          work.attempts < maxAttempts);
       if (!retry) {
+        // stuckInScheduler is always a retry, so it can't reach here.
+        assert(job.runResult.kind !== "stuckInScheduler");
+        const terminalResult = job.runResult;
         let scheduledId = undefined;
         if (work.onComplete) {
           try {
@@ -145,7 +151,7 @@ export async function completeHandler(
             const onCompleteArgs = {
               workId: work._id,
               context,
-              result: job.runResult,
+              result: terminalResult,
             };
             if (job.runOnCompleteInline) {
               try {
@@ -178,7 +184,7 @@ export async function completeHandler(
             // TODO: store failures in a table for later debugging
           }
         }
-        recordCompleted(console, work, job.runResult.kind, scheduledId);
+        recordCompleted(console, work, terminalResult.kind, scheduledId);
 
         // Clean up any large data that was stored separately.
         // TODO: consider async deletion in the future to avoid bandwidth limits.
@@ -217,7 +223,7 @@ export async function completeHandler(
   }
 }
 
-function stripResult(result: RunResult): RunResult {
+function stripResult(result: RunResultInternal): RunResultInternal {
   if (result.kind === "success") {
     return { kind: "success", returnValue: null };
   }
