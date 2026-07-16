@@ -463,6 +463,115 @@ describe("recovery", () => {
       });
     });
 
+    it("should re-enqueue a mutation pending past the stuck threshold", async () => {
+      const [workId, scheduledId] = await t.run(async (ctx) => {
+        const workId = await makeDummyWork(ctx, { fnType: "mutation" });
+        const scheduledId = await makeDummyScheduledFunction(ctx, workId);
+        return [workId, scheduledId];
+      });
+
+      // Mutation scheduled 11 minutes ago, recovery scheduled 0ms ago: above
+      // the 10-minute stuck threshold + 0 lag.
+      const scheduledTime = Date.now() - 11 * 60 * 1000;
+      await t.run(async (ctx) => {
+        ctx.db.system.get = patchedSystemGet(ctx.db, {
+          [scheduledId]: {
+            _id: scheduledId,
+            _creationTime: scheduledTime,
+            name: "internal/worker.runMutationWrapper",
+            args: [{}],
+            scheduledTime,
+            state: { kind: "pending" },
+          },
+        });
+        await recoveryHandler(ctx, {
+          jobs: [{ scheduledId, workId, attempt: 0, started: scheduledTime }],
+          scheduledAt: Date.now(),
+        });
+      });
+
+      await t.run(async (ctx) => {
+        const pendingCompletions = await ctx.db
+          .query("pendingCompletion")
+          .withIndex("workId", (q) => q.eq("workId", workId))
+          .collect();
+        expect(pendingCompletions).toHaveLength(1);
+        expect(pendingCompletions[0].runResult.kind).toBe("stuckInScheduler");
+        expect(pendingCompletions[0].retry).toBe(true);
+      });
+    });
+
+    it("should not re-enqueue a pending mutation within scheduler lag", async () => {
+      const [workId, scheduledId] = await t.run(async (ctx) => {
+        const workId = await makeDummyWork(ctx, { fnType: "mutation" });
+        const scheduledId = await makeDummyScheduledFunction(ctx, workId);
+        return [workId, scheduledId];
+      });
+
+      // Mutation pending 11min, but recovery itself was scheduled 5min ago
+      // (so scheduler lag = 5min). 11min < 10min + 5min, so not stuck yet.
+      const scheduledTime = Date.now() - 11 * 60 * 1000;
+      const recoveryScheduledAt = Date.now() - 5 * 60 * 1000;
+      await t.run(async (ctx) => {
+        ctx.db.system.get = patchedSystemGet(ctx.db, {
+          [scheduledId]: {
+            _id: scheduledId,
+            _creationTime: scheduledTime,
+            name: "internal/worker.runMutationWrapper",
+            args: [{}],
+            scheduledTime,
+            state: { kind: "pending" },
+          },
+        });
+        await recoveryHandler(ctx, {
+          jobs: [{ scheduledId, workId, attempt: 0, started: scheduledTime }],
+          scheduledAt: recoveryScheduledAt,
+        });
+      });
+
+      await t.run(async (ctx) => {
+        const pendingCompletions = await ctx.db
+          .query("pendingCompletion")
+          .withIndex("workId", (q) => q.eq("workId", workId))
+          .collect();
+        expect(pendingCompletions).toHaveLength(0);
+      });
+    });
+
+    it("should not re-enqueue pending actions", async () => {
+      const [workId, scheduledId] = await t.run(async (ctx) => {
+        const workId = await makeDummyWork(ctx, { fnType: "action" });
+        const scheduledId = await makeDummyScheduledFunction(ctx, workId);
+        return [workId, scheduledId];
+      });
+
+      const scheduledTime = Date.now() - 60 * 60 * 1000; // 1h pending
+      await t.run(async (ctx) => {
+        ctx.db.system.get = patchedSystemGet(ctx.db, {
+          [scheduledId]: {
+            _id: scheduledId,
+            _creationTime: scheduledTime,
+            name: "internal/worker.runActionWrapper",
+            args: [{}],
+            scheduledTime,
+            state: { kind: "pending" },
+          },
+        });
+        await recoveryHandler(ctx, {
+          jobs: [{ scheduledId, workId, attempt: 0, started: scheduledTime }],
+          scheduledAt: Date.now(),
+        });
+      });
+
+      await t.run(async (ctx) => {
+        const pendingCompletions = await ctx.db
+          .query("pendingCompletion")
+          .withIndex("workId", (q) => q.eq("workId", workId))
+          .collect();
+        expect(pendingCompletions).toHaveLength(0);
+      });
+    });
+
     it("should not process jobs with other scheduled states", async () => {
       // Create work and scheduled function
       const [workId, scheduledId] = await t.run(async (ctx) => {
