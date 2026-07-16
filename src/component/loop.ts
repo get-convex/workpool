@@ -26,8 +26,8 @@ import {
   SECOND,
   type RunResult,
   toSegment,
-  vResult,
 } from "./shared.js";
+import { vResultInternal } from "./schema.js";
 import { generateReport, recordCompleted, recordStarted } from "./stats.js";
 
 const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
@@ -81,7 +81,7 @@ export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
 const vCompletion = v.object({
   _id: v.id("pendingCompletion"),
   workId: v.id("work"),
-  runResult: vResult,
+  runResult: vResultInternal,
   retry: v.boolean(),
   segment: v.int64(),
 });
@@ -664,9 +664,6 @@ async function rescheduleJob(
     console.error(`[main] ${work._id} already in pendingStart so not retrying`);
     return false;
   }
-  const backoffMs =
-    work.retryBehavior.initialBackoffMs *
-    Math.pow(work.retryBehavior.base, work.attempts - 1);
   const nextAttempt = wasStuckInScheduler ? 0 : withJitter(backoffMs);
   const startTime = Date.now() + nextAttempt;
   const segment = toSegment(startTime);
