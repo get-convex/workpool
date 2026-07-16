@@ -29,8 +29,8 @@ import {
   snapshotTs,
   toTimestamp,
 } from "./shared.js";
-import { generateReport, recordCompleted, recordStarted } from "./stats.js";
 import { vResultInternal } from "./schema.js";
+import { generateReport, recordCompleted, recordStarted } from "./stats.js";
 import { findPendingStart } from "./pendingStart.js";
 
 const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
@@ -811,9 +811,6 @@ async function rescheduleJob(
     console.error(`[main] ${work._id} already in pendingStart so not retrying`);
     return false;
   }
-  const backoffMs =
-    work.retryBehavior.initialBackoffMs *
-    Math.pow(work.retryBehavior.base, work.attempts - 1);
   const nextAttempt = wasStuckInScheduler ? 0 : withJitter(backoffMs);
   // Keep retries at or above the snapshot so they cannot land behind the cursor.
   // TODO: Remove the snapshot floor once convex-test guarantees snapshotTs <= Date.now().
