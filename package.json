@@ -96,7 +96,7 @@
     "recharts": "^3.8.1",
     "typescript": "5.9.3",
     "typescript-eslint": "8.56.1",
-    "vite": "7.3.5",
+    "vite": "8.1.5",
     "vitest": "4.1.8"
   },
   "types": "./dist/client/index.d.ts",
