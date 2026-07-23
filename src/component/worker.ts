@@ -16,6 +16,7 @@ import {
 import { getNonRetryableErrorMessage, isNonRetryableError } from "./errors.js";
 import { createLogger, type Logger, logLevel } from "./logging.js";
 import type { RunResult } from "./shared.js";
+import type { CompleteJob } from "./complete.js";
 import { assert } from "convex-helpers";
 
 const commonRunArgs = {
@@ -99,14 +100,13 @@ export const runActionWrapper = internalAction({
   handler: async (ctx, { workId, attempt, ...args }) => {
     const console = createLogger(args.logLevel);
 
-    await completeActionOrQueryJobs(ctx, console, [
-      await runActionOrQueryJob(ctx, console, {
-        workId,
-        attempt,
-        ...args,
-        fnType: "action",
-      }),
-    ]);
+    const job = await runActionOrQueryJob(ctx, console, {
+      workId,
+      attempt,
+      ...args,
+      fnType: "action",
+    });
+    await completeJobInline(ctx, console, job);
   },
 });
 
@@ -117,12 +117,43 @@ export const runWork = internalAction({
   },
   handler: async (ctx, { items, logLevel }) => {
     const console = createLogger(logLevel);
-    const completionJobs = await Promise.all(
-      items.map((item) => runActionOrQueryJob(ctx, console, item)),
+    // Complete each job independently, running its onComplete inline. Only the
+    // job that hits an OCC gets scheduled (as a batch of one) — a conflicting
+    // onComplete can no longer drag the rest of the batch into a retry, since
+    // arbitrary user code in one onComplete shouldn't couple the others.
+    await Promise.all(
+      items.map(async (item) => {
+        const job = await runActionOrQueryJob(ctx, console, item);
+        await completeJobInline(ctx, console, job);
+      }),
     );
-    await completeActionOrQueryJobs(ctx, console, completionJobs);
   },
 });
+
+/**
+ * Complete a single action/query job. Runs the completion — including the
+ * onComplete callback — inline in its own transaction (called directly from
+ * this action). If that hits an OCC we durably schedule the completion as a
+ * batch of one; the scheduler retries it (and its inline onComplete) on OCC
+ * until it succeeds. This is safe even for a job whose function already ran:
+ * `complete` marks the work done exactly once, guarded by the work deletion.
+ */
+async function completeJobInline(
+  ctx: ActionCtx,
+  console: Logger,
+  job: CompleteJob,
+) {
+  try {
+    await ctx.runMutation(internal.complete.complete, { jobs: [job] });
+  } catch (e) {
+    console.error(
+      `[runWork] completing ${job.workId} inline failed, scheduling a batch of one instead: ${e}`,
+    );
+    await ctx.scheduler.runAfter(0, internal.complete.complete, {
+      jobs: [job],
+    });
+  }
+}
 
 async function runActionOrQueryJob(
   ctx: ActionCtx,
@@ -147,6 +178,11 @@ async function runActionOrQueryJob(
     });
   }
 
+  // Run the query directly from the action (its own snapshot — no completion
+  // transaction to conflict with, and usage attributes to the query itself),
+  // or the action. A transient failure of this wrapping action re-runs the
+  // whole thing, which is safe for a query (side-effect free) because
+  // `complete` still marks the work done exactly once.
   try {
     const returnValue =
       args.fnType === "action"
@@ -163,34 +199,6 @@ async function runActionOrQueryJob(
       attempt,
       nonRetryable: isNonRetryableError(e),
     };
-  }
-}
-
-async function completeActionOrQueryJobs(
-  ctx: ActionCtx,
-  console: Logger,
-  jobs: Array<{
-    workId: Id<"work">;
-    runResult: RunResult;
-    attempt: number;
-    nonRetryable?: boolean;
-    runOnCompleteInline?: boolean;
-  }>,
-) {
-  try {
-    // Attempt to run complete inline and onComplete inline for successful jobs.
-    await ctx.runMutation(internal.complete.complete, { jobs });
-    console.info("[runWork] onComplete succeeded");
-  } catch (e) {
-    console.error(
-      `[runWork] caught error while attempting to run complete inline, scheduling instead: ${e}`,
-    );
-    // Fall through and schedule complete instead (without running onComplete inline)
-    await ctx.scheduler.runAfter(0, internal.complete.complete, {
-      jobs: jobs.map(
-        ({ runOnCompleteInline: _runOnCompleteInline, ...job }) => job,
-      ),
-    });
   }
 }
 
