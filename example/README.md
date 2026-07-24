@@ -39,8 +39,9 @@ shareable.
 
 ## Deploying it as a static site (optional)
 
-The example is wired to `@convex-dev/static-hosting`, so you can publish the
-dashboard to your dev deployment with:
+The example mounts `@convex-dev/static-hosting` directly at `/`, so no
+`convex/http.ts` catch-all is required. You can publish the dashboard to your
+dev deployment with:
 
 ```sh
 npm run deploy:dashboard         # uploads to dev
@@ -48,5 +49,4 @@ npm run deploy:dashboard:prod    # uploads to prod
 ```
 
 It will be served at `https://<your-deployment>.convex.site/`. See the component
-setup in `convex/convex.config.ts`, `convex/http.ts`, and
-`convex/staticHosting.ts`.
+setup in `convex/convex.config.ts` and `convex/staticHosting.ts`.
