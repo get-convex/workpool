@@ -551,13 +551,12 @@ async function handleStart(
           return null;
         }
         const work = await ctx.db.get("work", workId);
+        await ctx.db.delete("pendingStart", _id);
         if (!work) {
           console.error(`Trying to start, but work not found: ${workId}`);
-          await ctx.db.delete("pendingStart", _id);
           return null;
         }
         return {
-          pendingStartId: _id,
           work,
           lagMs: Date.now() - fromSegment(segment),
         };
@@ -565,21 +564,12 @@ async function handleStart(
     )
   ).flatMap((r) => (r ? [r] : []));
 
-  const running = await beginWorkBatch(ctx, starts, console, logLevel);
-  await Promise.all(
-    running.map(({ pendingStartId }) =>
-      ctx.db.delete("pendingStart", pendingStartId),
-    ),
-  );
-  state.running.push(
-    ...running.map(({ pendingStartId: _, ...runningWork }) => runningWork),
-  );
+  state.running.push(...(await beginWorkBatch(ctx, starts, console, logLevel)));
 }
 
 async function beginWorkBatch(
   ctx: MutationCtx,
   starts: Array<{
-    pendingStartId: Id<"pendingStart">;
     work: Doc<"work">;
     lagMs: number;
   }>,
@@ -587,14 +577,12 @@ async function beginWorkBatch(
   logLevel: LogLevel,
 ): Promise<
   Array<{
-    pendingStartId: Id<"pendingStart">;
     workId: Id<"work">;
     scheduledId: Id<"_scheduled_functions">;
     started: number;
   }>
 > {
   const running: Array<{
-    pendingStartId: Id<"pendingStart">;
     workId: Id<"work">;
     scheduledId: Id<"_scheduled_functions">;
     started: number;
@@ -627,16 +615,16 @@ async function beginWorkBatch(
       },
     );
     const started = Date.now();
-    for (const { pendingStartId, work, lagMs } of actionOrQueryBatch) {
+    for (const { work, lagMs } of actionOrQueryBatch) {
       recordStarted(console, work, lagMs, scheduledId);
-      running.push({ pendingStartId, workId: work._id, scheduledId, started });
+      running.push({ workId: work._id, scheduledId, started });
     }
   }
 
   const mutationStarts = starts.filter(
     ({ work }) => work.fnType === "mutation",
   );
-  for (const { pendingStartId, work, lagMs } of mutationStarts) {
+  for (const { work, lagMs } of mutationStarts) {
     const scheduledId = await ctx.scheduler.runAfter(
       0,
       internal.worker.runMutationWrapper,
@@ -652,7 +640,6 @@ async function beginWorkBatch(
     );
     recordStarted(console, work, lagMs, scheduledId);
     running.push({
-      pendingStartId,
       workId: work._id,
       scheduledId,
       started: Date.now(),
