@@ -1,18 +1,18 @@
 /**
- * Scenario: noisy neighbors inside one runWork batch.
+ * Scenario: noisy neighbors inside one batch.
  *
  * The batched worker starts up to 32 actions/queries in ONE scheduled
- * `runWork` action. This scenario enqueues a mix of task classes (fast, slow,
+ * action. This scenario enqueues a mix of task classes (fast, slow,
  * failing, non-retryable, queries, big returns, OCC-heavy onComplete) with a
  * shared future `runAt`, interleaved round-robin, so they land in the same
- * loop iteration and the same runWork chunk. It then measures per-class
+ * loop iteration and the same chunk. It then measures per-class
  * latency to see whether one class's misbehavior delays the others.
  *
  * Run e.g.:
  *   npx convex run test/scenarios/noisyNeighbor:run '{"preset":"slowNeighbor"}'
  *   npx convex run test/scenarios/noisyNeighbor:run '{"classes":[...], "pool":"old"}'
  *
- * Worker-death blast radius (one item's failure rejecting the shared runWork
+ * Worker-death blast radius (one item's failure rejecting the shared
  * action, batch-mates stuck until recovery) is covered by unit tests in
  * src/component — it needs hooks into component internals to simulate.
  */
@@ -36,37 +36,107 @@ const PRESETS: Record<string, TaskClass[]> = {
   // 32 equal actions: measures intra-batch concurrency (is Promise.all of 32
   // ctx.runAction actually parallel?).
   parallelism: [
-    { label: "sleep5s", count: 32, fnType: "action", behavior: "succeed", durationMs: 5000 },
+    {
+      label: "sleep5s",
+      count: 32,
+      fnType: "action",
+      behavior: "succeed",
+      durationMs: 5000,
+    },
   ],
   // A couple of slow tasks sharing a batch with many fast ones.
   slowNeighbor: [
-    { label: "fast", count: 28, fnType: "action", behavior: "succeed", durationMs: 50 },
-    { label: "slow", count: 4, fnType: "action", behavior: "succeed", durationMs: 20000 },
+    {
+      label: "fast",
+      count: 28,
+      fnType: "action",
+      behavior: "succeed",
+      durationMs: 50,
+    },
+    {
+      label: "slow",
+      count: 4,
+      fnType: "action",
+      behavior: "succeed",
+      durationMs: 20000,
+    },
   ],
   // Retryable failures next to fast successes.
   failRetry: [
-    { label: "fast", count: 24, fnType: "action", behavior: "succeed", durationMs: 50 },
-    { label: "fail", count: 8, fnType: "action", behavior: "fail", durationMs: 50, retries: 3 },
+    {
+      label: "fast",
+      count: 24,
+      fnType: "action",
+      behavior: "succeed",
+      durationMs: 50,
+    },
+    {
+      label: "fail",
+      count: 8,
+      fnType: "action",
+      behavior: "fail",
+      durationMs: 50,
+      retries: 3,
+    },
   ],
   // Non-retryable failures next to fast successes.
   failTerminal: [
-    { label: "fast", count: 24, fnType: "action", behavior: "succeed", durationMs: 50 },
-    { label: "terminal", count: 8, fnType: "action", behavior: "failNonRetryable", durationMs: 50, retries: 3 },
+    {
+      label: "fast",
+      count: 24,
+      fnType: "action",
+      behavior: "succeed",
+      durationMs: 50,
+    },
+    {
+      label: "terminal",
+      count: 8,
+      fnType: "action",
+      behavior: "failNonRetryable",
+      durationMs: 50,
+      retries: 3,
+    },
   ],
   // Queries (including failing ones) sharing a batch with actions.
   queryMix: [
-    { label: "fast", count: 16, fnType: "action", behavior: "succeed", durationMs: 50 },
+    {
+      label: "fast",
+      count: 16,
+      fnType: "action",
+      behavior: "succeed",
+      durationMs: 50,
+    },
     { label: "query", count: 8, fnType: "query", behavior: "succeed" },
     { label: "failQuery", count: 8, fnType: "query", behavior: "fail" },
   ],
   // Large return values next to fast small ones.
   bigReturn: [
-    { label: "fast", count: 24, fnType: "action", behavior: "succeed", durationMs: 50 },
-    { label: "big", count: 8, fnType: "action", behavior: "succeed", durationMs: 50, returnBytes: 900_000 },
+    {
+      label: "fast",
+      count: 24,
+      fnType: "action",
+      behavior: "succeed",
+      durationMs: 50,
+    },
+    {
+      label: "big",
+      count: 8,
+      fnType: "action",
+      behavior: "succeed",
+      durationMs: 50,
+      returnBytes: 900_000,
+    },
   ],
   // Every onComplete in the run contends on one shared counter doc.
   occOnComplete: [
-    { label: "contended", count: 32, fnType: "action", behavior: "succeed", durationMs: 50, contendedOnComplete: true },
+    {
+      label: "contended",
+      count: 32,
+      fnType: "action",
+      behavior: "succeed",
+      durationMs: 50,
+      contendedOnComplete: true,
+    },
   ],
 };
 
@@ -85,7 +155,7 @@ async function enqueueClasses(
   },
 ): Promise<Map<string, WorkId[]>> {
   const { component, enqueueOne } = enqueueFor(pool);
-  // Interleave classes round-robin so every runWork chunk gets a mix.
+  // Interleave classes round-robin so every chunk gets a mix.
   const items: { cls: TaskClass; index: number }[] = [];
   for (let i = 0; i < Math.max(...classes.map((c) => c.count)); i++) {
     for (const cls of classes) {
@@ -130,8 +200,12 @@ async function enqueueClasses(
               runId,
               label: cls.label,
               behavior: cls.behavior,
-              ...(cls.durationMs !== undefined ? { durationMs: cls.durationMs } : {}),
-              ...(cls.returnBytes !== undefined ? { returnBytes: cls.returnBytes } : {}),
+              ...(cls.durationMs !== undefined
+                ? { durationMs: cls.durationMs }
+                : {}),
+              ...(cls.returnBytes !== undefined
+                ? { returnBytes: cls.returnBytes }
+                : {}),
               ...(cls.argBytes ? { filler: generateData(cls.argBytes) } : {}),
               ...(cls.marker ? { marker: true } : {}),
             },
@@ -146,7 +220,9 @@ async function enqueueClasses(
               runId,
               label: cls.label,
               behavior: cls.behavior,
-              ...(cls.returnBytes !== undefined ? { returnBytes: cls.returnBytes } : {}),
+              ...(cls.returnBytes !== undefined
+                ? { returnBytes: cls.returnBytes }
+                : {}),
             },
             onComplete,
           );
@@ -225,7 +301,6 @@ export const run = internalAction({
   },
 });
 
-
 /** Per-label latency + outcome metrics for a run. */
 export const metricsByLabel = internalQuery({
   args: { runId: v.id("runs") },
@@ -236,7 +311,10 @@ export const metricsByLabel = internalQuery({
       .query("tasks")
       .withIndex("runId", (q) => q.eq("runId", runId))
       .collect();
-    const byLabel = new Map<string, { latencies: number[]; kinds: Map<string, number> }>();
+    const byLabel = new Map<
+      string,
+      { latencies: number[]; kinds: Map<string, number> }
+    >();
     for (const t of tasks) {
       const label = t.label ?? "unlabeled";
       let entry = byLabel.get(label);

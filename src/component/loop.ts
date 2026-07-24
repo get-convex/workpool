@@ -32,7 +32,7 @@ import { generateReport, recordCompleted, recordStarted } from "./stats.js";
 
 const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
 const RECOVERY_BATCH_SIZE = 32;
-const ACTION_START_BATCH_SIZE = 32;
+const START_BATCH_SIZE = 32;
 // Cap per-iteration completions + starts. Larger batches push per-iteration
 // latency up without buying throughput: the loop re-fires immediately while
 // it's draining, so smaller cheaper iterations carry the same work in aggregate.
@@ -587,24 +587,17 @@ async function beginWorkBatch(
     scheduledId: Id<"_scheduled_functions">;
     started: number;
   }> = [];
-  const actionOrQueryStarts = starts.filter(
+  const actionOrQuery = starts.filter(
     ({ work }) => work.fnType === "action" || work.fnType === "query",
   );
-  for (
-    let i = 0;
-    i < actionOrQueryStarts.length;
-    i += ACTION_START_BATCH_SIZE
-  ) {
-    const actionOrQueryBatch = actionOrQueryStarts.slice(
-      i,
-      i + ACTION_START_BATCH_SIZE,
-    );
+  for (let i = 0; i < actionOrQuery.length; i += START_BATCH_SIZE) {
+    const batch = actionOrQuery.slice(i, i + START_BATCH_SIZE);
     const scheduledId = await ctx.scheduler.runAfter(
       0,
-      internal.worker.runWork,
+      internal.worker.runBatch,
       {
         logLevel,
-        items: actionOrQueryBatch.map(({ work }) => ({
+        items: batch.map(({ work }) => ({
           workId: work._id,
           fnHandle: work.fnHandle,
           fnArgs: work.fnArgs,
@@ -615,7 +608,7 @@ async function beginWorkBatch(
       },
     );
     const started = Date.now();
-    for (const { work, lagMs } of actionOrQueryBatch) {
+    for (const { work, lagMs } of batch) {
       recordStarted(console, work, lagMs, scheduledId);
       running.push({ workId: work._id, scheduledId, started });
     }

@@ -92,6 +92,7 @@ function formatError(e: unknown) {
   return String(e);
 }
 
+/** Legacy entrypoint, keeping around for graceful upgrade for scheduled functions in flight */
 export const runActionWrapper = internalAction({
   args: {
     ...commonRunArgs,
@@ -100,37 +101,39 @@ export const runActionWrapper = internalAction({
   handler: async (ctx, { workId, attempt, ...args }) => {
     const console = createLogger(args.logLevel);
 
-    const job = await runActionOrQueryJob(ctx, console, {
-      workId,
-      attempt,
+    const status = await runOne(ctx, console, {
       ...args,
       fnType: "action",
     });
-    await completeJobInline(ctx, console, job);
+    await completeInline(ctx, console, {
+      workId,
+      attempt,
+      ...status,
+    });
   },
 });
 
-export const runWork = internalAction({
+export const runBatch = internalAction({
   args: {
     items: v.array(v.object(actionOrQueryRunArgs)),
     logLevel,
   },
   handler: async (ctx, { items, logLevel }) => {
     const console = createLogger(logLevel);
-    // Complete each job independently, running its onComplete inline. Only the
-    // job that hits an OCC gets scheduled (as a batch of one) — a conflicting
-    // onComplete can no longer drag the rest of the batch into a retry, since
-    // arbitrary user code in one onComplete shouldn't couple the others.
     await Promise.all(
       items.map(async (item) => {
         // No single item may reject the batch: a thrown error here would fail
         // the whole action and take the other in-flight items down with it.
         try {
-          const job = await runActionOrQueryJob(ctx, console, item);
-          await completeJobInline(ctx, console, job);
+          const status = await runOne(ctx, console, item);
+          await completeInline(ctx, console, {
+            workId: item.workId,
+            attempt: item.attempt,
+            ...status,
+          });
         } catch (e) {
           console.error(
-            `[runWork] unexpected error for ${item.workId}, scheduling failed completion: ${e}`,
+            `[runBatch] unexpected error for ${item.workId}, scheduling failed completion: ${e}`,
           );
           await ctx.scheduler.runAfter(0, internal.complete.complete, {
             jobs: [
@@ -149,14 +152,14 @@ export const runWork = internalAction({
 });
 
 /**
- * Complete a single action/query job. Runs the completion — including the
+ * Complete a single action/query. Runs the completion — including the
  * onComplete callback — inline in its own transaction (called directly from
  * this action). If that hits an OCC we durably schedule the completion as a
  * batch of one; the scheduler retries it (and its inline onComplete) on OCC
  * until it succeeds. This is safe even for a job whose function already ran:
  * `complete` marks the work done exactly once, guarded by the work deletion.
  */
-async function completeJobInline(
+async function completeInline(
   ctx: ActionCtx,
   console: Logger,
   job: CompleteJob,
@@ -165,7 +168,7 @@ async function completeJobInline(
     await ctx.runMutation(internal.complete.complete, { jobs: [job] });
   } catch (e) {
     console.error(
-      `[runWork] completing ${job.workId} inline failed, scheduling a batch of one instead: ${e}`,
+      `[runBatch] completing ${job.workId} inline failed, scheduling a batch of one instead: ${e}`,
     );
     await ctx.scheduler.runAfter(0, internal.complete.complete, {
       jobs: [job],
@@ -173,20 +176,16 @@ async function completeJobInline(
   }
 }
 
-async function runActionOrQueryJob(
+async function runOne(
   ctx: ActionCtx,
   console: Logger,
   args: {
-    workId: Id<"work">;
     fnHandle: string;
     fnArgs?: Record<string, unknown>;
     payloadId?: Id<"payload">;
-    attempt: number;
     fnType: "action" | "query";
   },
 ) {
-  const { workId, attempt } = args;
-
   // Run the query directly from the action (its own snapshot — no completion
   // transaction to conflict with, and usage attributes to the query itself),
   // or the action. A transient failure of this wrapping action re-runs the
@@ -207,14 +206,12 @@ async function runActionOrQueryJob(
         ? await ctx.runAction(args.fnHandle as FunctionHandle<"action">, fnArgs)
         : await ctx.runQuery(args.fnHandle as FunctionHandle<"query">, fnArgs);
     const runResult: RunResult = { kind: "success", returnValue };
-    return { workId, runResult, attempt, runOnCompleteInline: true };
+    return { runResult, runOnCompleteInline: true };
   } catch (e: unknown) {
     console.error(e);
     // We let the main loop handle the retries.
     return {
-      workId,
       runResult: { kind: "failed", error: formatError(e) } satisfies RunResult,
-      attempt,
       nonRetryable: isNonRetryableError(e),
     };
   }
