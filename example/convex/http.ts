@@ -4,6 +4,6 @@ import { components } from "./_generated/api";
 
 const http = httpRouter();
 
-registerStaticRoutes(http, components.selfHosting);
+registerStaticRoutes(http, components.staticHosting);
 
 export default http;
