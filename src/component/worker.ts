@@ -122,30 +122,12 @@ export const runBatch = internalAction({
     const console = createLogger(logLevel);
     await Promise.all(
       items.map(async (item) => {
-        // No single item may reject the batch: a thrown error here would fail
-        // the whole action and take the other in-flight items down with it.
-        try {
-          const status = await runOne(ctx, console, item);
-          await completeInline(ctx, console, {
-            workId: item.workId,
-            attempt: item.attempt,
-            ...status,
-          });
-        } catch (e) {
-          console.error(
-            `[runBatch] unexpected error for ${item.workId}, scheduling failed completion: ${e}`,
-          );
-          await ctx.scheduler.runAfter(0, internal.complete.complete, {
-            jobs: [
-              {
-                workId: item.workId,
-                runResult: { kind: "failed", error: formatError(e) },
-                attempt: item.attempt,
-                nonRetryable: isNonRetryableError(e),
-              },
-            ],
-          });
-        }
+        const status = await runOne(ctx, console, item);
+        await completeInline(ctx, console, {
+          workId: item.workId,
+          attempt: item.attempt,
+          ...status,
+        });
       }),
     );
   },
