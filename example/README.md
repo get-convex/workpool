@@ -19,19 +19,23 @@ the vite config reads from the repo root (`envDir: "../"`).
 
 ## What's in the dashboard
 
-- **Run scenario** — pick a preset (`burstyBatches`, `throughput`, `overhead`,
-  `sustained`, `bigArgs`, `bigContext`, `bigReturnTypes`), tweak the JSON
-  parameters, and launch it against the "new" pool (this branch), the "old" pool
-  (`workpool@0.4.6`, installed as `@convex-dev/workpool-old`), or both
-  back-to-back.
-- **History** — every run is persisted to the `runs` table. Pick A and B to diff
-  them.
-- **Detail** — per-run throughput-over-time and latency CDF charts.
-- **Compare** — side-by-side throughput and CDF for two runs, plus a summary
-  delta table (p50/p95/p99/max/duration).
+The dashboard is a single comparison workspace. Pick a preset
+(`burstyBatches`, `throughput`, `overhead`, `sustained`, `bigArgs`,
+`bigContext`, or `bigReturnTypes`) and it runs the published 0.4.7 baseline,
+then this branch, with identical parameters. The completed pair is selected
+automatically and rendered as outcome cards, throughput and latency charts,
+and recent-run history on the same page.
 
-URL state is encoded in the hash (`#detail/<id>`, `#compare/<id1>,<id2>`), so
-links are shareable.
+Scheduled-function instrumentation stays internal to the components. Backfill
+a checked run from its component system table with:
+
+```sh
+npm run capture:scheduled -- <baselineRunId> oldWorkpool
+npm run capture:scheduled -- <currentRunId> testWorkpool
+```
+
+Comparison URLs are encoded as `#compare/<oldRunId>,<newRunId>` so a result is
+shareable.
 
 ## Deploying it as a static site (optional)
 

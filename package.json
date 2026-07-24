@@ -27,6 +27,7 @@
     "build:clean": "rm -rf dist *.tsbuildinfo && npm run build:codegen",
     "dev:dashboard": "cd example && vite --clearScreen false",
     "build:dashboard": "cd example && vite build",
+    "capture:scheduled": "node scripts/capture-scheduled-functions.mjs",
     "deploy:dashboard": "npm run build:dashboard && npx @convex-dev/static-hosting upload --dist ./example/dist",
     "deploy:dashboard:prod": "npm run build:dashboard && npx @convex-dev/static-hosting upload --dist ./example/dist --prod",
     "typecheck": "tsc --noEmit && tsc -p example && tsc -p example/convex",

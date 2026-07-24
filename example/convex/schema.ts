@@ -14,6 +14,7 @@ export default defineSchema({
     taskCount: v.optional(v.number()),
     endTime: v.optional(v.number()),
     pool: v.optional(v.string()),
+    scheduledFunctions: v.optional(v.number()),
   }),
   tasks: defineTable({
     runId: v.id("runs"),

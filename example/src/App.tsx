@@ -1,832 +1,969 @@
 import "./App.css";
-import { useState, useMemo, useEffect } from "react";
-import { useQuery, useAction } from "convex/react";
+import { useEffect, useMemo, useState } from "react";
+import { useAction, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import {
-  LineChart,
-  Line,
-  AreaChart,
   Area,
+  AreaChart,
   CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
   XAxis,
   YAxis,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
 } from "recharts";
 
 type RunId = Id<"runs">;
-type Tab = "history" | "detail" | "compare" | "run";
+type CompareIds = { old: RunId | null; current: RunId | null };
+type RunData = NonNullable<
+  ReturnType<typeof useQuery<typeof api.test.dashboard.getRun>>
+>;
 
-type PoolKind = "new" | "old";
+const CURRENT_COLOR = "#16a085";
+const OLD_COLOR = "#d97706";
 
-function PoolBadge({ pool }: { pool?: PoolKind }) {
-  const cls = pool ?? "none";
-  return <span className={`pool-badge ${cls}`}>{pool ?? "—"}</span>;
-}
-
-function fmt(ms: number | undefined): string {
+function formatDuration(ms: number | undefined): string {
   if (ms === undefined) return "—";
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  return `${(ms / 1000).toFixed(2)}s`;
+  if (ms < 1_000) return `${Math.round(ms)} ms`;
+  return `${(ms / 1_000).toFixed(ms < 10_000 ? 2 : 1)} s`;
 }
 
-function fmtTime(t: number): string {
-  return new Date(t).toLocaleString();
+function formatNumber(value: number | undefined): string {
+  return value === undefined ? "—" : new Intl.NumberFormat().format(value);
 }
 
-type CompareIds = [RunId | null, RunId | null];
+function formatTime(value: number): string {
+  return new Date(value).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
 
-type UrlState = {
-  tab: Tab;
-  selectedRunId: RunId | null;
-  compareIds: CompareIds;
-};
+function throughput(run: RunData): number | undefined {
+  if (!run.totalDurationMs || !run.completedCount) return undefined;
+  return (run.completedCount / run.totalDurationMs) * 1_000;
+}
 
-function serializeUrlState(s: UrlState): string {
-  switch (s.tab) {
-    case "detail":
-      return s.selectedRunId ? `detail/${s.selectedRunId}` : "history";
-    case "compare": {
-      const ids = s.compareIds.filter((x): x is RunId => x !== null);
-      return ids.length > 0 ? `compare/${ids.join(",")}` : "compare";
-    }
-    case "run":
-      return "new";
-    case "history":
-    default:
-      return "history";
+function improvement(
+  baseline: number | undefined,
+  current: number | undefined,
+  lowerIsBetter: boolean,
+): number | undefined {
+  if (baseline === undefined || current === undefined || baseline === 0) {
+    return undefined;
   }
+  return lowerIsBetter
+    ? ((baseline - current) / baseline) * 100
+    : ((current - baseline) / baseline) * 100;
 }
 
-function parseUrlHash(hash: string): Partial<UrlState> {
-  const h = hash.replace(/^#\/?/, "");
-  if (!h || h === "history") return { tab: "history" };
-  if (h === "new") return { tab: "run" };
-  if (h === "compare") return { tab: "compare" };
-  const detailMatch = h.match(/^detail\/(.+)$/);
-  if (detailMatch) {
-    return { tab: "detail", selectedRunId: detailMatch[1] as RunId };
-  }
-  const compareMatch = h.match(/^compare\/(.+)$/);
-  if (compareMatch) {
-    const parts = compareMatch[1].split(",").slice(0, 2);
-    const ids: CompareIds = [null, null];
-    parts.forEach((p, i) => {
-      if (p) ids[i] = p as RunId;
-    });
-    return { tab: "compare", compareIds: ids };
-  }
-  return { tab: "history" };
-}
-
-function readHashState(): UrlState {
-  const parsed = parseUrlHash(window.location.hash);
-  return {
-    tab: parsed.tab ?? "history",
-    selectedRunId: parsed.selectedRunId ?? null,
-    compareIds: parsed.compareIds ?? [null, null],
-  };
+function readIdsFromHash(): CompareIds {
+  const match = window.location.hash.match(/^#compare\/([^,]+),([^,]+)$/);
+  return match
+    ? { old: match[1] as RunId, current: match[2] as RunId }
+    : { old: null, current: null };
 }
 
 function App() {
-  const initial = readHashState();
-  const [tab, setTab] = useState<Tab>(initial.tab);
-  const [selectedRunId, setSelectedRunId] = useState<RunId | null>(
-    initial.selectedRunId,
-  );
-  const [compareIds, setCompareIds] = useState<CompareIds>(initial.compareIds);
-
-  // Sync state → hash.
-  useEffect(() => {
-    const next = serializeUrlState({ tab, selectedRunId, compareIds });
-    const current = window.location.hash.replace(/^#\/?/, "");
-    if (next !== current) {
-      const url = `${window.location.pathname}${window.location.search}#${next}`;
-      window.history.replaceState(null, "", url);
-    }
-  }, [tab, selectedRunId, compareIds]);
-
-  // Sync hash → state (back/forward, pasted URLs).
-  useEffect(() => {
-    const onHashChange = () => {
-      const s = readHashState();
-      setTab(s.tab);
-      setSelectedRunId(s.selectedRunId);
-      setCompareIds(s.compareIds);
-    };
-    window.addEventListener("hashchange", onHashChange);
-    return () => window.removeEventListener("hashchange", onHashChange);
-  }, []);
-
-  return (
-    <>
-      <h1>Workpool Dashboard</h1>
-      <nav className="tabs">
-        <button
-          className={tab === "history" ? "active" : ""}
-          onClick={() => setTab("history")}
-        >
-          History
-        </button>
-        <button
-          className={tab === "detail" ? "active" : ""}
-          onClick={() => setTab("detail")}
-          disabled={!selectedRunId}
-        >
-          Detail
-        </button>
-        <button
-          className={tab === "compare" ? "active" : ""}
-          onClick={() => setTab("compare")}
-        >
-          Compare
-        </button>
-        <button
-          className={tab === "run" ? "active" : ""}
-          onClick={() => setTab("run")}
-        >
-          Run scenario
-        </button>
-      </nav>
-
-      {tab === "history" && (
-        <History
-          onPick={(id) => {
-            setSelectedRunId(id);
-            setTab("detail");
-          }}
-          onCompare={(a, b) => {
-            setCompareIds([a, b]);
-            setTab("compare");
-          }}
-        />
-      )}
-      {tab === "detail" && selectedRunId && <RunDetail runId={selectedRunId} />}
-      {tab === "compare" && <Compare ids={compareIds} setIds={setCompareIds} />}
-      {tab === "run" && <RunScenarioForm onStarted={() => setTab("history")} />}
-    </>
-  );
-}
-
-function History({
-  onPick,
-  onCompare,
-}: {
-  onPick: (id: RunId) => void;
-  onCompare: (a: RunId, b: RunId) => void;
-}) {
+  const [ids, setIds] = useState<CompareIds>(readIdsFromHash);
+  const [linked, setLinked] = useState(true);
   const runs = useQuery(api.test.dashboard.listRuns, { limit: 100 });
-  const [compareA, setCompareA] = useState<RunId | null>(null);
-  const [compareB, setCompareB] = useState<RunId | null>(null);
 
-  if (runs === undefined) return <p className="muted">Loading…</p>;
-  if (runs.length === 0)
-    return <p className="muted">No runs yet. Use “Run scenario”.</p>;
-
-  return (
-    <div className="card">
-      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem" }}>
-        <button
-          className="primary"
-          disabled={!compareA || !compareB || compareA === compareB}
-          onClick={() => onCompare(compareA!, compareB!)}
-        >
-          Compare selected
-        </button>
-        <span className="muted" style={{ alignSelf: "center" }}>
-          {compareA && compareB ? "two runs selected" : "select A and B"}
-        </span>
-      </div>
-      <table>
-        <thead>
-          <tr>
-            <th>A</th>
-            <th>B</th>
-            <th>Scenario</th>
-            <th>Pool</th>
-            <th>Status</th>
-            <th>Tasks</th>
-            <th>Duration</th>
-            <th>p50</th>
-            <th>p95</th>
-            <th>p99</th>
-            <th>Started</th>
-          </tr>
-        </thead>
-        <tbody>
-          {runs.map((r) => (
-            <HistoryRow
-              key={r._id}
-              row={r}
-              compareA={compareA}
-              compareB={compareB}
-              setCompareA={setCompareA}
-              setCompareB={setCompareB}
-              onPick={onPick}
-            />
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-type HistoryRowData = {
-  _id: RunId;
-  scenario: string;
-  pool?: string;
-  startTime: number;
-  taskCount?: number;
-};
-
-function HistoryRow({
-  row,
-  compareA,
-  compareB,
-  setCompareA,
-  setCompareB,
-  onPick,
-}: {
-  row: HistoryRowData;
-  compareA: RunId | null;
-  compareB: RunId | null;
-  setCompareA: (id: RunId) => void;
-  setCompareB: (id: RunId) => void;
-  onPick: (id: RunId) => void;
-}) {
-  const run = useQuery(api.test.dashboard.getRun, { runId: row._id });
-  return (
-    <tr
-      className="clickable"
-      onClick={(e) => {
-        if ((e.target as HTMLElement).tagName === "INPUT") return;
-        onPick(row._id);
-      }}
-    >
-      <td>
-        <input
-          type="radio"
-          name="a"
-          checked={compareA === row._id}
-          onChange={() => setCompareA(row._id)}
-        />
-      </td>
-      <td>
-        <input
-          type="radio"
-          name="b"
-          checked={compareB === row._id}
-          onChange={() => setCompareB(row._id)}
-        />
-      </td>
-      <td>{row.scenario}</td>
-      <td>
-        <PoolBadge pool={row.pool as PoolKind | undefined} />
-      </td>
-      <td className={run ? `status-${run.status}` : "muted"}>
-        {run ? run.status : "…"}
-      </td>
-      <td>
-        {run ? run.completedCount : "…"}/{row.taskCount ?? "?"}
-      </td>
-      <td>{fmt(run?.totalDurationMs)}</td>
-      <td>{fmt(run?.latency?.p50)}</td>
-      <td>{fmt(run?.latency?.p95)}</td>
-      <td>{fmt(run?.latency?.p99)}</td>
-      <td className="muted">{fmtTime(row.startTime)}</td>
-    </tr>
-  );
-}
-
-function RunDetail({ runId }: { runId: RunId }) {
-  const run = useQuery(api.test.dashboard.getRun, { runId });
-  const throughput = useQuery(api.test.dashboard.throughputOverTime, {
-    runId,
-    bucketMs: 500,
-  });
-  const cdf = useQuery(api.test.dashboard.latencyCdf, { runId });
-
-  if (run === undefined) return <p className="muted">Loading…</p>;
-  if (run === null) return <p className="muted">Run not found.</p>;
-
-  return (
-    <>
-      <div className="card">
-        <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
-          <h2 style={{ margin: 0 }}>{run.scenario}</h2>
-          <PoolBadge pool={run.pool as PoolKind | undefined} />
-          <span className={`status-${run.status}`}>{run.status}</span>
-          <span className="muted">{fmtTime(run.startTime)}</span>
-        </div>
-        <div className="metric-grid">
-          <Metric
-            label="Completed"
-            value={`${run.completedCount}/${run.taskCount ?? "?"}`}
-          />
-          <Metric label="Duration" value={fmt(run.totalDurationMs)} />
-          <Metric label="p50" value={fmt(run.latency?.p50)} />
-          <Metric label="p95" value={fmt(run.latency?.p95)} />
-          <Metric label="p99" value={fmt(run.latency?.p99)} />
-          <Metric label="max" value={fmt(run.latency?.max)} />
-          <Metric
-            label="tps"
-            value={
-              run.totalDurationMs && run.completedCount
-                ? `${Math.round((run.completedCount / run.totalDurationMs) * 1000)}`
-                : "—"
-            }
-          />
-        </div>
-        <details>
-          <summary className="muted">parameters</summary>
-          <pre className="params">
-            {JSON.stringify(run.parameters, null, 2)}
-          </pre>
-        </details>
-      </div>
-
-      <div className="charts">
-        <ChartCard title="Throughput over time (per 500ms bucket)">
-          <ResponsiveContainer width="100%" height={240}>
-            <AreaChart
-              data={throughput?.points ?? []}
-              margin={{ top: 8, right: 16, bottom: 8, left: 0 }}
-            >
-              <CartesianGrid strokeOpacity={0.15} />
-              <XAxis
-                dataKey="tMs"
-                tickFormatter={(t) => `${(t / 1000).toFixed(1)}s`}
-              />
-              <YAxis />
-              <Tooltip
-                labelFormatter={(t) =>
-                  `t=${((t as number) / 1000).toFixed(2)}s`
-                }
-              />
-              <Legend />
-              <Area
-                type="monotone"
-                dataKey="inFlight"
-                stroke="#b8a352"
-                fill="#b8a35233"
-                name="in flight"
-              />
-              <Area
-                type="monotone"
-                dataKey="completed"
-                stroke="#5cc97a"
-                fill="#5cc97a33"
-                name="completed/bucket"
-              />
-              <Area
-                type="monotone"
-                dataKey="enqueued"
-                stroke="#4f8cff"
-                fill="#4f8cff33"
-                name="enqueued/bucket"
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        </ChartCard>
-
-        <ChartCard title="Latency CDF">
-          <ResponsiveContainer width="100%" height={240}>
-            <LineChart
-              data={cdf ?? []}
-              margin={{ top: 8, right: 16, bottom: 8, left: 0 }}
-            >
-              <CartesianGrid strokeOpacity={0.15} />
-              <XAxis
-                dataKey="ms"
-                tickFormatter={(t) =>
-                  t < 1000 ? `${t}ms` : `${(t / 1000).toFixed(1)}s`
-                }
-              />
-              <YAxis domain={[0, 100]} unit="%" />
-              <Tooltip
-                labelFormatter={(t) =>
-                  `${(t as number) < 1000 ? `${t}ms` : `${((t as number) / 1000).toFixed(2)}s`}`
-                }
-              />
-              <Line
-                type="monotone"
-                dataKey="pct"
-                stroke="#4f8cff"
-                dot={false}
-                name="cumulative %"
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </ChartCard>
-      </div>
-    </>
-  );
-}
-
-function Compare({
-  ids,
-  setIds,
-}: {
-  ids: [RunId | null, RunId | null];
-  setIds: (ids: [RunId | null, RunId | null]) => void;
-}) {
-  const runs = useQuery(api.test.dashboard.listRuns, { limit: 100 });
-  const [a, b] = ids;
-  const runA = useQuery(api.test.dashboard.getRun, a ? { runId: a } : "skip");
-  const runB = useQuery(api.test.dashboard.getRun, b ? { runId: b } : "skip");
-  const tA = useQuery(
-    api.test.dashboard.throughputOverTime,
-    a ? { runId: a, bucketMs: 500 } : "skip",
-  );
-  const tB = useQuery(
-    api.test.dashboard.throughputOverTime,
-    b ? { runId: b, bucketMs: 500 } : "skip",
-  );
-  const cA = useQuery(api.test.dashboard.latencyCdf, a ? { runId: a } : "skip");
-  const cB = useQuery(api.test.dashboard.latencyCdf, b ? { runId: b } : "skip");
-
-  const throughputData = useMemo(() => {
-    const aPts = tA?.points ?? [];
-    const bPts = tB?.points ?? [];
-    const len = Math.max(aPts.length, bPts.length);
-    const out: Array<{
-      tMs: number;
-      aCompleted?: number;
-      bCompleted?: number;
-    }> = [];
-    for (let i = 0; i < len; i++) {
-      const tMs = (aPts[i]?.tMs ?? bPts[i]?.tMs ?? i * 500) as number;
-      out.push({
-        tMs,
-        aCompleted: aPts[i]?.completed,
-        bCompleted: bPts[i]?.completed,
-      });
+  const selectRun = (side: "old" | "current", runId: RunId | null) => {
+    if (!runId) {
+      setIds((current) => ({ ...current, [side]: null }));
+      return;
     }
-    return out;
-  }, [tA, tB]);
+    const selected = runs?.find((run) => run._id === runId);
+    if (!linked || !selected || !runs) {
+      setIds((current) => ({ ...current, [side]: runId }));
+      return;
+    }
+    const otherSide = side === "old" ? "current" : "old";
+    const counterpart = findCounterpart(selected, runs);
+    setIds({
+      [side]: runId,
+      [otherSide]: counterpart?._id ?? null,
+    } as CompareIds);
+  };
 
-  // Merge CDFs by ms axis: zip both sorted arrays into points with optional aPct/bPct.
-  const cdfData = useMemo(() => {
-    const aArr = cA ?? [];
-    const bArr = cB ?? [];
-    const points: Array<{ ms: number; aPct?: number; bPct?: number }> = [];
-    aArr.forEach((p) => points.push({ ms: p.ms, aPct: p.pct }));
-    bArr.forEach((p) => points.push({ ms: p.ms, bPct: p.pct }));
-    points.sort((x, y) => x.ms - y.ms);
-    return points;
-  }, [cA, cB]);
+  const changeLinked = (nextLinked: boolean) => {
+    setLinked(nextLinked);
+    if (!nextLinked || !runs) return;
+    const selected = runs.find(
+      (run) => run._id === (ids.current ?? ids.old),
+    );
+    if (!selected) return;
+    const counterpart = findCounterpart(selected, runs);
+    if (!counterpart) return;
+    const selectedIsOld = selected.pool === "old";
+    setIds({
+      old: selectedIsOld ? selected._id : counterpart._id,
+      current: selectedIsOld ? counterpart._id : selected._id,
+    });
+  };
+
+  useEffect(() => {
+    if (ids.old && ids.current) {
+      window.history.replaceState(
+        null,
+        "",
+        `${window.location.pathname}${window.location.search}#compare/${ids.old},${ids.current}`,
+      );
+    }
+  }, [ids]);
 
   return (
-    <>
-      <div className="card">
-        <div className="form-row">
-          <label>
-            Run A
-            <select
-              value={a ?? ""}
-              onChange={(e) =>
-                setIds([(e.target.value || null) as RunId | null, b])
-              }
-            >
-              <option value="">— select —</option>
-              {(runs ?? []).map((r) => (
-                <option key={r._id} value={r._id}>
-                  {r.scenario} [{r.pool ?? "?"}] · {fmtTime(r.startTime)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Run B
-            <select
-              value={b ?? ""}
-              onChange={(e) =>
-                setIds([a, (e.target.value || null) as RunId | null])
-              }
-            >
-              <option value="">— select —</option>
-              {(runs ?? []).map((r) => (
-                <option key={r._id} value={r._id}>
-                  {r.scenario} [{r.pool ?? "?"}] · {fmtTime(r.startTime)}
-                </option>
-              ))}
-            </select>
-          </label>
+    <main>
+      <header className="page-header">
+        <div>
+          <p className="eyebrow">Workpool benchmark lab</p>
+          <h1>See what the new worker changes.</h1>
+          <p className="page-intro">
+            Run the same workload against both implementations, then compare
+            speed, tail latency, throughput, and scheduler pressure in one view.
+          </p>
         </div>
-      </div>
-
-      {runA && runB && (
-        <div className="card">
-          <h2>Summary delta</h2>
-          <DeltaTable a={runA} b={runB} />
+        <div className="legend-pills" aria-label="Comparison legend">
+          <span className="legend-pill current">Current branch</span>
+          <span className="legend-pill old">Workpool 0.4.7</span>
         </div>
-      )}
+      </header>
 
-      <div className="charts">
-        <ChartCard title="Throughput — completed per bucket">
-          <ResponsiveContainer width="100%" height={260}>
-            <LineChart
-              data={throughputData}
-              margin={{ top: 8, right: 16, bottom: 8, left: 0 }}
-            >
-              <CartesianGrid strokeOpacity={0.15} />
-              <XAxis
-                dataKey="tMs"
-                tickFormatter={(t) => `${(t / 1000).toFixed(1)}s`}
-              />
-              <YAxis />
-              <Tooltip />
-              <Legend />
-              <Line
-                type="monotone"
-                dataKey="aCompleted"
-                stroke="#4f8cff"
-                dot={false}
-                name="A"
-              />
-              <Line
-                type="monotone"
-                dataKey="bCompleted"
-                stroke="#ff8c4f"
-                dot={false}
-                name="B"
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </ChartCard>
+      <ComparisonRunner
+        onCompleted={(oldRunId, currentRunId) =>
+          setIds({ old: oldRunId, current: currentRunId })
+        }
+      />
 
-        <ChartCard title="Latency CDF (lower-and-leftward = better)">
-          <ResponsiveContainer width="100%" height={260}>
-            <LineChart
-              data={cdfData}
-              margin={{ top: 8, right: 16, bottom: 8, left: 0 }}
-            >
-              <CartesianGrid strokeOpacity={0.15} />
-              <XAxis
-                dataKey="ms"
-                tickFormatter={(t) =>
-                  t < 1000 ? `${t}ms` : `${(t / 1000).toFixed(1)}s`
-                }
-              />
-              <YAxis domain={[0, 100]} unit="%" />
-              <Tooltip />
-              <Legend />
-              <Line
-                type="monotone"
-                dataKey="aPct"
-                stroke="#4f8cff"
-                dot={false}
-                connectNulls
-                name="A"
-              />
-              <Line
-                type="monotone"
-                dataKey="bPct"
-                stroke="#ff8c4f"
-                dot={false}
-                connectNulls
-                name="B"
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </ChartCard>
-      </div>
-    </>
+      <RunPicker
+        runs={runs ?? []}
+        ids={ids}
+        linked={linked}
+        onLinkedChange={changeLinked}
+        onSelect={selectRun}
+      />
+      <Comparison ids={ids} />
+      <RunHistory runs={runs ?? []} ids={ids} onSelect={selectRun} />
+    </main>
   );
 }
 
-function DeltaTable({
-  a,
-  b,
-}: {
-  a: NonNullable<ReturnType<typeof useQuery<typeof api.test.dashboard.getRun>>>;
-  b: NonNullable<ReturnType<typeof useQuery<typeof api.test.dashboard.getRun>>>;
-}) {
-  const rows: Array<{
-    label: string;
-    av?: number;
-    bv?: number;
-    lower: boolean;
-  }> = [
-    {
-      label: "Total duration (ms)",
-      av: a.totalDurationMs,
-      bv: b.totalDurationMs,
-      lower: true,
-    },
-    { label: "p50 (ms)", av: a.latency?.p50, bv: b.latency?.p50, lower: true },
-    { label: "p95 (ms)", av: a.latency?.p95, bv: b.latency?.p95, lower: true },
-    { label: "p99 (ms)", av: a.latency?.p99, bv: b.latency?.p99, lower: true },
-    { label: "max (ms)", av: a.latency?.max, bv: b.latency?.max, lower: true },
-  ];
-  return (
-    <table>
-      <thead>
-        <tr>
-          <th>Metric</th>
-          <th>
-            A ({a.scenario} · {a.pool ?? "?"})
-          </th>
-          <th>
-            B ({b.scenario} · {b.pool ?? "?"})
-          </th>
-          <th>Δ (B vs A)</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => {
-          const delta =
-            row.av !== undefined && row.bv !== undefined && row.av !== 0
-              ? ((row.bv - row.av) / row.av) * 100
-              : undefined;
-          // For "lower is better": negative delta is good.
-          const better =
-            delta !== undefined && (row.lower ? delta < 0 : delta > 0);
-          return (
-            <tr key={row.label}>
-              <td>{row.label}</td>
-              <td>{row.av ?? "—"}</td>
-              <td>{row.bv ?? "—"}</td>
-              <td className={better ? "delta-positive" : "delta-negative"}>
-                {delta === undefined
-                  ? "—"
-                  : `${delta > 0 ? "+" : ""}${delta.toFixed(1)}%`}
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  );
-}
-
-const SCENARIO_PRESETS = {
+const SCENARIOS = {
   burstyBatches: {
-    waveCount: 10,
-    tasksPerWave: 20,
-    delayBetweenWavesMs: 500,
-    maxParallelism: 50,
-    taskDurationMs: 0,
+    label: "Bursty batches",
+    description: "Shows scheduler churn while work arrives in repeated waves.",
+    parameters: {
+      waveCount: 10,
+      tasksPerWave: 20,
+      delayBetweenWavesMs: 500,
+      maxParallelism: 50,
+      taskDurationMs: 0,
+      taskType: "action",
+    },
   },
   throughput: {
-    taskCount: 1000,
-    batchSize: 100,
-    interBatchMs: 50,
-    maxParallelism: 100,
-    taskDurationMs: 20,
+    label: "Sustained throughput",
+    description: "Saturates both pools and compares steady-state completion rate.",
+    parameters: {
+      taskCount: 1000,
+      batchSize: 100,
+      interBatchMs: 50,
+      maxParallelism: 100,
+      taskDurationMs: 20,
+      taskType: "action",
+    },
   },
   overhead: {
-    taskCount: 500,
-    batchSize: 50,
-    interBatchMs: 0,
-    mode: "pool",
-    onComplete: false,
-    maxParallelism: 50,
+    label: "Pool overhead",
+    description: "Measures the wall-clock cost of scheduling small mutations.",
+    parameters: {
+      taskCount: 500,
+      batchSize: 50,
+      interBatchMs: 0,
+      mode: "pool",
+      onComplete: false,
+      maxParallelism: 50,
+    },
   },
   sustained: {
-    targetTps: 50,
-    durationSec: 20,
-    workerMinMs: 50,
-    workerMaxMs: 500,
-    onComplete: false,
-    maxParallelism: 100,
+    label: "Mixed-duration load",
+    description: "Maintains a target rate while task duration varies.",
+    parameters: {
+      targetTps: 50,
+      durationSec: 20,
+      workerMinMs: 50,
+      workerMaxMs: 500,
+      onComplete: false,
+      maxParallelism: 100,
+    },
   },
   bigArgs: {
-    taskCount: 30,
-    argSizeBytes: 800000,
-    maxParallelism: 30,
+    label: "Large arguments",
+    description: "Compares scheduling with near-limit function arguments.",
+    parameters: { taskCount: 30, argSizeBytes: 800000, maxParallelism: 30 },
   },
   bigContext: {
-    taskCount: 30,
-    contextSizeBytes: 800000,
-    maxParallelism: 30,
+    label: "Large context",
+    description: "Compares large onComplete context handling.",
+    parameters: { taskCount: 30, contextSizeBytes: 800000, maxParallelism: 30 },
   },
   bigReturnTypes: {
-    taskCount: 20,
-    returnSizeBytes: 1000000,
-    maxParallelism: 20,
+    label: "Large return values",
+    description: "Compares completion handling for large results.",
+    parameters: { taskCount: 20, returnSizeBytes: 1000000, maxParallelism: 20 },
   },
-} as const satisfies Record<string, Record<string, unknown>>;
+} as const;
 
-type ScenarioName = keyof typeof SCENARIO_PRESETS;
+type ScenarioName = keyof typeof SCENARIOS;
 
-function RunScenarioForm({ onStarted }: { onStarted: () => void }) {
-  const runScenarios = useAction(api.test.dashboard.runScenarios);
+function ComparisonRunner({
+  onCompleted,
+}: {
+  onCompleted: (oldRunId: RunId | null, currentRunId: RunId) => void;
+}) {
+  const runComparison = useAction(api.test.dashboard.runComparison);
+  const runCurrent = useAction(api.test.dashboard.runCurrent);
+  const [runMode, setRunMode] = useState<"compare" | "current">("compare");
   const [scenario, setScenario] = useState<ScenarioName>("burstyBatches");
-  const [pool, setPool] = useState<"new" | "old" | "both">("new");
-  const [paramsText, setParamsText] = useState<string>(
-    JSON.stringify(SCENARIO_PRESETS[scenario], null, 2),
+  const [parameters, setParameters] = useState(
+    JSON.stringify(SCENARIOS.burstyBatches.parameters, null, 2),
   );
+  const [showParameters, setShowParameters] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const updateScenario = (next: ScenarioName) => {
+  const changeScenario = (next: ScenarioName) => {
     setScenario(next);
-    setParamsText(JSON.stringify(SCENARIO_PRESETS[next], null, 2));
+    setParameters(JSON.stringify(SCENARIOS[next].parameters, null, 2));
     setError(null);
   };
 
   const launch = async () => {
     setError(null);
-    let parsed: Record<string, unknown>;
+    let args: Record<string, unknown>;
     try {
-      parsed = JSON.parse(paramsText);
-    } catch (e) {
-      setError(`Invalid JSON: ${(e as Error).message}`);
+      args = JSON.parse(parameters) as Record<string, unknown>;
+    } catch (caught) {
+      setError(`Invalid parameters: ${(caught as Error).message}`);
       return;
     }
+
     setBusy(true);
     try {
-      const launches: Array<"new" | "old"> =
-        pool === "both" ? ["old", "new"] : [pool];
-      const argsList = launches.map((p) => ({
-        ...parsed,
-        pool: p,
-      }));
-      await runScenarios({ scenario, argsList });
-      onStarted();
-    } catch (e) {
-      setError((e as Error).message);
+      if (runMode === "compare") {
+        const result = await runComparison({ scenario, args });
+        onCompleted(result.oldRunId, result.newRunId);
+      } else {
+        const result = await runCurrent({ scenario, args });
+        onCompleted(null, result.newRunId);
+      }
+      document
+        .getElementById("comparison-results")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (caught) {
+      setError((caught as Error).message);
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <div className="card">
-      <div className="form-row">
+    <section className="runner-panel" aria-labelledby="runner-title">
+      <div className="runner-copy">
+        <p className="step-label">01 · Run a matched pair</p>
+        <h2 id="runner-title">One workload. Two implementations.</h2>
+        <p>{SCENARIOS[scenario].description}</p>
+      </div>
+      <div className="runner-controls">
         <label>
           Scenario
           <select
             value={scenario}
-            onChange={(e) => updateScenario(e.target.value as ScenarioName)}
+            onChange={(event) =>
+              changeScenario(event.target.value as ScenarioName)
+            }
+            disabled={busy}
           >
-            {Object.keys(SCENARIO_PRESETS).map((s) => (
-              <option key={s} value={s}>
-                {s}
+            {Object.entries(SCENARIOS).map(([name, config]) => (
+              <option key={name} value={name}>
+                {config.label}
               </option>
             ))}
           </select>
         </label>
-        <label>
-          Pool
+        <button
+          className="text-button"
+          type="button"
+          onClick={() => setShowParameters((value) => !value)}
+          disabled={busy}
+        >
+          {showParameters ? "Hide parameters" : "Tune parameters"}
+        </button>
+        {showParameters && (
+          <label className="parameters-field">
+            Parameters
+            <textarea
+              value={parameters}
+              onChange={(event) => setParameters(event.target.value)}
+              spellCheck={false}
+              disabled={busy}
+            />
+          </label>
+        )}
+        <div className="run-action-row">
           <select
-            value={pool}
-            onChange={(e) => setPool(e.target.value as "new" | "old" | "both")}
+            className="run-mode-select"
+            aria-label="Run mode"
+            value={runMode}
+            onChange={(event) =>
+              setRunMode(event.target.value as "compare" | "current")
+            }
+            disabled={busy}
           >
-            <option value="new">new (this branch)</option>
-            <option value="old">old (workpool@0.4.6)</option>
-            <option value="both">both (sequential)</option>
+            <option value="compare">Baseline vs current</option>
+            <option value="current">Current only</option>
+          </select>
+          <button className="run-button" onClick={launch} disabled={busy}>
+            {busy ? (
+              <>
+                <span className="spinner" />{" "}
+                {runMode === "compare"
+                  ? "Running baseline, then current…"
+                  : "Running current…"}
+              </>
+            ) : runMode === "compare" ? (
+              "Run comparison"
+            ) : (
+              "Run current"
+            )}
+          </button>
+        </div>
+        {busy && (
+          <p className="runner-status">
+            This stays active until both workloads finish so the result below is
+            immediately comparable.
+          </p>
+        )}
+        {error && <p className="error-message">{error}</p>}
+      </div>
+    </section>
+  );
+}
+
+type RunSummary = {
+  _id: RunId;
+  scenario: string;
+  pool?: string;
+  startTime: number;
+  taskCount?: number;
+  scheduledFunctions?: number;
+  taskType?: string;
+  parameters: unknown;
+};
+
+function scenarioKey(scenario: string): string {
+  return scenario.replace(/-(old|new)-(bare|oc)$/, "");
+}
+
+function findCounterpart(
+  selected: RunSummary,
+  runs: RunSummary[],
+): RunSummary | undefined {
+  const selectedIsOld = selected.pool === "old";
+  const parameters = JSON.stringify(selected.parameters);
+  return runs
+    .filter(
+      (candidate) =>
+        (candidate.pool === "old") !== selectedIsOld &&
+        scenarioKey(candidate.scenario) === scenarioKey(selected.scenario) &&
+        JSON.stringify(candidate.parameters) === parameters,
+    )
+    .sort(
+      (a, b) =>
+        Math.abs(a.startTime - selected.startTime) -
+        Math.abs(b.startTime - selected.startTime),
+    )[0];
+}
+
+function RunPicker({
+  runs,
+  ids,
+  linked,
+  onLinkedChange,
+  onSelect,
+}: {
+  runs: RunSummary[];
+  ids: CompareIds;
+  linked: boolean;
+  onLinkedChange: (linked: boolean) => void;
+  onSelect: (side: "old" | "current", runId: RunId | null) => void;
+}) {
+  const oldRuns = runs.filter((run) => run.pool === "old");
+  const currentRuns = runs.filter((run) => (run.pool ?? "new") === "new");
+
+  return (
+    <section className="picker-section">
+      <div>
+        <p className="step-label">02 · Compare results</p>
+        <h2>Matched run</h2>
+        <label className="link-toggle">
+          <input
+            type="checkbox"
+            checked={linked}
+            onChange={(event) => onLinkedChange(event.target.checked)}
+          />
+          <span>
+            Link matching runs
+            <small>Keep scenario and parameters together</small>
+          </span>
+        </label>
+      </div>
+      <div className="run-selectors">
+        <label>
+          Baseline
+          <select
+            value={ids.old ?? ""}
+            onChange={(event) =>
+              onSelect("old", (event.target.value || null) as RunId | null)
+            }
+          >
+            <option value="">Select a baseline run</option>
+            {oldRuns.map((run) => (
+              <option key={run._id} value={run._id}>
+                {run.scenario} [{run.taskType ?? "mutation"}] · {formatTime(run.startTime)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <span className="versus">vs</span>
+        <label>
+          Current
+          <select
+            value={ids.current ?? ""}
+            onChange={(event) =>
+              onSelect("current", (event.target.value || null) as RunId | null)
+            }
+          >
+            <option value="">Select a current run</option>
+            {currentRuns.map((run) => (
+              <option key={run._id} value={run._id}>
+                {run.scenario} [{run.taskType ?? "mutation"}] · {formatTime(run.startTime)}
+              </option>
+            ))}
           </select>
         </label>
       </div>
-      <label>
-        Parameters (JSON)
-        <textarea
-          value={paramsText}
-          onChange={(e) => setParamsText(e.target.value)}
-          spellCheck={false}
+    </section>
+  );
+}
+
+function Comparison({ ids }: { ids: CompareIds }) {
+  const oldRun = useQuery(
+    api.test.dashboard.getRun,
+    ids.old ? { runId: ids.old } : "skip",
+  );
+  const currentRun = useQuery(
+    api.test.dashboard.getRun,
+    ids.current ? { runId: ids.current } : "skip",
+  );
+  const oldThroughput = useQuery(
+    api.test.dashboard.throughputOverTime,
+    ids.old ? { runId: ids.old, bucketMs: 500 } : "skip",
+  );
+  const currentThroughput = useQuery(
+    api.test.dashboard.throughputOverTime,
+    ids.current ? { runId: ids.current, bucketMs: 500 } : "skip",
+  );
+  const oldCdf = useQuery(
+    api.test.dashboard.latencyCdf,
+    ids.old ? { runId: ids.old } : "skip",
+  );
+  const currentCdf = useQuery(
+    api.test.dashboard.latencyCdf,
+    ids.current ? { runId: ids.current } : "skip",
+  );
+
+  const throughputData = useMemo(() => {
+    const oldPoints = oldThroughput?.points ?? [];
+    const currentPoints = currentThroughput?.points ?? [];
+    const length = Math.max(oldPoints.length, currentPoints.length);
+    return Array.from({ length }, (_, index) => ({
+      tMs: oldPoints[index]?.tMs ?? currentPoints[index]?.tMs ?? index * 500,
+      baseline: oldPoints[index]?.completed,
+      current: currentPoints[index]?.completed,
+      currentInFlight: currentPoints[index]?.inFlight,
+    }));
+  }, [oldThroughput, currentThroughput]);
+
+  const cdfData = useMemo(() => {
+    const oldPoints = oldCdf ?? [];
+    const currentPoints = currentCdf ?? [];
+    const times = [...new Set([...oldPoints, ...currentPoints].map((p) => p.ms))]
+      .sort((a, b) => a - b);
+    const cumulativeAt = (points: Array<{ ms: number; pct: number }>, ms: number) =>
+      points.reduce(
+        (latest, point) => (point.ms <= ms ? point.pct : latest),
+        0,
+      );
+    return times.map((ms) => ({
+      ms,
+      baseline: cumulativeAt(oldPoints, ms),
+      current: cumulativeAt(currentPoints, ms),
+    }));
+  }, [oldCdf, currentCdf]);
+
+  if (ids.current && !ids.old) {
+    if (currentRun === undefined) {
+      return <section className="loading-panel">Loading current run…</section>;
+    }
+    if (!currentRun) {
+      return <section className="empty-state">This run no longer exists.</section>;
+    }
+    return (
+      <section id="comparison-results" className="results-section">
+        <OutcomeSummary current={currentRun} />
+        <MetricGrid current={currentRun} />
+        <RunCharts
+          throughputData={throughputData}
+          cdfData={cdfData}
+          showBaseline={false}
         />
-      </label>
-      {error && (
-        <p style={{ color: "#d96363", fontSize: "0.85rem" }}>{error}</p>
+        <details className="run-details">
+          <summary>Run details and parameters</summary>
+          <div className="detail-columns single">
+            <div>
+              <strong>Current · {formatTime(currentRun.startTime)}</strong>
+              <RunIdControl runId={currentRun._id} />
+              <pre>{JSON.stringify(currentRun.parameters, null, 2)}</pre>
+            </div>
+          </div>
+        </details>
+      </section>
+    );
+  }
+
+  if (!ids.old || !ids.current) {
+    return (
+      <section id="comparison-results" className="empty-state">
+        <span>↗</span>
+        <h2>Run a comparison or select two existing runs.</h2>
+        <p>The summary and charts will appear here.</p>
+      </section>
+    );
+  }
+
+  if (oldRun === undefined || currentRun === undefined) {
+    return <section className="loading-panel">Loading comparison…</section>;
+  }
+  if (!oldRun || !currentRun) {
+    return <section className="empty-state">One of these runs no longer exists.</section>;
+  }
+
+  const sameScenario =
+    oldRun.scenario.replace(/-(old|new)-bare$/, "") ===
+    currentRun.scenario.replace(/-(old|new)-bare$/, "");
+
+  return (
+    <section id="comparison-results" className="results-section">
+      {!sameScenario && (
+        <p className="comparison-warning">
+          These runs use different scenarios. Select a matched pair for a fair
+          comparison.
+        </p>
       )}
-      <button className="primary" onClick={launch} disabled={busy}>
-        {busy ? "Starting…" : "Run"}
-      </button>
-      <p className="muted" style={{ fontSize: "0.8rem", marginTop: "1rem" }}>
-        Tip: pick “both” to run the same scenario back-to-back on old then new,
-        then compare them under “Compare”. The dashboard waits for each run to
-        finish (plus a short buffer for the runner's 5s reentry guard) before
-        starting the next, so the button stays busy for the full duration.
-      </p>
+      <OutcomeSummary baseline={oldRun} current={currentRun} />
+      <MetricGrid baseline={oldRun} current={currentRun} />
+      <RunCharts throughputData={throughputData} cdfData={cdfData} />
+
+      <details className="run-details">
+        <summary>Run details and parameters</summary>
+        <div className="detail-columns">
+          <div>
+            <strong>Baseline · {formatTime(oldRun.startTime)}</strong>
+            <RunIdControl runId={oldRun._id} baseline />
+            <pre>{JSON.stringify(oldRun.parameters, null, 2)}</pre>
+          </div>
+          <div>
+            <strong>Current · {formatTime(currentRun.startTime)}</strong>
+            <RunIdControl runId={currentRun._id} />
+            <pre>{JSON.stringify(currentRun.parameters, null, 2)}</pre>
+          </div>
+        </div>
+      </details>
+    </section>
+  );
+}
+
+function OutcomeSummary({
+  baseline,
+  current,
+}: {
+  baseline?: RunData;
+  current: RunData;
+}) {
+  const durationGain = improvement(
+    baseline?.totalDurationMs,
+    current.totalDurationMs,
+    true,
+  );
+  const schedulerGain = improvement(
+    baseline?.scheduledFunctions,
+    current.scheduledFunctions,
+    true,
+  );
+  const gains = [
+    durationGain === undefined
+      ? null
+      : `${Math.abs(durationGain).toFixed(0)}% ${durationGain >= 0 ? "faster" : "slower"}`,
+    schedulerGain === undefined
+      ? null
+      : `${Math.abs(schedulerGain).toFixed(0)}% ${schedulerGain >= 0 ? "fewer" : "more"} scheduled calls`,
+  ].filter(Boolean);
+
+  return (
+    <div className="outcome-card">
+      <div>
+        <p className="step-label">
+          Result · {current.scenario} · {String(current.parameters?.taskType ?? "mutation")}
+        </p>
+        <h2>
+          {gains.length > 0
+            ? `Current is ${gains.join(" with ")}.`
+            : baseline
+              ? "Current and baseline are ready to compare."
+              : "Current run completed."}
+        </h2>
+        <p>
+          {baseline
+            ? `${current.completedCount} tasks completed on both implementations under the same scenario parameters.`
+            : `${current.completedCount} tasks completed on the current implementation.`}
+        </p>
+      </div>
+      <div className="outcome-duration">
+        <span>Current wall time</span>
+        <strong>{formatDuration(current.totalDurationMs)}</strong>
+        {baseline && (
+          <small>Baseline {formatDuration(baseline.totalDurationMs)}</small>
+        )}
+      </div>
     </div>
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function MetricGrid({
+  baseline,
+  current,
+}: {
+  baseline?: RunData;
+  current: RunData;
+}) {
+  const metrics = [
+    {
+      label: "Wall time",
+      baseline: baseline?.totalDurationMs,
+      current: current.totalDurationMs,
+      format: formatDuration,
+      lower: true,
+    },
+    {
+      label: "Throughput",
+      baseline: baseline ? throughput(baseline) : undefined,
+      current: throughput(current),
+      format: (value: number | undefined) =>
+        value === undefined ? "—" : `${Math.round(value)} tasks/s`,
+      lower: false,
+    },
+    {
+      label: "p95 latency",
+      baseline: baseline?.latency?.p95,
+      current: current.latency?.p95,
+      format: formatDuration,
+      lower: true,
+    },
+    {
+      label: "p99 latency",
+      baseline: baseline?.latency?.p99,
+      current: current.latency?.p99,
+      format: formatDuration,
+      lower: true,
+    },
+    {
+      label: "Scheduled calls",
+      baseline: baseline?.scheduledFunctions,
+      current: current.scheduledFunctions,
+      format: formatNumber,
+      lower: true,
+      note:
+        baseline && baseline.scheduledFunctions === undefined
+          ? "Baseline capture pending"
+          : undefined,
+    },
+  ];
+
   return (
-    <div className="metric">
-      <div className="label">{label}</div>
-      <div className="value">{value}</div>
+    <div className="metric-grid">
+      {metrics.map((metric) => {
+        const gain = improvement(
+          metric.baseline,
+          metric.current,
+          metric.lower,
+        );
+        return (
+          <article className="metric-card" key={metric.label}>
+            <div className="metric-heading">
+              <span>{metric.label}</span>
+              {gain !== undefined && (
+                <span className={`delta ${gain >= 0 ? "good" : "bad"}`}>
+                  {gain >= 0 ? "+" : ""}
+                  {gain.toFixed(1)}%
+                </span>
+              )}
+            </div>
+            <strong>{metric.format(metric.current)}</strong>
+            {baseline && <p>Baseline {metric.format(metric.baseline)}</p>}
+            {metric.note && <small>{metric.note}</small>}
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+function RunCharts({
+  throughputData,
+  cdfData,
+  showBaseline = true,
+}: {
+  throughputData: Array<{
+    tMs: number;
+    baseline?: number;
+    current?: number;
+  }>;
+  cdfData: Array<{ ms: number; baseline: number; current: number }>;
+  showBaseline?: boolean;
+}) {
+  return (
+    <div className="chart-grid">
+      <ChartCard
+        title="Throughput over time"
+        subtitle="Tasks completed in each 500 ms window; higher is better."
+      >
+        <ResponsiveContainer width="100%" height={300}>
+          <AreaChart
+            data={throughputData}
+            margin={{ top: 12, right: 8, left: -12 }}
+          >
+            <defs>
+              <linearGradient id="currentFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={CURRENT_COLOR} stopOpacity={0.3} />
+                <stop offset="100%" stopColor={CURRENT_COLOR} stopOpacity={0.02} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid stroke="#d8e1df" vertical={false} />
+            <XAxis
+              dataKey="tMs"
+              tickFormatter={(value) => `${(value / 1000).toFixed(1)}s`}
+              tickLine={false}
+              axisLine={false}
+            />
+            <YAxis tickLine={false} axisLine={false} />
+            <Tooltip labelFormatter={(value) => `${Number(value) / 1000}s`} />
+            <Legend />
+            <Area
+              type="monotone"
+              dataKey="current"
+              name="Current"
+              stroke={CURRENT_COLOR}
+              strokeWidth={2.5}
+              fill="url(#currentFill)"
+              connectNulls
+            />
+            {showBaseline && (
+              <Line
+                type="monotone"
+                dataKey="baseline"
+                name="0.4.7 baseline"
+                stroke={OLD_COLOR}
+                strokeWidth={2}
+                strokeDasharray="5 4"
+                dot={false}
+                connectNulls
+              />
+            )}
+          </AreaChart>
+        </ResponsiveContainer>
+      </ChartCard>
+
+      <ChartCard
+        title="Latency distribution"
+        subtitle="Cumulative completion by latency; further left is better."
+      >
+        <ResponsiveContainer width="100%" height={300}>
+          <LineChart data={cdfData} margin={{ top: 12, right: 8, left: -12 }}>
+            <CartesianGrid stroke="#d8e1df" vertical={false} />
+            <XAxis
+              dataKey="ms"
+              tickFormatter={(value) => formatDuration(value)}
+              tickLine={false}
+              axisLine={false}
+            />
+            <YAxis
+              domain={[0, 100]}
+              tickFormatter={(value) => `${value}%`}
+              tickLine={false}
+              axisLine={false}
+            />
+            <Tooltip
+              labelFormatter={(value) =>
+                `${formatDuration(Number(value))} latency`
+              }
+              formatter={(value) => `${Number(value).toFixed(1)}%`}
+            />
+            <Legend />
+            <Line
+              type="stepAfter"
+              dataKey="current"
+              name="Current"
+              stroke={CURRENT_COLOR}
+              strokeWidth={2.5}
+              dot={false}
+            />
+            {showBaseline && (
+              <Line
+                type="stepAfter"
+                dataKey="baseline"
+                name="0.4.7 baseline"
+                stroke={OLD_COLOR}
+                strokeWidth={2}
+                strokeDasharray="5 4"
+                dot={false}
+              />
+            )}
+          </LineChart>
+        </ResponsiveContainer>
+      </ChartCard>
     </div>
   );
 }
 
 function ChartCard({
   title,
+  subtitle,
   children,
 }: {
   title: string;
+  subtitle: string;
   children: React.ReactNode;
 }) {
   return (
-    <div className="card">
-      <h2 style={{ marginTop: 0 }}>{title}</h2>
+    <article className="chart-card">
+      <h3>{title}</h3>
+      <p>{subtitle}</p>
       {children}
+    </article>
+  );
+}
+
+function RunIdControl({
+  runId,
+  baseline = false,
+}: {
+  runId: RunId;
+  baseline?: boolean;
+}) {
+  const copy = () => {
+    void navigator.clipboard.writeText(
+      `npm run capture:scheduled -- ${runId} ${baseline ? "oldWorkpool" : "testWorkpool"}`,
+    );
+  };
+
+  return (
+    <div className="run-id-control">
+      <code title={runId}>{runId}</code>
+      <button type="button" onClick={copy}>
+        Copy capture command
+      </button>
     </div>
+  );
+}
+
+function RunHistory({
+  runs,
+  ids,
+  onSelect,
+}: {
+  runs: RunSummary[];
+  ids: CompareIds;
+  onSelect: (side: "old" | "current", runId: RunId | null) => void;
+}) {
+  if (runs.length === 0) return null;
+  return (
+    <section className="history-section">
+      <div className="history-heading">
+        <div>
+          <p className="step-label">Recent data</p>
+          <h2>Benchmark runs</h2>
+        </div>
+        <span>{runs.length} most recent</span>
+      </div>
+      <div className="history-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Implementation</th>
+              <th>Scenario</th>
+              <th>Work</th>
+              <th>Run ID</th>
+              <th>Tasks</th>
+              <th>Scheduled calls</th>
+              <th>Started</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {runs.map((run) => {
+              const isOld = run.pool === "old";
+              const selected = isOld
+                ? ids.old === run._id
+                : ids.current === run._id;
+              return (
+                <tr key={run._id} className={selected ? "selected" : ""}>
+                  <td>
+                    <span className={`implementation-badge ${isOld ? "old" : "current"}`}>
+                      {isOld ? "0.4.7" : "Current"}
+                    </span>
+                  </td>
+                  <td>{run.scenario}</td>
+                  <td>{run.taskType ?? "mutation"}</td>
+                  <td>
+                    <RunIdControl runId={run._id} baseline={isOld} />
+                  </td>
+                  <td>{formatNumber(run.taskCount)}</td>
+                  <td>{formatNumber(run.scheduledFunctions)}</td>
+                  <td>{formatTime(run.startTime)}</td>
+                  <td>
+                    <button
+                      className="table-button"
+                      onClick={() =>
+                        onSelect(isOld ? "old" : "current", run._id)
+                      }
+                    >
+                      {selected ? "Selected" : "Compare"}
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 

@@ -208,3 +208,43 @@ export const diagnostics = internalQuery({
     };
   },
 });
+
+/**
+ * Benchmark-only CLI instrumentation for comparing scheduler pressure without
+ * expanding the component's public API. Dense ranges can be split by the
+ * caller when `overflow` is true.
+ */
+export const scheduledFunctionsInRange = internalQuery({
+  args: {
+    startTime: v.number(),
+    endTimeExclusive: v.number(),
+  },
+  returns: v.object({
+    count: v.number(),
+    overflow: v.boolean(),
+  }),
+  handler: async (ctx, args) => {
+    if (
+      !Number.isFinite(args.startTime) ||
+      !Number.isFinite(args.endTimeExclusive) ||
+      args.endTimeExclusive <= args.startTime ||
+      args.endTimeExclusive - args.startTime > 24 * 60 * 60 * 1000
+    ) {
+      throw new Error("Invalid scheduled-function time range");
+    }
+
+    const rows = await ctx.db.system
+      .query("_scheduled_functions")
+      .withIndex("by_creation_time", (q) =>
+        q
+          .gte("_creationTime", args.startTime)
+          .lt("_creationTime", args.endTimeExclusive),
+      )
+      .take(1_001);
+
+    return {
+      count: Math.min(rows.length, 1_000),
+      overflow: rows.length > 1_000,
+    };
+  },
+});
