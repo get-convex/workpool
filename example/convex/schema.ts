@@ -18,9 +18,23 @@ export default defineSchema({
   tasks: defineTable({
     runId: v.id("runs"),
     workId: vWorkId,
-    type: v.union(v.literal("mutation"), v.literal("action")),
+    type: v.union(
+      v.literal("mutation"),
+      v.literal("action"),
+      v.literal("query"),
+    ),
     endTime: v.number(),
     enqueuedAt: v.optional(v.number()),
     wave: v.optional(v.number()),
+    // Class label for noisy-neighbor scenarios (e.g. "fast", "slow", "fail").
+    label: v.optional(v.string()),
+    // Terminal result kind reported to onComplete: success | failed | canceled.
+    resultKind: v.optional(v.string()),
   }).index("runId", ["runId"]),
+  // Single shared doc used to force OCC contention between onComplete
+  // handlers in the noisyNeighbor scenario.
+  counters: defineTable({
+    name: v.string(),
+    value: v.number(),
+  }).index("name", ["name"]),
 });

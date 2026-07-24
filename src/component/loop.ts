@@ -32,6 +32,7 @@ import { generateReport, recordCompleted, recordStarted } from "./stats.js";
 
 const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
 const RECOVERY_BATCH_SIZE = 32;
+const START_BATCH_SIZE = 32;
 // Cap per-iteration completions + starts. Larger batches push per-iteration
 // latency up without buying throughput: the loop re-fires immediately while
 // it's draining, so smaller cheaper iterations carry the same work in aggregate.
@@ -538,65 +539,116 @@ async function handleStart(
   { logLevel }: Config,
 ) {
   console.debug(`[main] scheduling ${pending.length} pending work`);
-  // Start new work.
-  state.running.push(
-    ...(
-      await Promise.all(
-        pending.map(async ({ _id, workId, segment }) => {
-          if (state.running.some((r) => r.workId === workId)) {
-            console.error(`[main] ${workId} already running (skipping start)`);
-            return null;
-          }
-          // Guard against a pendingStart a concurrent cancelation removed.
-          if (!(await ctx.db.get("pendingStart", _id))) {
-            return null;
-          }
-          const lagMs = Date.now() - fromSegment(segment);
-          const scheduledId = await beginWork(ctx, workId, logLevel, lagMs);
-          await ctx.db.delete("pendingStart", _id);
-          if (!scheduledId) return null;
-          return { scheduledId, workId, started: Date.now() };
-        }),
-      )
-    ).flatMap((r) => (r ? [r] : [])),
-  );
+  const starts = (
+    await Promise.all(
+      pending.map(async ({ _id, workId, segment }) => {
+        if (state.running.some((r) => r.workId === workId)) {
+          console.error(`[main] ${workId} already running (skipping start)`);
+          return null;
+        }
+        // Guard against a pendingStart a concurrent cancelation removed.
+        if (!(await ctx.db.get("pendingStart", _id))) {
+          return null;
+        }
+        const work = await ctx.db.get("work", workId);
+        await ctx.db.delete("pendingStart", _id);
+        if (!work) {
+          console.error(`Trying to start, but work not found: ${workId}`);
+          return null;
+        }
+        return {
+          work,
+          lagMs: Date.now() - fromSegment(segment),
+        };
+      }),
+    )
+  ).flatMap((r) => (r ? [r] : []));
+
+  state.running.push(...(await beginWorkBatch(ctx, starts, console, logLevel)));
 }
 
-async function beginWork(
+async function beginWorkBatch(
   ctx: MutationCtx,
-  workId: Id<"work">,
+  starts: Array<{
+    work: Doc<"work">;
+    lagMs: number;
+  }>,
+  console: Logger,
   logLevel: LogLevel,
-  lagMs: number,
-): Promise<Id<"_scheduled_functions"> | null> {
-  const console = createLogger(logLevel);
-  const work = await ctx.db.get("work", workId);
-  if (!work) {
-    console.error(`Trying to start, but work not found: ${workId}`);
-    return null;
-  }
-  const { attempts: attempt, fnHandle, fnArgs, payloadId } = work;
-  const args = { workId, fnHandle, fnArgs, payloadId, logLevel, attempt };
-  let scheduleId;
-  if (work.fnType === "action") {
-    scheduleId = await ctx.scheduler.runAfter(
+): Promise<
+  Array<{
+    workId: Id<"work">;
+    scheduledId: Id<"_scheduled_functions">;
+    started: number;
+  }>
+> {
+  const running: Array<{
+    workId: Id<"work">;
+    scheduledId: Id<"_scheduled_functions">;
+    started: number;
+  }> = [];
+  const actionOrQuery = starts.filter(
+    ({ work }) => work.fnType === "action" || work.fnType === "query",
+  );
+  for (let i = 0; i < actionOrQuery.length; i += START_BATCH_SIZE) {
+    const batch = actionOrQuery.slice(i, i + START_BATCH_SIZE);
+    const scheduledId = await ctx.scheduler.runAfter(
       0,
-      internal.worker.runActionWrapper,
-      args,
+      internal.worker.runBatch,
+      {
+        logLevel,
+        items: batch.map(({ work }) => ({
+          workId: work._id,
+          fnHandle: work.fnHandle,
+          fnArgs: work.fnArgs,
+          payloadId: work.payloadId,
+          attempt: work.attempts,
+          fnType: work.fnType as "action" | "query",
+        })),
+      },
     );
-  } else if (work.fnType === "mutation" || work.fnType === "query") {
-    scheduleId = await ctx.scheduler.runAfter(
+    const started = Date.now();
+    for (const { work, lagMs } of batch) {
+      recordStarted(console, work, lagMs, scheduledId);
+      running.push({ workId: work._id, scheduledId, started });
+    }
+  }
+
+  const mutationStarts = starts.filter(
+    ({ work }) => work.fnType === "mutation",
+  );
+  for (const { work, lagMs } of mutationStarts) {
+    const scheduledId = await ctx.scheduler.runAfter(
       0,
       internal.worker.runMutationWrapper,
       {
-        ...args,
-        fnType: work.fnType,
+        workId: work._id,
+        fnHandle: work.fnHandle,
+        fnArgs: work.fnArgs,
+        payloadId: work.payloadId,
+        logLevel,
+        attempt: work.attempts,
+        fnType: "mutation",
       },
     );
-  } else {
-    throw new Error(`Unexpected fnType ${work.fnType}`);
+    recordStarted(console, work, lagMs, scheduledId);
+    running.push({
+      workId: work._id,
+      scheduledId,
+      started: Date.now(),
+    });
   }
-  recordStarted(console, work, lagMs, scheduleId);
-  return scheduleId;
+
+  const unexpected = starts.find(
+    ({ work }) =>
+      work.fnType !== "action" &&
+      work.fnType !== "query" &&
+      work.fnType !== "mutation",
+  );
+  if (unexpected) {
+    throw new Error(`Unexpected fnType ${unexpected.work.fnType}`);
+  }
+  return running;
 }
 
 /**

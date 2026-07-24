@@ -180,10 +180,16 @@ export async function completeHandler(
         }
         recordCompleted(console, work, job.runResult.kind, scheduledId);
 
-        // Clean up any large data that was stored separately.
-        // TODO: consider async deletion in the future to avoid bandwidth limits.
+        // Clean up any large data that was stored separately. Deleting a
+        // nonexistent doc throws; this cleanup must not fail the completion.
         if (work.payloadId) {
-          await ctx.db.delete("payload", work.payloadId);
+          try {
+            await ctx.db.delete("payload", work.payloadId);
+          } catch (e) {
+            console.warn(
+              `[complete] couldn't delete payload for ${job.workId}: ${e}`,
+            );
+          }
         }
 
         // This is the terminating state for work.

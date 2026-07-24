@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.9-alpha.0
+
+- Runs actions and queries in batches of up to 32 from a single scheduled
+  action, instead of scheduling them individually. This reduces scheduled
+  function use and reduces the number of actions used (previously each action
+  had another action wrapping it).
+
 ## 0.4.8
 
 - Reduces "generation mismatch" errors and unnecessary "kick"s from healthchecks
