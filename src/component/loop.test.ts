@@ -247,7 +247,7 @@ describe("loop", () => {
       expect(mutationRunning.scheduledId).not.toBe(actionRunning.scheduledId);
     });
 
-    it("chunks action and query starts into runWork batches of 32", async () => {
+    it("chunks action and query starts into batches of 32", async () => {
       await initialize({ maxParallelism: 64 });
       for (let i = 0; i < 33; i++) {
         await enqueueWork({ fnType: i % 2 === 0 ? "action" : "query" });

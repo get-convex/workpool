@@ -100,10 +100,9 @@ npx convex run test/scenarios/bigReturnTypes '{taskCount:50, argSizeBytes:800000
 
 ### 7. Noisy Neighbor (`scenarios/noisyNeighbor.ts`)
 
-**Purpose**: Verify that misbehaving tasks sharing a batched `runWork` action
-(up to 32 actions/queries per scheduled function) don't delay or corrupt their
-batch-mates. All tasks are enqueued interleaved with a shared future `runAt`
-so they land in the same loop iteration and the same runWork chunk, then
+**Purpose**: Verify that misbehaving tasks sharing a batched action don't delay
+or corrupt their batch-mates. All tasks are enqueued interleaved with a shared
+future `runAt` so they land in the same loop iteration and the same batch, then
 per-class latency/outcome is compared.
 
 **Presets** (`preset` arg): `parallelism` (32 equal 5s actions — intra-batch
@@ -115,13 +114,13 @@ checks exactly-once completion under OCC). Custom mixes via `classes`.
 npx convex run test/scenarios/noisyNeighbor:run '{"preset":"slowNeighbor","pool":"new"}'
 ```
 
-**Worker-death blast radius** is covered by unit tests in `src/component`
-(it needs hooks into component internals to simulate). Findings from live
-testing, for the record:
+**Worker-death blast radius** is covered by unit tests in `src/component` (it
+needs hooks into component internals to simulate). Findings from live testing,
+for the record:
 
 - `scheduler.cancel` on an in-progress action does NOT interrupt it — an
-  in-flight runWork batch survives a cancel and completes normally.
-- The genuine kill vector is the wrapper *throwing*. A missing stored payload
-  used to reject the whole runWork action (31 innocent batch-mates stuck) and
-  also wedged the recovery scan's completion batch forever; runWork now
-  isolates each item and `complete` tolerates an already-deleted payload.
+  in-flight batch survives a cancel and completes normally.
+- The genuine kill vector is the wrapper _throwing_. A missing stored payload
+  used to reject the whole batch (n-1 innocent batch-mates stuck) and also
+  wedged the recovery scan's completion batch forever; it now isolates each item
+  and `complete` tolerates an already-deleted payload.
