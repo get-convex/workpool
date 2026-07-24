@@ -123,8 +123,26 @@ export const runWork = internalAction({
     // arbitrary user code in one onComplete shouldn't couple the others.
     await Promise.all(
       items.map(async (item) => {
-        const job = await runActionOrQueryJob(ctx, console, item);
-        await completeJobInline(ctx, console, job);
+        // No single item may reject the batch: a thrown error here would fail
+        // the whole action and take the other in-flight items down with it.
+        try {
+          const job = await runActionOrQueryJob(ctx, console, item);
+          await completeJobInline(ctx, console, job);
+        } catch (e) {
+          console.error(
+            `[runWork] unexpected error for ${item.workId}, scheduling failed completion: ${e}`,
+          );
+          await ctx.scheduler.runAfter(0, internal.complete.complete, {
+            jobs: [
+              {
+                workId: item.workId,
+                runResult: { kind: "failed", error: formatError(e) },
+                attempt: item.attempt,
+                nonRetryable: isNonRetryableError(e),
+              },
+            ],
+          });
+        }
       }),
     );
   },
@@ -169,21 +187,21 @@ async function runActionOrQueryJob(
 ) {
   const { workId, attempt } = args;
 
-  // Fetch args from payload if stored separately
-  let fnArgs = args.fnArgs;
-  if (fnArgs === undefined) {
-    assert(args.payloadId);
-    fnArgs = await ctx.runQuery(internal.worker.getWorkArgs, {
-      payloadId: args.payloadId,
-    });
-  }
-
   // Run the query directly from the action (its own snapshot — no completion
   // transaction to conflict with, and usage attributes to the query itself),
   // or the action. A transient failure of this wrapping action re-runs the
   // whole thing, which is safe for a query (side-effect free) because
   // `complete` still marks the work done exactly once.
   try {
+    // Fetch args from payload if stored separately. Inside the try so a
+    // missing/corrupt payload fails this item rather than the whole batch.
+    let fnArgs = args.fnArgs;
+    if (fnArgs === undefined) {
+      assert(args.payloadId);
+      fnArgs = await ctx.runQuery(internal.worker.getWorkArgs, {
+        payloadId: args.payloadId,
+      });
+    }
     const returnValue =
       args.fnType === "action"
         ? await ctx.runAction(args.fnHandle as FunctionHandle<"action">, fnArgs)
