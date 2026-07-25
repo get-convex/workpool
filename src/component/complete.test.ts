@@ -142,6 +142,53 @@ describe("complete", () => {
       });
     });
 
+    it("completes work whose stored payload is already gone", async () => {
+      // Big args are stored in the payload table and deleted on completion.
+      // If the payload is already missing (corruption, manual deletion), the
+      // completion must still succeed: one bad job would otherwise fail the
+      // whole completion batch — and wedge the recovery scan forever.
+      const workId = await t.mutation(api.lib.enqueue, {
+        fnHandle: "testHandle",
+        fnName: "testFunction",
+        fnArgs: { filler: "x".repeat(10_000) },
+        fnType: "action",
+        runAt: Date.now(),
+        config: {
+          maxParallelism: 10,
+          logLevel: "WARN",
+        },
+      });
+      await t.run(async (ctx) => {
+        const work = await ctx.db.get("work", workId);
+        assert(work?.payloadId);
+        await ctx.db.delete("payload", work.payloadId);
+      });
+
+      await t.run(async (ctx) => {
+        await completeHandler(ctx, {
+          jobs: [
+            {
+              workId,
+              runResult: { kind: "failed", error: "poisoned" },
+              attempt: 0,
+            },
+          ],
+        });
+      });
+
+      // Work reached its terminal state despite the missing payload.
+      await t.run(async (ctx) => {
+        const work = await ctx.db.get("work", workId);
+        expect(work).toBeNull();
+        const pendingCompletions = await ctx.db
+          .query("pendingCompletion")
+          .withIndex("workId", (q) => q.eq("workId", workId))
+          .collect();
+        expect(pendingCompletions).toHaveLength(1);
+        expect(pendingCompletions[0].runResult.kind).toBe("failed");
+      });
+    });
+
     it("should process a failed job with retry behavior", async () => {
       // Enqueue a work item with retry behavior
       const workId = await t.mutation(api.lib.enqueue, {
