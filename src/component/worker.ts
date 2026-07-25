@@ -136,9 +136,9 @@ export const runBatch = internalAction({
 /**
  * Complete a single action/query. Runs the completion — including the
  * onComplete callback — inline in its own transaction (called directly from
- * this action). If that hits an OCC we durably schedule the completion as a
- * batch of one; the scheduler retries it (and its inline onComplete) on OCC
- * until it succeeds. This is safe even for a job whose function already ran:
+ * this action). If that hits an OCC, we fall back to scheduled onComplete; the
+ * scheduler retries it (and its inline onComplete) on OCC until it succeeds.
+ * This is safe even for a job whose function already ran:
  * `complete` marks the work done exactly once, guarded by the work deletion.
  */
 async function completeInline(
@@ -150,7 +150,7 @@ async function completeInline(
     await ctx.runMutation(internal.complete.complete, { jobs: [job] });
   } catch (e) {
     console.error(
-      `[runBatch] completing ${job.workId} inline failed, scheduling a batch of one instead: ${e}`,
+      `[runBatch] completing ${job.workId} inline failed, falling back to scheduled onComplete: ${e}`,
     );
     await ctx.scheduler.runAfter(0, internal.complete.complete, {
       jobs: [job],
