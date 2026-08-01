@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.9-alpha.0
+## 0.4.9
 
 - Runs actions and queries in batches of up to 32 from a single scheduled
   action, instead of scheduling them individually. This reduces scheduled
