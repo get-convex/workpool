@@ -10,7 +10,6 @@
 
 import type * as crons from "../crons.js";
 import type * as example from "../example.js";
-import type * as http from "../http.js";
 import type * as staticHosting from "../staticHosting.js";
 import type * as test_dashboard from "../test/dashboard.js";
 import type * as test_noisy from "../test/noisy.js";
@@ -36,7 +35,6 @@ import type {
 declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   example: typeof example;
-  http: typeof http;
   staticHosting: typeof staticHosting;
   "test/dashboard": typeof test_dashboard;
   "test/noisy": typeof test_noisy;
@@ -86,5 +84,5 @@ export declare const components: {
   serializedPool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"serializedPool">;
   testWorkpool: import("@convex-dev/workpool/_generated/component.js").ComponentApi<"testWorkpool">;
   oldWorkpool: import("@convex-dev/workpool-old/_generated/component.js").ComponentApi<"oldWorkpool">;
-  selfHosting: import("@convex-dev/static-hosting/_generated/component.js").ComponentApi<"selfHosting">;
+  staticHosting: import("@convex-dev/static-hosting/_generated/component.js").ComponentApi<"staticHosting">;
 };

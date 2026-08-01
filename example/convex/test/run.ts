@@ -121,6 +121,58 @@ export const metrics = internalQuery({
   },
 });
 
+export const latestRunForPoolSince = internalQuery({
+  args: {
+    pool: v.union(v.literal("new"), v.literal("old")),
+    since: v.number(),
+  },
+  returns: v.union(v.id("runs"), v.null()),
+  handler: async (ctx, args) => {
+    const runs = await ctx.db.query("runs").order("desc").take(20);
+    return (
+      runs.find(
+        (run) =>
+          run.startTime >= args.since && (run.pool ?? "new") === args.pool,
+      )?._id ?? null
+    );
+  },
+});
+
+export const captureBounds = internalQuery({
+  args: { runId: v.id("runs") },
+  returns: v.union(
+    v.object({ startTime: v.number(), endTime: v.number() }),
+    v.null(),
+  ),
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get("runs", args.runId);
+    if (!run) return null;
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("runId", (q) => q.eq("runId", args.runId))
+      .collect();
+    if (tasks.length === 0) return null;
+    return {
+      startTime: run.startTime,
+      endTime: Math.max(...tasks.map((task) => task.endTime)),
+    };
+  },
+});
+
+export const setScheduledFunctionCount = internalMutation({
+  args: { runId: v.id("runs"), count: v.number() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    if (!Number.isInteger(args.count) || args.count < 0) {
+      throw new Error(
+        "Scheduled-function count must be a non-negative integer",
+      );
+    }
+    await ctx.db.patch("runs", args.runId, { scheduledFunctions: args.count });
+    return null;
+  },
+});
+
 async function buildRunMetrics(ctx: QueryCtx, run: Doc<"runs">) {
   const tasks = await ctx.db
     .query("tasks")

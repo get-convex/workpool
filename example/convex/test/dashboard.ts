@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { query, action } from "../_generated/server";
 import { internal } from "../_generated/api";
+import type { Id } from "../_generated/dataModel";
 import { runStatus } from "./run";
 
 function percentile(sorted: number[], p: number): number {
@@ -21,6 +22,12 @@ export const listRuns = query({
       pool: run.pool,
       startTime: run.startTime,
       taskCount: run.taskCount,
+      scheduledFunctions: run.scheduledFunctions,
+      parameters: run.parameters,
+      taskType:
+        typeof run.parameters?.taskType === "string"
+          ? run.parameters.taskType
+          : undefined,
     }));
   },
 });
@@ -48,6 +55,7 @@ export const getRun = query({
       pool: run.pool,
       startTime: run.startTime,
       taskCount: run.taskCount,
+      scheduledFunctions: run.scheduledFunctions,
       completedCount: tasks.length,
       status,
       totalDurationMs:
@@ -211,5 +219,64 @@ export const runScenarios = action({
       }
       await ctx.runAction(fn, argsList[i]);
     }
+  },
+});
+
+/** Runs the same scenario on the published baseline and this branch. */
+export const runComparison = action({
+  args: { scenario: scenarioName, args: v.any() },
+  returns: v.object({
+    oldRunId: v.id("runs"),
+    newRunId: v.id("runs"),
+  }),
+  handler: async (
+    ctx,
+    { scenario, args },
+  ): Promise<{
+    oldRunId: Id<"runs">;
+    newRunId: Id<"runs">;
+  }> => {
+    const fn = internal.test.scenarios[scenario].default;
+
+    const oldStartedAfter = Date.now();
+    await ctx.runAction(fn, { ...args, pool: "old" });
+    const oldRunId: Id<"runs"> | null = await ctx.runQuery(
+      internal.test.run.latestRunForPoolSince,
+      { pool: "old", since: oldStartedAfter },
+    );
+    if (!oldRunId)
+      throw new Error("The baseline scenario did not create a run");
+
+    const newStartedAfter = Date.now();
+    await ctx.runAction(fn, { ...args, pool: "new" });
+    const newRunId: Id<"runs"> | null = await ctx.runQuery(
+      internal.test.run.latestRunForPoolSince,
+      { pool: "new", since: newStartedAfter },
+    );
+    if (!newRunId) throw new Error("The current scenario did not create a run");
+
+    return { oldRunId, newRunId };
+  },
+});
+
+/** Runs a scenario only against the component from this branch. */
+export const runCurrent = action({
+  args: { scenario: scenarioName, args: v.any() },
+  returns: v.object({ newRunId: v.id("runs") }),
+  handler: async (
+    ctx,
+    { scenario, args },
+  ): Promise<{
+    newRunId: Id<"runs">;
+  }> => {
+    const fn = internal.test.scenarios[scenario].default;
+    const startedAfter = Date.now();
+    await ctx.runAction(fn, { ...args, pool: "new" });
+    const newRunId: Id<"runs"> | null = await ctx.runQuery(
+      internal.test.run.latestRunForPoolSince,
+      { pool: "new", since: startedAfter },
+    );
+    if (!newRunId) throw new Error("The current scenario did not create a run");
+    return { newRunId };
   },
 });

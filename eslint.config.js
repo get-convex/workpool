@@ -94,7 +94,11 @@ export default [
   },
   // Example config files (vite.config.ts, etc.) - Node environment
   {
-    files: ["example/vite.config.ts", "example/**/*.config.{js,ts}"],
+    files: [
+      "scripts/**/*.{js,mjs,cjs}",
+      "example/vite.config.ts",
+      "example/**/*.config.{js,ts}",
+    ],
     languageOptions: {
       globals: {
         ...globals.node,
