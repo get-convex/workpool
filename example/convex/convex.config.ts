@@ -4,10 +4,10 @@ import workpoolOld from "@convex-dev/workpool-old/convex.config";
 import staticHosting from "@convex-dev/static-hosting/convex.config";
 
 const app = defineApp();
-app.use(workpool, { name: "smallPool" });
-app.use(workpool, { name: "bigPool" });
-app.use(workpool, { name: "serializedPool" });
-app.use(workpool, { name: "testWorkpool" });
+app.use(workpool, { name: "smallPool", env: {} });
+app.use(workpool, { name: "bigPool", env: {} });
+app.use(workpool, { name: "serializedPool", env: {} });
+app.use(workpool, { name: "testWorkpool", env: {} });
 app.use(workpoolOld, { name: "oldWorkpool" });
 app.use(staticHosting);
 

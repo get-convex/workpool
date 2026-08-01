@@ -1,9 +1,10 @@
 import { v, type Infer } from "convex/values";
+import { env } from "./_generated/server.js";
 
 export const DEFAULT_LOG_LEVEL: LogLevel = "REPORT";
 
 // NOTE: the ordering here is important! A config level of "INFO" will log
-// "INFO", "REPORT", "WARN",and "ERROR" events.
+// "INFO", "REPORT", "WARN", and "ERROR" events.
 export const logLevel = v.union(
   v.literal("DEBUG"),
   v.literal("TRACE"),
@@ -32,8 +33,11 @@ const logLevelByName = logLevelOrder.reduce(
   },
   {} as Record<LogLevel, number>,
 );
-export function shouldLog(config: LogLevel, level: LogLevel) {
-  return logLevelByName[config] <= logLevelByName[level];
+export function effectiveLogLevel(level?: LogLevel): LogLevel {
+  return env.LOG_LEVEL ?? level ?? DEFAULT_LOG_LEVEL;
+}
+export function shouldLog(config: LogLevel | undefined, level: LogLevel) {
+  return logLevelByName[effectiveLogLevel(config)] <= logLevelByName[level];
 }
 const DEBUG = logLevelByName["DEBUG"];
 const TRACE = logLevelByName["TRACE"];
@@ -43,9 +47,10 @@ const WARN = logLevelByName["WARN"];
 const ERROR = logLevelByName["ERROR"];
 
 export function createLogger(level?: LogLevel): Logger {
-  const levelIndex = logLevelByName[level ?? DEFAULT_LOG_LEVEL];
+  const resolvedLevel = effectiveLogLevel(level);
+  const levelIndex = logLevelByName[resolvedLevel];
   if (levelIndex === undefined) {
-    throw new Error(`Invalid log level: ${level}`);
+    throw new Error(`Invalid log level: ${resolvedLevel}`);
   }
   return {
     debug: (...args: unknown[]) => {
