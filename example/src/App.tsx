@@ -95,9 +95,7 @@ function App() {
   const changeLinked = (nextLinked: boolean) => {
     setLinked(nextLinked);
     if (!nextLinked || !runs) return;
-    const selected = runs.find(
-      (run) => run._id === (ids.current ?? ids.old),
-    );
+    const selected = runs.find((run) => run._id === (ids.current ?? ids.old));
     if (!selected) return;
     const counterpart = findCounterpart(selected, runs);
     if (!counterpart) return;
@@ -169,7 +167,8 @@ const SCENARIOS = {
   },
   throughput: {
     label: "Sustained throughput",
-    description: "Saturates both pools and compares steady-state completion rate.",
+    description:
+      "Saturates both pools and compares steady-state completion rate.",
     parameters: {
       taskCount: 1000,
       batchSize: 100,
@@ -436,7 +435,8 @@ function RunPicker({
             <option value="">Select a baseline run</option>
             {oldRuns.map((run) => (
               <option key={run._id} value={run._id}>
-                {run.scenario} [{run.taskType ?? "mutation"}] · {formatTime(run.startTime)}
+                {run.scenario} [{run.taskType ?? "mutation"}] ·{" "}
+                {formatTime(run.startTime)}
               </option>
             ))}
           </select>
@@ -453,7 +453,8 @@ function RunPicker({
             <option value="">Select a current run</option>
             {currentRuns.map((run) => (
               <option key={run._id} value={run._id}>
-                {run.scenario} [{run.taskType ?? "mutation"}] · {formatTime(run.startTime)}
+                {run.scenario} [{run.taskType ?? "mutation"}] ·{" "}
+                {formatTime(run.startTime)}
               </option>
             ))}
           </select>
@@ -504,9 +505,13 @@ function Comparison({ ids }: { ids: CompareIds }) {
   const cdfData = useMemo(() => {
     const oldPoints = oldCdf ?? [];
     const currentPoints = currentCdf ?? [];
-    const times = [...new Set([...oldPoints, ...currentPoints].map((p) => p.ms))]
-      .sort((a, b) => a - b);
-    const cumulativeAt = (points: Array<{ ms: number; pct: number }>, ms: number) =>
+    const times = [
+      ...new Set([...oldPoints, ...currentPoints].map((p) => p.ms)),
+    ].sort((a, b) => a - b);
+    const cumulativeAt = (
+      points: Array<{ ms: number; pct: number }>,
+      ms: number,
+    ) =>
       points.reduce(
         (latest, point) => (point.ms <= ms ? point.pct : latest),
         0,
@@ -523,7 +528,9 @@ function Comparison({ ids }: { ids: CompareIds }) {
       return <section className="loading-panel">Loading current run…</section>;
     }
     if (!currentRun) {
-      return <section className="empty-state">This run no longer exists.</section>;
+      return (
+        <section className="empty-state">This run no longer exists.</section>
+      );
     }
     return (
       <section id="comparison-results" className="results-section">
@@ -562,7 +569,11 @@ function Comparison({ ids }: { ids: CompareIds }) {
     return <section className="loading-panel">Loading comparison…</section>;
   }
   if (!oldRun || !currentRun) {
-    return <section className="empty-state">One of these runs no longer exists.</section>;
+    return (
+      <section className="empty-state">
+        One of these runs no longer exists.
+      </section>
+    );
   }
 
   const sameScenario =
@@ -630,7 +641,8 @@ function OutcomeSummary({
     <div className="outcome-card">
       <div>
         <p className="step-label">
-          Result · {current.scenario} · {String(current.parameters?.taskType ?? "mutation")}
+          Result · {current.scenario} ·{" "}
+          {String(current.parameters?.taskType ?? "mutation")}
         </p>
         <h2>
           {gains.length > 0
@@ -709,11 +721,7 @@ function MetricGrid({
   return (
     <div className="metric-grid">
       {metrics.map((metric) => {
-        const gain = improvement(
-          metric.baseline,
-          metric.current,
-          metric.lower,
-        );
+        const gain = improvement(metric.baseline, metric.current, metric.lower);
         return (
           <article className="metric-card" key={metric.label}>
             <div className="metric-heading">
@@ -762,7 +770,11 @@ function RunCharts({
             <defs>
               <linearGradient id="currentFill" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={CURRENT_COLOR} stopOpacity={0.3} />
-                <stop offset="100%" stopColor={CURRENT_COLOR} stopOpacity={0.02} />
+                <stop
+                  offset="100%"
+                  stopColor={CURRENT_COLOR}
+                  stopOpacity={0.02}
+                />
               </linearGradient>
             </defs>
             <CartesianGrid stroke="#d8e1df" vertical={false} />
@@ -935,7 +947,9 @@ function RunHistory({
               return (
                 <tr key={run._id} className={selected ? "selected" : ""}>
                   <td>
-                    <span className={`implementation-badge ${isOld ? "old" : "current"}`}>
+                    <span
+                      className={`implementation-badge ${isOld ? "old" : "current"}`}
+                    >
                       {isOld ? "0.4.7" : "Current"}
                     </span>
                   </td>

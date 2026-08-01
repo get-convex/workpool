@@ -164,7 +164,9 @@ export const setScheduledFunctionCount = internalMutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     if (!Number.isInteger(args.count) || args.count < 0) {
-      throw new Error("Scheduled-function count must be a non-negative integer");
+      throw new Error(
+        "Scheduled-function count must be a non-negative integer",
+      );
     }
     await ctx.db.patch("runs", args.runId, { scheduledFunctions: args.count });
     return null;

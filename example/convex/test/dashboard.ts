@@ -229,7 +229,10 @@ export const runComparison = action({
     oldRunId: v.id("runs"),
     newRunId: v.id("runs"),
   }),
-  handler: async (ctx, { scenario, args }): Promise<{
+  handler: async (
+    ctx,
+    { scenario, args },
+  ): Promise<{
     oldRunId: Id<"runs">;
     newRunId: Id<"runs">;
   }> => {
@@ -241,7 +244,8 @@ export const runComparison = action({
       internal.test.run.latestRunForPoolSince,
       { pool: "old", since: oldStartedAfter },
     );
-    if (!oldRunId) throw new Error("The baseline scenario did not create a run");
+    if (!oldRunId)
+      throw new Error("The baseline scenario did not create a run");
 
     const newStartedAfter = Date.now();
     await ctx.runAction(fn, { ...args, pool: "new" });
@@ -259,7 +263,10 @@ export const runComparison = action({
 export const runCurrent = action({
   args: { scenario: scenarioName, args: v.any() },
   returns: v.object({ newRunId: v.id("runs") }),
-  handler: async (ctx, { scenario, args }): Promise<{
+  handler: async (
+    ctx,
+    { scenario, args },
+  ): Promise<{
     newRunId: Id<"runs">;
   }> => {
     const fn = internal.test.scenarios[scenario].default;

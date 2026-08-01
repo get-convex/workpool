@@ -2,9 +2,7 @@ import { execFileSync } from "node:child_process";
 
 const [runId, component = "oldWorkpool"] = process.argv.slice(2);
 if (!runId) {
-  console.error(
-    "Usage: npm run capture:scheduled -- <runId> [componentPath]",
-  );
+  console.error("Usage: npm run capture:scheduled -- <runId> [componentPath]");
   process.exit(1);
 }
 
@@ -26,13 +24,7 @@ if (!bounds) {
 function countRange(startTime, endTimeExclusive) {
   const inlineQuery = `const rows = await ctx.db.system.query("_scheduled_functions").withIndex("by_creation_time", q => q.gte("_creationTime", ${startTime}).lt("_creationTime", ${endTimeExclusive})).take(1001); return { count: Math.min(rows.length, 1000), overflow: rows.length > 1000 };`;
   const result = JSON.parse(
-    convex([
-      "run",
-      "--component",
-      component,
-      "--inline-query",
-      inlineQuery,
-    ]),
+    convex(["run", "--component", component, "--inline-query", inlineQuery]),
   );
   if (!result.overflow) return result.count;
   if (endTimeExclusive - startTime <= 1) {
@@ -40,8 +32,7 @@ function countRange(startTime, endTimeExclusive) {
   }
   const midpoint = Math.floor((startTime + endTimeExclusive) / 2);
   return (
-    countRange(startTime, midpoint) +
-    countRange(midpoint, endTimeExclusive)
+    countRange(startTime, midpoint) + countRange(midpoint, endTimeExclusive)
   );
 }
 
