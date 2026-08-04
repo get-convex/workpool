@@ -38,4 +38,11 @@ export default defineSchema({
     name: v.string(),
     value: v.number(),
   }).index("name", ["name"]),
+  // When each probe in test/scheduling.ts ran, to check delayed and retried
+  // work against a real deployment.
+  schedulingProbes: defineTable({
+    label: v.string(),
+    at: v.number(),
+    attempt: v.optional(v.number()),
+  }),
 });
