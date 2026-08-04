@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- Orders the pending-work queues by commit timestamp (`v.commitTs()`, Convex ≥
+  1.43). A commit timestamp is assigned when the transaction commits, so nothing
+  can appear behind a cursor the main loop has already read past. That removes
+  the 15-second cursor rewind buffer and the once-a-minute full rescan that
+  0.4.7 added to cope with out-of-order inserts — the loop now reads only rows
+  it hasn't seen. On a 5000-task saturation benchmark (parallelism 200, 20ms
+  tasks) this ran ~16% faster — 121 → 144 tasks/s, with p99 latency down from
+  ~32s to ~25s.
+- The `segment` fields keep their name and index, but now hold nanoseconds
+  rather than 100ms buckets. Work scheduled to start later stores its start time
+  there directly, which sorts after everything already committed, so one index
+  covers both ready and scheduled work. Entries an older version wrote have much
+  smaller values, so they sort first and get processed promptly on upgrade.
+- Requires `convex` 1.43 or later.
+
 ## 0.4.9
 
 - Runs actions and queries in batches of up to 32 from a single scheduled
