@@ -253,6 +253,10 @@ can learn about [here](https://docs.convex.dev/get-started).
 Run `npm create convex` or follow any of the
 [quickstarts](https://docs.convex.dev/home) to set one up.
 
+Workpool orders its internal queues by
+[commit timestamp](https://docs.convex.dev/database/advanced/commit-timestamp),
+so it needs `convex` 1.43 or later.
+
 ### Install the component
 
 See [`example/`](./example/convex/) for a working demo.
