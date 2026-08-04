@@ -15,8 +15,8 @@ import { setupTest } from "./setup.test.js";
 import {
   DEFAULT_MAX_PARALLELISM,
   fromSegment,
-  getCurrentSegment,
-  toSegment,
+  SAFE_FUTURE_MS,
+  toTimestamp,
   WORKER_NAME,
 } from "./shared.js";
 
@@ -76,7 +76,11 @@ describe("loop", () => {
     await t.run(async (ctx) => {
       await ctx.db.insert("internalState", {
         generation: 0n,
-        segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
+        segmentCursors: {
+          incoming: 0n,
+          completion: 0n,
+          cancelation: 0n,
+        },
         lastRecovery: 0n,
         report: {
           completed: 0,
@@ -92,12 +96,15 @@ describe("loop", () => {
   }
 
   /**
-   * Insert a work doc + pendingStart at the given segment (default: now).
+   * Insert a work doc + pendingStart the way `enqueue` does. `runAt` holds the
+   * work until then; the default runs it as soon as the loop sees it. `segment`
+   * pins the ordering value, e.g. to give several entries the same one the way
+   * a single batch enqueue does.
    * Bypasses the public enqueue API to keep tests focused on the loop.
    */
   async function enqueueWork(
     overrides: Partial<WithoutSystemFields<Doc<"work">>> = {},
-    segment = getCurrentSegment(),
+    { runAt, segment }: { runAt?: number; segment?: bigint } = {},
   ): Promise<Id<"work">> {
     return t.run(async (ctx) => {
       const workId = await ctx.db.insert("work", {
@@ -108,7 +115,16 @@ describe("loop", () => {
         attempts: 0,
         ...overrides,
       });
-      await ctx.db.insert("pendingStart", { workId, segment });
+      const delayMs = (runAt ?? 0) - Date.now();
+      await ctx.db.insert("pendingStart", {
+        workId,
+        segment:
+          segment ??
+          (delayMs > SAFE_FUTURE_MS
+            ? toTimestamp(runAt!)
+            : ctx.db.vars.commitTs),
+        ...(delayMs > 0 ? { runAt } : {}),
+      });
       return workId;
     });
   }
@@ -155,6 +171,7 @@ describe("loop", () => {
         .collect();
       return {
         running: state?.running ?? [],
+        segmentCursors: state?.segmentCursors,
         lastRecovery: state?.lastRecovery ?? 0n,
         pendingStart,
         pendingCompletion,
@@ -312,6 +329,38 @@ describe("loop", () => {
       expect(o.running.map((r) => r.workId)).not.toContain(finished);
     });
 
+    it("doesn't drop work that shares a commit timestamp with the cursor", async () => {
+      // A batch enqueue commits every row at the same commit timestamp, so the
+      // cursor lands in the middle of a group whenever capacity cuts one short.
+      await initialize({ maxParallelism: 2 });
+      const sharedTimestamp = 1_000n;
+      const ids = [];
+      for (let i = 0; i < 4; i++) {
+        ids.push(await enqueueWork({}, { segment: sharedTimestamp }));
+      }
+
+      const started: Id<"work">[] = [];
+      for (let i = 0; i < 4; i++) {
+        await runLoop();
+        const o = await observe();
+        for (const r of o.running) {
+          if (!started.includes(r.workId)) started.push(r.workId);
+        }
+        for (const r of o.running) {
+          await simulateCompletion(
+            r.workId,
+            { kind: "success", returnValue: null },
+            0,
+          );
+        }
+      }
+      await runLoop();
+
+      // All four ran even though the cursor sat on their shared timestamp.
+      expect(new Set(started)).toEqual(new Set(ids));
+      expect((await observe()).pendingStart).toHaveLength(0);
+    });
+
     it("does not start new work when running.length already exceeds maxParallelism", async () => {
       // Edge case: maxParallelism was lowered while jobs were running.
       await initialize({ maxParallelism: 2 });
@@ -391,6 +440,29 @@ describe("loop", () => {
         state: "pending",
         previousAttempts: 1,
       });
+    });
+
+    it("starts the retry once its backoff elapses, and advances past it", async () => {
+      await initialize();
+      const workId = await enqueueWork({
+        retryBehavior: { maxAttempts: 3, initialBackoffMs: 100, base: 2 },
+      });
+      await runLoop();
+      await simulateCompletion(workId, { kind: "failed", error: "boom" }, 0);
+      await runLoop();
+
+      // Still held back by the backoff: nothing to start yet.
+      expect((await runLoop()).kind).toBe("idle");
+      expect((await observe()).pendingStart).toHaveLength(1);
+
+      // Once the backoff elapses it starts from the not-yet-due lane, and the
+      // lane's cursor moves past it so its tombstone isn't rescanned.
+      vi.advanceTimersByTime(SECOND);
+      await runLoop();
+      const o = await observe();
+      expect(o.pendingStart).toHaveLength(0);
+      expect(o.running.map((r) => r.workId)).toEqual([workId]);
+      expect(o.segmentCursors?.incoming).toBeGreaterThan(0n);
     });
 
     it("does NOT re-enqueue a failed job that was canceled before retry processed", async () => {
@@ -501,10 +573,11 @@ describe("loop", () => {
       expect(result.batch.recovery).toBe(false);
     });
 
-    it("idles with a timeoutMs when only future-scheduled work remains", async () => {
+    it("idles with a timeoutMs when only far-future work remains", async () => {
       await initialize();
-      const future = getCurrentSegment() + 1000n; // 100s out
-      await enqueueWork({}, future);
+      // Beyond SAFE_FUTURE_MS, so the enqueue ordered it by its start time and
+      // the loop never has to look at it.
+      await enqueueWork({}, { runAt: Date.now() + 2 * SAFE_FUTURE_MS });
 
       const result = await t.query(internal.loop.getBatch, {
         name: WORKER_NAME,
@@ -513,13 +586,42 @@ describe("loop", () => {
       expect(result.timeoutMs).toBeGreaterThan(0);
     });
 
+    it("moves near-future work forward once, then idles until it's due", async () => {
+      await initialize();
+      const runAt = Date.now() + 100 * SECOND;
+      // Inside SAFE_FUTURE_MS, so the enqueue had to order it by its commit
+      // timestamp; the loop sees it as eligible exactly once, to move it.
+      const workId = await enqueueWork({}, { runAt });
+
+      const first = await runLoop();
+      assert(first.kind === "work");
+      expect(first.batch.starts.map((s) => s.workId)).toEqual([workId]);
+
+      let o = await observe();
+      expect(o.running).toHaveLength(0); // moved, not started
+      expect(o.pendingStart[0].segment).toBe(toTimestamp(runAt));
+      // The cursor moved past where it used to sit, so it won't come back.
+      expect(o.segmentCursors!.incoming).toBeLessThan(toTimestamp(runAt));
+
+      const second = await runLoop();
+      assert(second.kind === "idle");
+      expect(second.timeoutMs).toBe(100 * SECOND);
+
+      // It starts when it comes due, without another move.
+      vi.advanceTimersByTime(100 * SECOND);
+      await runLoop();
+      o = await observe();
+      expect(o.pendingStart).toHaveLength(0);
+      expect(o.running.map((r) => r.workId)).toEqual([workId]);
+    });
+
     it("idles with a timeoutMs for the next recovery scan when that's sooner than future work", async () => {
       await initialize();
       await enqueueWork();
       await runLoop(); // start it: running=1, lastRecovery=now
 
       // Future work well past the ~1min recovery period.
-      await enqueueWork({}, getCurrentSegment() + toSegment(5 * MINUTE));
+      await enqueueWork({}, { runAt: Date.now() + 2 * SAFE_FUTURE_MS });
 
       const result = await t.query(internal.loop.getBatch, {
         name: WORKER_NAME,

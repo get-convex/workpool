@@ -20,12 +20,15 @@ import {
 import {
   type Config,
   DEFAULT_MAX_PARALLELISM,
+  endOfMs,
   fromSegment,
+  fromTimestamp,
   getCurrentSegment,
   MINUTE,
   SECOND,
   type RunResult,
   toSegment,
+  toTimestamp,
   vResult,
 } from "./shared.js";
 import { generateReport, recordCompleted, recordStarted } from "./stats.js";
@@ -45,14 +48,6 @@ export const RECOVERY_PERIOD_SEGMENTS = toSegment(1 * MINUTE); // how often to c
 // cooldown behavior, now expressed via batch-worker's idle hints.
 export const STATUS_COOLDOWN = 2 * SECOND;
 export const COOLDOWN_CHECK_INTERVAL = 200;
-// Buffer applied when querying with cursors. Transactions that started
-// before ours may still be running and commit inserts at segments behind
-// a previously advanced cursor — the buffer lets us pick those up. Most
-// commits land within milliseconds, so a small buffer covers nearly all
-// of them. The minute-cadence recovery iteration scans from segment 0
-// (the start of each pending table) to catch any very-late commit that
-// fell behind even this buffer.
-const CURSOR_BUFFER_SEGMENTS = toSegment(15 * SECOND);
 
 export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
   generation: 0n,
@@ -98,6 +93,7 @@ const vStart = v.object({
   _id: v.id("pendingStart"),
   workId: v.id("work"),
   segment: v.int64(),
+  runAt: v.optional(v.number()),
 });
 type Start = Infer<typeof vStart>;
 
@@ -132,34 +128,22 @@ export const getBatch = internalQuery({
     const cursors = state?.segmentCursors ?? INITIAL_STATE.segmentCursors;
     const lastRecovery = state?.lastRecovery ?? INITIAL_STATE.lastRecovery;
     const segment = getCurrentSegment();
+    const eligibleBefore = endOfMs(Date.now());
 
-    // Once per recovery period (≈1min), scan from segment 0 to catch any
-    // very-late commit that fell behind the cursor buffer, and to recover any
-    // stuck running jobs. Otherwise scan from the cursors (minus a buffer for
-    // out-of-order inserts that landed behind the cursor since the last scan).
+    // Once per recovery period (≈1min), check for stuck running jobs. The
+    // pending queues need no periodic rescan: they're ordered by commit
+    // timestamp, so nothing can appear behind a cursor we've read past.
     const isRecoveryIter =
       running.length > 0 && segment - lastRecovery >= RECOVERY_PERIOD_SEGMENTS;
-    const queryArgs = isRecoveryIter
-      ? {
-          completionCursor: 0n,
-          cancelationCursor: 0n,
-          incomingCursor: 0n,
-          maxParallelism: globals.maxParallelism,
-          runningCount: running.length,
-        }
-      : {
-          completionCursor: cursors.completion - CURSOR_BUFFER_SEGMENTS,
-          cancelationCursor: cursors.cancelation - CURSOR_BUFFER_SEGMENTS,
-          incomingCursor: cursors.incoming - CURSOR_BUFFER_SEGMENTS,
-          maxParallelism: globals.maxParallelism,
-          runningCount: running.length,
-        };
 
-    const { allStarts, cancelations, completions } = await queryPending(
-      ctx,
-      queryArgs,
-    );
-    const starts = allStarts.filter((s) => s.segment <= segment);
+    const { starts, cancelations, completions } = await queryPending(ctx, {
+      completionCursor: cursors.completion,
+      cancelationCursor: cursors.cancelation,
+      incomingCursor: cursors.incoming,
+      maxParallelism: globals.maxParallelism,
+      runningCount: running.length,
+      eligibleBefore,
+    });
 
     const hasWork =
       completions.length > 0 ||
@@ -176,18 +160,14 @@ export const getBatch = internalQuery({
           workId: c.workId,
           runResult: c.runResult,
           retry: c.retry,
-          segment: c.segment,
+          segment: c.segment as bigint,
         })),
         cancelations: cancelations.map((c) => ({
           _id: c._id,
           workId: c.workId,
-          segment: c.segment,
+          segment: c.segment as bigint,
         })),
-        starts: starts.map((s) => ({
-          _id: s._id,
-          workId: s.workId,
-          segment: s.segment,
-        })),
+        starts,
       };
       return { kind: "work" as const, batch };
     }
@@ -195,10 +175,13 @@ export const getBatch = internalQuery({
     // Nothing to do now. Figure out when to wake up next: the sooner of the
     // earliest future-scheduled start and (if jobs are running) the next
     // recovery scan. A ping still wakes us sooner.
-    const futureStart = allStarts.find((s) => s.segment > segment);
+    const futureStart = await ctx.db
+      .query("pendingStart")
+      .withIndex("segment", (q) => q.gte("segment", eligibleBefore))
+      .first();
     const waits: number[] = [];
     if (futureStart) {
-      waits.push(fromSegment(futureStart.segment) - Date.now());
+      waits.push(fromTimestamp(futureStart.segment as bigint) - Date.now());
     }
     if (running.length > 0) {
       const nextRecovery = lastRecovery + RECOVERY_PERIOD_SEGMENTS;
@@ -262,11 +245,25 @@ export const run = internalMutation({
     }
 
     // ── Start new work ──
+    // Entries whose `runAt` hasn't arrived were only visible because we
+    // couldn't safely write that time into `segment` at enqueue. We can here:
+    // this transaction also writes the cursor, so a value past `now` is
+    // guaranteed to land ahead of it. Move them and they stop coming back.
+    const now = Date.now();
+    const isDue = (s: Start) => s.runAt === undefined || s.runAt <= now;
+    const notYet = batch.starts.filter((s) => !isDue(s));
+    const eligible = batch.starts.filter(isDue);
+    if (notYet.length > 0) {
+      const promoteLabel = `[main] promote(${notYet.length})`;
+      console.time(promoteLabel);
+      await promoteScheduled(ctx, notYet);
+      console.timeEnd(promoteLabel);
+    }
+
     // Slice to actual available capacity (completions may have freed slots).
     // Guard against negative numbers in case running.length > maxParallelism.
     const actualCapacity = globals.maxParallelism - state.running.length;
-    const pending =
-      actualCapacity > 0 ? batch.starts.slice(0, actualCapacity) : [];
+    const pending = actualCapacity > 0 ? eligible.slice(0, actualCapacity) : [];
     const startLabel = `[main] pendingStart(${pending.length})`;
     console.time(startLabel);
     await handleStart(ctx, state, pending, console, globals);
@@ -295,18 +292,21 @@ export const run = internalMutation({
     }
 
     // Advance cursors to skip tombstones on next scan, but only for the
-    // queues we actually drained this iteration.
+    // queues we actually drained this iteration. The batches came back in
+    // commit order, so the last entry is the furthest we read.
     if (batch.completions.length > 0) {
       state.segmentCursors.completion = batch.completions.at(-1)!.segment;
     }
     if (batch.cancelations.length > 0) {
       state.segmentCursors.cancelation = batch.cancelations.at(-1)!.segment;
     }
-    if (pending.length > 0) {
-      state.segmentCursors.incoming = pending.at(-1)!.segment;
-    } else if (actualCapacity > 0 && batch.starts.length === 0) {
-      // No more pending work to start and we had capacity — advance to now.
-      state.segmentCursors.incoming = segment;
+    // Capacity can cut `starts` short, so only advance over the leading run we
+    // finished with — started or moved forward. Stopping at the first entry we
+    // left alone is what keeps it from being skipped.
+    const handled = new Set([...pending, ...notYet].map((s) => s._id));
+    for (const start of batch.starts) {
+      if (!handled.has(start._id)) break;
+      state.segmentCursors.incoming = start.segment;
     }
 
     await ctx.db.replace("internalState", state._id, state);
@@ -325,12 +325,14 @@ async function queryPending(
     incomingCursor,
     maxParallelism,
     runningCount,
+    eligibleBefore,
   }: {
     completionCursor: bigint;
     cancelationCursor: bigint;
     incomingCursor: bigint;
     maxParallelism: number;
     runningCount: number;
+    eligibleBefore: bigint;
   },
 ) {
   const completions = await ctx.db
@@ -341,10 +343,9 @@ async function queryPending(
     .query("pendingCancelation")
     .withIndex("segment", (q) => q.gte("segment", cancelationCursor))
     .take(CANCELLATION_BATCH_SIZE);
-  // Available slots after we process this batch's completions, plus 1
-  // for the +1 trick (detect overflow vs. a future-scheduled retry).
-  // Cap at MAIN_BATCH_SIZE so a single iteration's per-item writes
-  // (delete pendingStart + scheduler.runAfter) don't grow unbounded.
+  // Available slots after we process this batch's completions. Cap at
+  // MAIN_BATCH_SIZE so a single iteration's per-item writes (delete
+  // pendingStart + scheduler.runAfter) don't grow unbounded.
   const startLimit = Math.min(
     MAIN_BATCH_SIZE,
     Math.max(0, maxParallelism - runningCount + completions.length),
@@ -353,18 +354,31 @@ async function queryPending(
     ...completions.map((c) => c.workId),
     ...cancelations.map((c) => c.workId),
   ];
-  const allStarts =
+  // Everything eligible, oldest first. Work scheduled for later sorts above the
+  // bound, so it's left alone without pinning the cursor.
+  const starts =
     startLimit === 0
       ? []
       : await ctx.db
           .query("pendingStart")
-          .withIndex("segment", (q) => q.gte("segment", incomingCursor))
+          .withIndex("segment", (q) =>
+            q.gte("segment", incomingCursor).lt("segment", eligibleBefore),
+          )
           // eslint-disable-next-line @convex-dev/no-filter-in-query
           .filter((q) =>
             q.and(...excludedIds.map((id) => q.neq(q.field("workId"), id))),
           )
-          .take(startLimit + 1);
-  return { completions, cancelations, allStarts };
+          .take(startLimit);
+  return {
+    completions,
+    cancelations,
+    starts: starts.map((s) => ({
+      _id: s._id,
+      workId: s.workId,
+      segment: s.segment as bigint,
+      runAt: s.runAt,
+    })) satisfies Start[],
+  };
 }
 
 /**
@@ -461,6 +475,13 @@ async function handleCancelation(
           const work = await ctx.db.get("work", workId);
           if (!work) {
             console.warn(`[main] ${workId} is gone, but trying to cancel`);
+            // Drop any pendingStart left pointing at it. Nothing rescans that
+            // lane, so a row left behind here would never be read again.
+            const orphan = await ctx.db
+              .query("pendingStart")
+              .withIndex("workId", (q) => q.eq("workId", workId))
+              .unique();
+            if (orphan) await ctx.db.delete("pendingStart", orphan._id);
             return null;
           }
           // Ensure it doesn't retry.
@@ -529,6 +550,28 @@ async function handleRecovery(
 }
 
 /**
+ * Moves entries that aren't due yet to sort at their `runAt` instead of at the
+ * commit timestamp they were enqueued with, so the cursor can pass them and
+ * they don't come back until they're actually due. Safe to compute from the
+ * clock here, unlike at enqueue: this transaction writes the cursor too, so a
+ * time past `now` can't end up behind it.
+ */
+async function promoteScheduled(ctx: MutationCtx, notYet: Start[]) {
+  await Promise.all(
+    notYet.map(async ({ _id, runAt }) => {
+      // A concurrent cancelation may have removed it.
+      if (!(await ctx.db.get("pendingStart", _id))) return;
+      await ctx.db.patch("pendingStart", _id, {
+        // Round up to the next whole millisecond: the cursor has already
+        // reached `endOfMs(now)`, so a `runAt` part-way through the current
+        // millisecond would truncate to a timestamp behind it.
+        segment: toTimestamp(Math.ceil(runAt!)),
+      });
+    }),
+  );
+}
+
+/**
  * Starts pending work.
  */
 async function handleStart(
@@ -541,9 +584,14 @@ async function handleStart(
   console.debug(`[main] scheduling ${pending.length} pending work`);
   const starts = (
     await Promise.all(
-      pending.map(async ({ _id, workId, segment }) => {
+      pending.map(async ({ _id, workId, segment, runAt }) => {
         if (state.running.some((r) => r.workId === workId)) {
           console.error(`[main] ${workId} already running (skipping start)`);
+          // The row is spurious, and nothing rescans the lane behind the
+          // cursor, so drop it rather than leave it unreadable.
+          if (await ctx.db.get("pendingStart", _id)) {
+            await ctx.db.delete("pendingStart", _id);
+          }
           return null;
         }
         // Guard against a pendingStart a concurrent cancelation removed.
@@ -558,7 +606,9 @@ async function handleStart(
         }
         return {
           work,
-          lagMs: Date.now() - fromSegment(segment),
+          // `segment` is when this became eligible: the time it was scheduled
+          // for, or the commit timestamp of the enqueue if it was ready then.
+          lagMs: Date.now() - (runAt ?? fromTimestamp(segment)),
         };
       }),
     )
@@ -690,11 +740,12 @@ async function rescheduleJob(
     work.retryBehavior.initialBackoffMs *
     Math.pow(work.retryBehavior.base, work.attempts - 1);
   const nextAttempt = withJitter(backoffMs);
-  const startTime = Date.now() + nextAttempt;
-  const segment = toSegment(startTime);
+  // The backoff can go straight into `segment` however short it is: we're in
+  // the transaction that writes the cursor, so a time past now is certain to
+  // sort ahead of it. No `runAt` needed — `segment` already is the start time.
   await ctx.db.insert("pendingStart", {
     workId: work._id,
-    segment,
+    segment: toTimestamp(Date.now() + nextAttempt),
   });
   return true;
 }

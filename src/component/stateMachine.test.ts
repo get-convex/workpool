@@ -263,7 +263,11 @@ describe("state machine", () => {
         : getCurrentSegment();
       await ctx.db.insert("internalState", {
         generation: 0n,
-        segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
+        segmentCursors: {
+          incoming: 0n,
+          completion: 0n,
+          cancelation: 0n,
+        },
         lastRecovery,
         report: {
           completed: 0,
@@ -278,7 +282,10 @@ describe("state machine", () => {
 
       // pendingStart
       if (state.pendingStart) {
-        await ctx.db.insert("pendingStart", { workId: wId, segment: seg });
+        await ctx.db.insert("pendingStart", {
+          workId: wId,
+          segment: seg,
+        });
       }
 
       // pendingCompletion
@@ -853,7 +860,7 @@ describe("state machine", () => {
       expect(s.running).toBe(false);
     });
 
-    it("pendingStart + running for same workId -> skips start but leaves pendingStart", async () => {
+    it("pendingStart + running for same workId -> skips start and drops the pendingStart", async () => {
       const { workId, segment } = await setupState({
         work: { attempts: 0, hasRetryBehavior: false, fnType: "action" },
         pendingStart: true,
@@ -864,10 +871,10 @@ describe("state machine", () => {
       await runLoop(segment);
       const s = await observeState(workId);
       expect(s.running).toBe(true);
-      // BUG: handleStart skips the start but does NOT delete the pendingStart
-      // entry (returns null before the delete call). This means the orphaned
-      // pendingStart will be picked up again on the next loop iteration.
-      expect(s.pendingStart).toBe(true);
+      // The pendingStart is spurious — the work is already running — and the
+      // ready lane's cursor has moved past it, so it has to be deleted here or
+      // it would sit in the table unread forever.
+      expect(s.pendingStart).toBe(false);
     });
 
     it("duplicate pendingCompletion via complete.complete -> BUG: attempts still incremented", async () => {
@@ -914,7 +921,10 @@ describe("state machine", () => {
           fnArgs: {},
           attempts: 0,
         });
-        await ctx.db.insert("pendingStart", { workId: id, segment: seg });
+        await ctx.db.insert("pendingStart", {
+          workId: id,
+          segment: seg,
+        });
         return id;
       });
 
@@ -971,7 +981,11 @@ describe("state machine", () => {
         );
         await ctx.db.insert("internalState", {
           generation: 0n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
+          segmentCursors: {
+            incoming: 0n,
+            completion: 0n,
+            cancelation: 0n,
+          },
           lastRecovery: getCurrentSegment(),
           report: {
             completed: 0,
@@ -1032,7 +1046,7 @@ describe("state machine", () => {
       await t.run(async (ctx) => {
         await ctx.db.insert("pendingCancelation", {
           workId,
-          segment,
+          segment: segment,
         });
       });
 
@@ -1053,7 +1067,10 @@ describe("state machine", () => {
           fnArgs: {},
           attempts: 0,
         });
-        await ctx.db.insert("pendingStart", { workId: wId, segment: seg });
+        await ctx.db.insert("pendingStart", {
+          workId: wId,
+          segment: seg,
+        });
         await ctx.db.insert("pendingCancelation", {
           workId: wId,
           segment: seg,
@@ -1065,7 +1082,11 @@ describe("state machine", () => {
 
         await ctx.db.insert("internalState", {
           generation: 0n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
+          segmentCursors: {
+            incoming: 0n,
+            completion: 0n,
+            cancelation: 0n,
+          },
           lastRecovery: getCurrentSegment(),
           report: {
             completed: 0,
@@ -1123,7 +1144,11 @@ describe("state machine", () => {
         );
         await ctx.db.insert("internalState", {
           generation: 0n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
+          segmentCursors: {
+            incoming: 0n,
+            completion: 0n,
+            cancelation: 0n,
+          },
           lastRecovery: getCurrentSegment(),
           report: {
             completed: 0,
@@ -1213,7 +1238,11 @@ describe("state machine", () => {
 
         await ctx.db.insert("internalState", {
           generation: 0n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
+          segmentCursors: {
+            incoming: 0n,
+            completion: 0n,
+            cancelation: 0n,
+          },
           lastRecovery: getCurrentSegment(),
           report: {
             completed: 0,
@@ -1232,12 +1261,18 @@ describe("state machine", () => {
           retry: false,
           runResult: { kind: "success", returnValue: null },
         });
-        await ctx.db.insert("pendingStart", { workId: w2, segment: seg });
+        await ctx.db.insert("pendingStart", {
+          workId: w2,
+          segment: seg,
+        });
         await ctx.db.insert("pendingCancelation", {
           workId: w2,
           segment: seg,
         });
-        await ctx.db.insert("pendingStart", { workId: w3, segment: seg });
+        await ctx.db.insert("pendingStart", {
+          workId: w3,
+          segment: seg,
+        });
 
         return { w1, w2, w3 };
       });
@@ -1290,7 +1325,11 @@ describe("state machine", () => {
         );
         await ctx.db.insert("internalState", {
           generation: 0n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
+          segmentCursors: {
+            incoming: 0n,
+            completion: 0n,
+            cancelation: 0n,
+          },
           lastRecovery: getCurrentSegment(),
           report: {
             completed: 0,
