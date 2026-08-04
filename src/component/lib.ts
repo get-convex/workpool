@@ -19,12 +19,11 @@ import {
   boundScheduledTime,
   vConfig,
   fnType,
-  getCurrentSegment,
-  max,
   vOnCompleteFnContext,
   retryBehavior,
+  SAFE_FUTURE_MS,
   status as statusValidator,
-  toSegment,
+  toTimestamp,
 } from "./shared.js";
 import { recordEnqueued } from "./stats.js";
 import { getOrUpdateGlobals } from "./config.js";
@@ -112,9 +111,17 @@ async function enqueueHandler(
   // Store the work item
   const workId = await ctx.db.insert("work", workItem);
 
+  // Ready now: order it by this transaction's commit timestamp. Far enough out
+  // that no commit latency could put it behind the loop's cursor: order it by
+  // its start time directly. In between: order it by the commit timestamp so
+  // it can't be lost, and let the loop move it forward once it sees the `runAt`
+  // (see `promoteScheduled`) — one extra write, only for near-future work.
+  const delayMs = runAt - Date.now();
   await ctx.db.insert("pendingStart", {
     workId,
-    segment: max(toSegment(runAt), getCurrentSegment()),
+    segment:
+      delayMs > SAFE_FUTURE_MS ? toTimestamp(runAt) : ctx.db.vars.commitTs,
+    ...(delayMs > 0 ? { runAt } : {}),
   });
   recordEnqueued(console, { workId, fnName: workArgs.fnName, runAt });
   return workId;
@@ -146,7 +153,7 @@ export const cancel = mutation({
       await kickMainLoop(ctx, "cancel");
       await ctx.db.insert("pendingCancelation", {
         workId: id,
-        segment: getCurrentSegment(),
+        segment: ctx.db.vars.commitTs,
       });
     }
   },
@@ -176,13 +183,12 @@ export const cancelAll = mutation({
     if (shouldCancel.some((c) => c)) {
       await kickMainLoop(ctx, "cancel");
     }
-    const segment = getCurrentSegment();
     await Promise.all(
       pageOfWork.map(({ _id }, index) => {
         if (shouldCancel[index]) {
           return ctx.db.insert("pendingCancelation", {
             workId: _id,
-            segment,
+            segment: ctx.db.vars.commitTs,
           });
         }
       }),

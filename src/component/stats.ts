@@ -8,6 +8,7 @@ import {
 import {
   type Config,
   DEFAULT_MAX_PARALLELISM,
+  endOfMs,
   getCurrentSegment,
   WORKER_NAME,
 } from "./shared.js";
@@ -78,12 +79,14 @@ export async function generateReport(
     return;
   }
   const currentSegment = getCurrentSegment();
+  // Backlog is work that's eligible now; anything scheduled for later sorts
+  // above the current time and isn't waiting on us.
   const pendingStart = await paginator(ctx.db, schema)
     .query("pendingStart")
     .withIndex("segment", (q) =>
       q
         .gte("segment", state.segmentCursors.incoming)
-        .lt("segment", currentSegment),
+        .lt("segment", endOfMs(Date.now())),
     )
     .paginate({
       numItems: Math.max(maxParallelism, 10),
