@@ -15,15 +15,13 @@ import {
   type LogLevel,
   logLevel,
 } from "./logging.js";
+import { boundScheduledTime, insertItem } from "../queue/index.js";
 import {
-  boundScheduledTime,
   vConfig,
   fnType,
   vOnCompleteFnContext,
   retryBehavior,
-  SAFE_FUTURE_MS,
   status as statusValidator,
-  toTimestamp,
 } from "./shared.js";
 import { recordEnqueued } from "./stats.js";
 import { getOrUpdateGlobals } from "./config.js";
@@ -111,18 +109,7 @@ async function enqueueHandler(
   // Store the work item
   const workId = await ctx.db.insert("work", workItem);
 
-  // Ready now: order it by this transaction's commit timestamp. Far enough out
-  // that no commit latency could put it behind the loop's cursor: order it by
-  // its start time directly. In between: order it by the commit timestamp so
-  // it can't be lost, and let the loop move it forward once it sees the `runAt`
-  // (see `promoteScheduled`) — one extra write, only for near-future work.
-  const delayMs = runAt - Date.now();
-  await ctx.db.insert("pendingStart", {
-    workId,
-    segment:
-      delayMs > SAFE_FUTURE_MS ? toTimestamp(runAt) : ctx.db.vars.commitTs,
-    ...(delayMs > 0 ? { runAt } : {}),
-  });
+  await insertItem(ctx.db, "pendingStart", { workId }, { runAt, console });
   recordEnqueued(console, { workId, fnName: workArgs.fnName, runAt });
   return workId;
 }
@@ -151,10 +138,7 @@ export const cancel = mutation({
     const shouldCancel = await shouldCancelWorkItem(ctx, id, globals.logLevel);
     if (shouldCancel) {
       await kickMainLoop(ctx, "cancel");
-      await ctx.db.insert("pendingCancelation", {
-        workId: id,
-        segment: ctx.db.vars.commitTs,
-      });
+      await insertItem(ctx.db, "pendingCancelation", { workId: id });
     }
   },
 });
@@ -186,10 +170,7 @@ export const cancelAll = mutation({
     await Promise.all(
       pageOfWork.map(({ _id }, index) => {
         if (shouldCancel[index]) {
-          return ctx.db.insert("pendingCancelation", {
-            workId: _id,
-            segment: ctx.db.vars.commitTs,
-          });
+          return insertItem(ctx.db, "pendingCancelation", { workId: _id });
         }
       }),
     );

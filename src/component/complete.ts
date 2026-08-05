@@ -3,6 +3,7 @@ import { getConvexSize, type Infer, v } from "convex/values";
 import type { Id } from "./_generated/dataModel.js";
 import { internal } from "./_generated/api.js";
 import { internalMutation, type MutationCtx } from "./_generated/server.js";
+import { insertItem } from "../queue/index.js";
 import { kickMainLoop } from "./kick.js";
 import { createLogger } from "./logging.js";
 import { type OnCompleteArgs, type RunResult, vResult } from "./shared.js";
@@ -208,10 +209,7 @@ export async function completeHandler(
     );
     await Promise.all(
       pendingCompletions.map((completion) =>
-        ctx.db.insert("pendingCompletion", {
-          ...completion,
-          segment: ctx.db.vars.commitTs,
-        }),
+        insertItem(ctx.db, "pendingCompletion", completion),
       ),
     );
   }
