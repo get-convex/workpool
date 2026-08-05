@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { queueTable } from "../queue/index.js";
 import {
   fnType,
   vConfig,
@@ -8,21 +9,9 @@ import {
   vResult,
 } from "./shared.js";
 
-// When a queue entry becomes eligible to process, in nanoseconds since the
-// epoch — the scale a commit timestamp uses.
-//
-// Entries that are ready as soon as they land store `db.vars.commitTs`, which
-// resolves at commit time. That's what makes an index on this field scannable
-// with a cursor that never has to be rewound: an entry can't appear behind a
-// commit timestamp we've already read past. (`_creationTime` can't do this — it
-// is assigned when the mutation *starts*, so a slow mutation's row can land
-// behind rows that already committed and were read.)
-//
-// Entries that shouldn't be processed until later store that time directly,
-// which sorts after everything committed before then. `v.commitTs()` accepts any
-// int64, so both live in one field and one index.
-const segment = v.commitTs();
-// A cursor into a `segment` index. Reads of the field come back as a plain int64.
+// A cursor into a queue lane's `segment` index (see `queueTable` for why the
+// lanes are ordered by commit timestamp). Reads of the field come back as a
+// plain int64.
 const timestamp = v.int64();
 
 export default defineSchema({
@@ -79,36 +68,26 @@ export default defineSchema({
   }),
 
   // Written on enqueue & rescheduled for retry, read & deleted by `main`.
-  pendingStart: defineTable({
-    workId: v.id("work"),
-    segment,
-    // Only set when the work shouldn't start yet. `segment` already holds that
-    // time whenever we could safely write it there; when we couldn't — a
-    // caller-supplied `runAt` too near to be sure it lands ahead of the loop's
-    // cursor — `segment` is the commit timestamp and this is what tells the
-    // loop to move the entry forward instead of starting it.
-    runAt: v.optional(v.number()),
-  })
-    .index("workId", ["workId"])
-    .index("segment", ["segment"]),
+  // `runAt` is only set when the work shouldn't start yet: `segment` already
+  // holds that time whenever we could safely write it there; when we couldn't —
+  // a caller-supplied `runAt` too near to be sure it lands ahead of the loop's
+  // cursor — `segment` is the commit timestamp and `runAt` is what tells the
+  // loop to move the entry forward instead of starting it.
+  pendingStart: queueTable({ workId: v.id("work") }).index("workId", [
+    "workId",
+  ]),
 
   // Written by complete, read & deleted by `main`.
-  pendingCompletion: defineTable({
-    segment,
+  pendingCompletion: queueTable({
     runResult: vResult,
     workId: v.id("work"),
     retry: v.boolean(),
-  })
-    .index("workId", ["workId"])
-    .index("segment", ["segment"]),
+  }).index("workId", ["workId"]),
 
   // Written on cancelation, read & deleted by `main`.
-  pendingCancelation: defineTable({
-    segment,
-    workId: v.id("work"),
-  })
-    .index("workId", ["workId"])
-    .index("segment", ["segment"]),
+  pendingCancelation: queueTable({ workId: v.id("work") }).index("workId", [
+    "workId",
+  ]),
 
   // Store large data separately to avoid document size limits
   payload: defineTable({
