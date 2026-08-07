@@ -72,6 +72,26 @@ export function endOfMs(ms: number): bigint {
   return toTimestamp(Math.floor(ms) + 1);
 }
 
+// Nanoseconds for the year 2000: far above any 100ms bucket an older version
+// could have written (~1.8e10 today, ~1.9e10 even four years out) and far below
+// any timestamp this one can produce, since `boundScheduledTime` keeps
+// scheduled times within a few years of now. Nothing real lands in between.
+const MIN_TIMESTAMP = toTimestamp(Date.UTC(2000, 0, 1));
+
+/**
+ * The start time a `pendingStart` written before commit-timestamp ordering
+ * represents, or undefined if its `segment` is already a timestamp.
+ *
+ * Those entries stored `max(toSegment(runAt), toSegment(now))` and had no
+ * `runAt` field, so the bucket is the only record of when the work should
+ * start — and it may still be in the future. Reading it back as a time lets the
+ * loop treat such an entry like any other scheduled one, rather than seeing a
+ * value far below the eligibility bound and starting it immediately.
+ */
+export function legacyRunAt(segment: bigint): number | undefined {
+  return segment < MIN_TIMESTAMP ? fromSegment(segment) : undefined;
+}
+
 /**
  * How far ahead a caller-supplied `runAt` has to be before we can write it
  * straight into the ordering field.

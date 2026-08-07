@@ -13,9 +13,16 @@
 - The `segment` fields keep their name and index, but now hold nanoseconds
   rather than 100ms buckets. Work scheduled to start later stores its start time
   there directly, which sorts after everything already committed, so one index
-  covers both ready and scheduled work. Entries an older version wrote have much
-  smaller values, so they sort first and get processed promptly on upgrade.
-- Requires `convex` 1.43 or later.
+  covers both ready and scheduled work.
+- Upgrading in place is safe, including for work that hasn't come due yet. A
+  `pendingStart` an older version wrote holds a 100ms bucket — eight orders of
+  magnitude below a nanosecond timestamp — so the loop recognizes it, reads the
+  bucket back as the time the work should start, and either starts it or
+  rewrites it as a timestamp and leaves it alone until then. Queued completions
+  and cancelations sort first and drain immediately, which is what they want.
+- Requires `convex` 1.43 or later. Downgrading is not supported: an older
+  version would read a nanosecond timestamp as a 100ms bucket far in the future
+  and never start the work.
 
 ## 0.4.10
 
