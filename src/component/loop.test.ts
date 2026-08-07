@@ -16,6 +16,7 @@ import {
   DEFAULT_MAX_PARALLELISM,
   fromSegment,
   SAFE_FUTURE_MS,
+  toSegment,
   toTimestamp,
   WORKER_NAME,
 } from "./shared.js";
@@ -360,7 +361,71 @@ describe("loop", () => {
       expect(new Set(started)).toEqual(new Set(ids));
       expect((await observe()).pendingStart).toHaveLength(0);
     });
+  });
 
+  // ────────────────────────────────────────────────────────────────────
+  // Entries written before commit-timestamp ordering
+  // ────────────────────────────────────────────────────────────────────
+
+  describe("upgrade from segment ordering", () => {
+    /** A pendingStart as an older version wrote it: a 100ms bucket, no runAt. */
+    async function enqueueLegacyWork(runAt: number): Promise<Id<"work">> {
+      return t.run(async (ctx) => {
+        const workId = await ctx.db.insert("work", {
+          fnType: "action",
+          fnHandle: "test_handle",
+          fnName: "test_handle",
+          fnArgs: {},
+          attempts: 0,
+        });
+        await ctx.db.insert("pendingStart", {
+          workId,
+          // max(toSegment(runAt), now), as `enqueue` used to compute it.
+          segment: toSegment(Math.max(runAt, Date.now())),
+        });
+        return workId;
+      });
+    }
+
+    it("starts work that was already due", async () => {
+      await initialize();
+      const workId = await enqueueLegacyWork(Date.now());
+
+      await runLoop();
+
+      const o = await observe();
+      expect(o.pendingStart).toHaveLength(0);
+      expect(o.running.map((r) => r.workId)).toEqual([workId]);
+    });
+
+    it("keeps holding work scheduled for later, rather than starting it early", async () => {
+      await initialize();
+      const runAt = Date.now() + 100 * SECOND;
+      const workId = await enqueueLegacyWork(runAt);
+      // The old format only recorded the time to a 100ms bucket.
+      const startsAt = fromSegment(toSegment(runAt));
+
+      await runLoop();
+
+      // Not started — and rewritten as a real timestamp, so the next scan
+      // leaves it alone until it's due.
+      let o = await observe();
+      expect(o.running).toHaveLength(0);
+      expect(o.pendingStart[0].segment).toBe(toTimestamp(startsAt));
+
+      const idle = await runLoop();
+      assert(idle.kind === "idle");
+      expect(idle.timeoutMs).toBe(startsAt - Date.now());
+
+      vi.advanceTimersByTime(startsAt - Date.now());
+      await runLoop();
+      o = await observe();
+      expect(o.pendingStart).toHaveLength(0);
+      expect(o.running.map((r) => r.workId)).toEqual([workId]);
+    });
+  });
+
+  describe("capacity", () => {
     it("does not start new work when running.length already exceeds maxParallelism", async () => {
       // Edge case: maxParallelism was lowered while jobs were running.
       await initialize({ maxParallelism: 2 });

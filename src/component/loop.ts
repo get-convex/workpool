@@ -24,6 +24,7 @@ import {
   fromSegment,
   fromTimestamp,
   getCurrentSegment,
+  legacyRunAt,
   MINUTE,
   SECOND,
   type RunResult,
@@ -372,12 +373,18 @@ async function queryPending(
   return {
     completions,
     cancelations,
-    starts: starts.map((s) => ({
-      _id: s._id,
-      workId: s.workId,
-      segment: s.segment as bigint,
-      runAt: s.runAt,
-    })) satisfies Start[],
+    starts: starts.map((s) => {
+      const segment = s.segment as bigint;
+      return {
+        _id: s._id,
+        workId: s.workId,
+        segment,
+        // An entry from before commit-timestamp ordering keeps its start time
+        // in `segment`; recovering it here means `run` handles it like any
+        // other scheduled entry and rewrites it as a timestamp.
+        runAt: s.runAt ?? legacyRunAt(segment),
+      };
+    }) satisfies Start[],
   };
 }
 
