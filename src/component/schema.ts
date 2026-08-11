@@ -41,6 +41,9 @@ export default defineSchema({
       incoming: timestamp,
       completion: timestamp,
       cancelation: timestamp,
+      // Cursor into pendingStart's `hasRunAt: true` lane. Optional because it
+      // didn't exist before that lane did; absent means "from the beginning".
+      scheduled: v.optional(timestamp),
     }),
     // Unlike the cursors, this stays a 100ms "segment": it only paces how often
     // the loop checks for stuck jobs.
@@ -88,9 +91,17 @@ export default defineSchema({
     // cursor — `segment` is the commit timestamp and this is what tells the
     // loop to move the entry forward instead of starting it.
     runAt: v.optional(v.number()),
+    // Set (to true) on exactly the entries described above: held at their
+    // commit position awaiting a move to their start time. It splits the index
+    // into two lanes so those entries never sit in front of ready work — the
+    // loop drains this lane in parallel with starting work from the other.
+    // Entries whose `segment` is already their start time don't need it, and
+    // its absence puts entries older versions wrote in the main lane, where
+    // the legacy handling lives.
+    hasRunAt: v.optional(v.boolean()),
   })
     .index("workId", ["workId"])
-    .index("segment", ["segment"]),
+    .index("hasRunAt_segment", ["hasRunAt", "segment"]),
 
   // Written by complete, read & deleted by `main`.
   pendingCompletion: defineTable({

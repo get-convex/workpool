@@ -52,7 +52,12 @@ export const COOLDOWN_CHECK_INTERVAL = 200;
 
 export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
   generation: 0n,
-  segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
+  segmentCursors: {
+    incoming: 0n,
+    completion: 0n,
+    cancelation: 0n,
+    scheduled: 0n,
+  },
   lastRecovery: 0n,
   report: {
     completed: 0,
@@ -107,6 +112,10 @@ const batchFields = {
   completions: v.array(vCompletion),
   cancelations: v.array(vCancelation),
   starts: v.array(vStart),
+  // Entries from the `hasRunAt: true` lane: near-future work still ordered by
+  // its enqueue's commit timestamp, waiting to be moved to its start time.
+  // Optional so a batch built just before this field existed still validates.
+  scheduled: v.optional(v.array(vStart)),
 };
 type Batch = Infer<ReturnType<typeof v.object<typeof batchFields>>>;
 
@@ -137,19 +146,24 @@ export const getBatch = internalQuery({
     const isRecoveryIter =
       running.length > 0 && segment - lastRecovery >= RECOVERY_PERIOD_SEGMENTS;
 
-    const { starts, cancelations, completions } = await queryPending(ctx, {
-      completionCursor: cursors.completion,
-      cancelationCursor: cursors.cancelation,
-      incomingCursor: cursors.incoming,
-      maxParallelism: globals.maxParallelism,
-      runningCount: running.length,
-      eligibleBefore,
-    });
+    const { starts, scheduled, cancelations, completions } = await queryPending(
+      ctx,
+      {
+        completionCursor: cursors.completion,
+        cancelationCursor: cursors.cancelation,
+        incomingCursor: cursors.incoming,
+        scheduledCursor: cursors.scheduled ?? 0n,
+        maxParallelism: globals.maxParallelism,
+        runningCount: running.length,
+        eligibleBefore,
+      },
+    );
 
     const hasWork =
       completions.length > 0 ||
       cancelations.length > 0 ||
       starts.length > 0 ||
+      scheduled.length > 0 ||
       isRecoveryIter;
 
     if (hasWork) {
@@ -169,16 +183,22 @@ export const getBatch = internalQuery({
           segment: c.segment as bigint,
         })),
         starts,
+        scheduled,
       };
       return { kind: "work" as const, batch };
     }
 
     // Nothing to do now. Figure out when to wake up next: the sooner of the
     // earliest future-scheduled start and (if jobs are running) the next
-    // recovery scan. A ping still wakes us sooner.
+    // recovery scan. A ping still wakes us sooner. No need to check the
+    // `hasRunAt: true` lane: this iteration read it and it was empty. (The
+    // read is only skipped when the pool is saturated, and then jobs are
+    // running, so the recovery wait applies and completions ping us.)
     const futureStart = await ctx.db
       .query("pendingStart")
-      .withIndex("segment", (q) => q.gte("segment", eligibleBefore))
+      .withIndex("hasRunAt_segment", (q) =>
+        q.eq("hasRunAt", undefined).gte("segment", eligibleBefore),
+      )
       .first();
     const waits: number[] = [];
     if (futureStart) {
@@ -248,12 +268,23 @@ export const run = internalMutation({
     // ── Start new work ──
     // Entries whose `runAt` hasn't arrived were only visible because we
     // couldn't safely write that time into `segment` at enqueue. We can here:
-    // this transaction also writes the cursor, so a value past `now` is
-    // guaranteed to land ahead of it. Move them and they stop coming back.
+    // this transaction also writes the cursors, so a value past `now` is
+    // guaranteed to land ahead of them. Move them and they stop coming back.
     const now = Date.now();
     const isDue = (s: Start) => s.runAt === undefined || s.runAt <= now;
-    const notYet = batch.starts.filter((s) => !isDue(s));
-    const eligible = batch.starts.filter(isDue);
+    const scheduled = batch.scheduled ?? [];
+    const all = [...batch.starts, ...scheduled];
+    const notYet = all.filter((s) => !isDue(s));
+    // Oldest first across both lanes: the main lane's `segment` is when an
+    // entry became eligible, and a due entry from the scheduled lane has been
+    // eligible since its `runAt`.
+    const eligible = all
+      .filter(isDue)
+      .sort(
+        (a, b) =>
+          (a.runAt ?? fromTimestamp(a.segment)) -
+          (b.runAt ?? fromTimestamp(b.segment)),
+      );
     if (notYet.length > 0) {
       const promoteLabel = `[main] promote(${notYet.length})`;
       console.time(promoteLabel);
@@ -301,13 +332,18 @@ export const run = internalMutation({
     if (batch.cancelations.length > 0) {
       state.segmentCursors.cancelation = batch.cancelations.at(-1)!.segment;
     }
-    // Capacity can cut `starts` short, so only advance over the leading run we
-    // finished with — started or moved forward. Stopping at the first entry we
-    // left alone is what keeps it from being skipped.
+    // Capacity can cut the starts short, so only advance each lane's cursor
+    // over the leading run we finished with — started or moved forward.
+    // Stopping at the first entry we left alone is what keeps it from being
+    // skipped.
     const handled = new Set([...pending, ...notYet].map((s) => s._id));
     for (const start of batch.starts) {
       if (!handled.has(start._id)) break;
       state.segmentCursors.incoming = start.segment;
+    }
+    for (const entry of scheduled) {
+      if (!handled.has(entry._id)) break;
+      state.segmentCursors.scheduled = entry.segment;
     }
 
     await ctx.db.replace("internalState", state._id, state);
@@ -324,6 +360,7 @@ async function queryPending(
     completionCursor,
     cancelationCursor,
     incomingCursor,
+    scheduledCursor,
     maxParallelism,
     runningCount,
     eligibleBefore,
@@ -331,6 +368,7 @@ async function queryPending(
     completionCursor: bigint;
     cancelationCursor: bigint;
     incomingCursor: bigint;
+    scheduledCursor: bigint;
     maxParallelism: number;
     runningCount: number;
     eligibleBefore: bigint;
@@ -355,21 +393,48 @@ async function queryPending(
     ...completions.map((c) => c.workId),
     ...cancelations.map((c) => c.workId),
   ];
-  // Everything eligible, oldest first. Work scheduled for later sorts above the
-  // bound, so it's left alone without pinning the cursor.
-  const starts =
+  // Near-future work, still at its enqueue's commit position; `run` moves each
+  // entry to its start time (or starts it, if it came due first). Reading this
+  // lane separately means a backlog of it never sits in front of ready work —
+  // it drains at MAIN_BATCH_SIZE per iteration alongside the starts. Skipped
+  // when nothing can start: an already-due entry only leaves the lane by
+  // starting, so reading it with no capacity would spin the loop.
+  const scheduled =
     startLimit === 0
       ? []
       : await ctx.db
           .query("pendingStart")
-          .withIndex("segment", (q) =>
-            q.gte("segment", incomingCursor).lt("segment", eligibleBefore),
+          .withIndex("hasRunAt_segment", (q) =>
+            q.eq("hasRunAt", true).gte("segment", scheduledCursor),
           )
           // eslint-disable-next-line @convex-dev/no-filter-in-query
           .filter((q) =>
             q.and(...excludedIds.map((id) => q.neq(q.field("workId"), id))),
           )
-          .take(startLimit);
+          .take(MAIN_BATCH_SIZE);
+  // Held entries that are already due take start slots, so only fetch ready
+  // work for the slots left over. Everything eligible, oldest first; work
+  // scheduled for later sorts above the bound, so it's left alone without
+  // pinning the cursor.
+  const now = Date.now();
+  const dueHeld = scheduled.filter((s) => (s.runAt ?? 0) <= now).length;
+  const readyLimit = Math.max(0, startLimit - dueHeld);
+  const starts =
+    readyLimit === 0
+      ? []
+      : await ctx.db
+          .query("pendingStart")
+          .withIndex("hasRunAt_segment", (q) =>
+            q
+              .eq("hasRunAt", undefined)
+              .gte("segment", incomingCursor)
+              .lt("segment", eligibleBefore),
+          )
+          // eslint-disable-next-line @convex-dev/no-filter-in-query
+          .filter((q) =>
+            q.and(...excludedIds.map((id) => q.neq(q.field("workId"), id))),
+          )
+          .take(readyLimit);
   return {
     completions,
     cancelations,
@@ -385,6 +450,12 @@ async function queryPending(
         runAt: s.runAt ?? legacyRunAt(segment),
       };
     }) satisfies Start[],
+    scheduled: scheduled.map((s) => ({
+      _id: s._id,
+      workId: s.workId,
+      segment: s.segment as bigint,
+      runAt: s.runAt,
+    })) satisfies Start[],
   };
 }
 
@@ -560,8 +631,8 @@ async function handleRecovery(
  * Moves entries that aren't due yet to sort at their `runAt` instead of at the
  * commit timestamp they were enqueued with, so the cursor can pass them and
  * they don't come back until they're actually due. Safe to compute from the
- * clock here, unlike at enqueue: this transaction writes the cursor too, so a
- * time past `now` can't end up behind it.
+ * clock here, unlike at enqueue: this transaction writes the cursors too, so a
+ * time past `now` can't end up behind either one.
  */
 async function promoteScheduled(ctx: MutationCtx, notYet: Start[]) {
   await Promise.all(
@@ -569,10 +640,13 @@ async function promoteScheduled(ctx: MutationCtx, notYet: Start[]) {
       // A concurrent cancelation may have removed it.
       if (!(await ctx.db.get("pendingStart", _id))) return;
       await ctx.db.patch("pendingStart", _id, {
-        // Round up to the next whole millisecond: the cursor has already
-        // reached `endOfMs(now)`, so a `runAt` part-way through the current
-        // millisecond would truncate to a timestamp behind it.
+        // Round up to the next whole millisecond: the main-lane cursor has
+        // already reached `endOfMs(now)`, so a `runAt` part-way through the
+        // current millisecond would truncate to a timestamp behind it.
         segment: toTimestamp(Math.ceil(runAt!)),
+        // Now ordered by its start time, so it leaves the held lane and waits
+        // in the main one like any far-future enqueue.
+        hasRunAt: undefined,
       });
     }),
   );

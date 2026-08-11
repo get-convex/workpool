@@ -101,8 +101,10 @@ export function legacyRunAt(segment: bigint): number | undefined {
  * chosen when the enqueue *starts*, so the margin has to cover however long
  * that transaction then takes to commit. Five minutes is far longer than any
  * mutation can run, so a `runAt` beyond it cannot land in the past. Anything
- * nearer is written as `db.vars.commitTs` plus a `runAt` field, and the loop
- * moves it forward itself — see `promoteScheduled` in loop.ts.
+ * nearer is ordered by `db.vars.commitTs` instead, keeps its `runAt` in a
+ * separate field, and is marked `hasRunAt` so it sits in its own index lane.
+ * The loop then moves it to its start time itself, which is safe there; see
+ * `promoteScheduled` in loop.ts.
  */
 export const SAFE_FUTURE_MS = 5 * MINUTE;
 
