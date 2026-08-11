@@ -10,6 +10,8 @@ import {
 } from "vitest";
 import { api, components, internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
+import { enqueueHandler } from "./lib.js";
+import { createLogger } from "./logging.js";
 import { RECOVERY_PERIOD_SEGMENTS } from "./loop.js";
 import { setupTest } from "./setup.test.js";
 import {
@@ -97,36 +99,37 @@ describe("loop", () => {
   }
 
   /**
-   * Insert a work doc + pendingStart the way `enqueue` does. `runAt` holds the
-   * work until then; the default runs it as soon as the loop sees it. `segment`
-   * pins the ordering value, e.g. to give several entries the same one the way
-   * a single batch enqueue does.
-   * Bypasses the public enqueue API to keep tests focused on the loop.
+   * Enqueue work through the real `enqueueHandler`, so what the tests write
+   * can't drift from what the public API writes. `runAt` holds the work until
+   * then; the default runs it as soon as the loop sees it. `segment` instead
+   * writes a raw entry pinned to that ordering value, e.g. to give several
+   * entries the same one the way a single batch enqueue does.
    */
   async function enqueueWork(
     overrides: Partial<WithoutSystemFields<Doc<"work">>> = {},
     { runAt, segment }: { runAt?: number; segment?: bigint } = {},
   ): Promise<Id<"work">> {
     return t.run(async (ctx) => {
-      const workId = await ctx.db.insert("work", {
+      if (segment !== undefined) {
+        const workId = await ctx.db.insert("work", {
+          fnType: "action",
+          fnHandle: "test_handle",
+          fnName: "test_handle",
+          fnArgs: {},
+          attempts: 0,
+          ...overrides,
+        });
+        await ctx.db.insert("pendingStart", { workId, segment });
+        return workId;
+      }
+      return enqueueHandler(ctx, createLogger("WARN"), {
         fnType: "action",
         fnHandle: "test_handle",
         fnName: "test_handle",
         fnArgs: {},
-        attempts: 0,
+        runAt: runAt ?? Date.now(),
         ...overrides,
       });
-      const delayMs = (runAt ?? 0) - Date.now();
-      await ctx.db.insert("pendingStart", {
-        workId,
-        segment:
-          segment ??
-          (delayMs > SAFE_FUTURE_MS
-            ? toTimestamp(runAt!)
-            : ctx.db.vars.commitTs),
-        ...(delayMs > 0 ? { runAt } : {}),
-      });
-      return workId;
     });
   }
 
@@ -398,6 +401,38 @@ describe("loop", () => {
       expect(o.running.map((r) => r.workId)).toEqual([workId]);
     });
 
+    it("moves near-future work a pre-lane version left in the main lane", async () => {
+      await initialize();
+      const runAt = Date.now() + 100 * SECOND;
+      // Held at its commit position with `runAt` but no `hasRunAt`: the shape
+      // written before the held lane existed.
+      const workId = await t.run(async (ctx) => {
+        const wid = await ctx.db.insert("work", {
+          fnType: "action",
+          fnHandle: "test_handle",
+          fnName: "test_handle",
+          fnArgs: {},
+          attempts: 0,
+        });
+        await ctx.db.insert("pendingStart", {
+          workId: wid,
+          segment: ctx.db.vars.commitTs,
+          runAt,
+        });
+        return wid;
+      });
+
+      await runLoop();
+
+      const o = await observe();
+      expect(o.running).toHaveLength(0);
+      expect(o.pendingStart[0].segment).toBe(toTimestamp(runAt));
+
+      vi.advanceTimersByTime(100 * SECOND);
+      await runLoop();
+      expect((await observe()).running.map((r) => r.workId)).toEqual([workId]);
+    });
+
     it("keeps holding work scheduled for later, rather than starting it early", async () => {
       await initialize();
       const runAt = Date.now() + 100 * SECOND;
@@ -655,18 +690,23 @@ describe("loop", () => {
       await initialize();
       const runAt = Date.now() + 100 * SECOND;
       // Inside SAFE_FUTURE_MS, so the enqueue had to order it by its commit
-      // timestamp; the loop sees it as eligible exactly once, to move it.
+      // timestamp, in the held lane; the loop sees it there exactly once, to
+      // move it.
       const workId = await enqueueWork({}, { runAt });
 
       const first = await runLoop();
       assert(first.kind === "work");
-      expect(first.batch.starts.map((s) => s.workId)).toEqual([workId]);
+      expect(first.batch.starts).toHaveLength(0);
+      expect(first.batch.scheduled?.map((s) => s.workId)).toEqual([workId]);
 
       let o = await observe();
       expect(o.running).toHaveLength(0); // moved, not started
       expect(o.pendingStart[0].segment).toBe(toTimestamp(runAt));
-      // The cursor moved past where it used to sit, so it won't come back.
-      expect(o.segmentCursors!.incoming).toBeLessThan(toTimestamp(runAt));
+      // Moved out of the held lane, and that lane's cursor moved past where it
+      // used to sit, so it won't come back.
+      expect(o.pendingStart[0].hasRunAt).toBeUndefined();
+      expect(o.segmentCursors!.scheduled).toBeGreaterThan(0n);
+      expect(o.segmentCursors!.scheduled).toBeLessThan(toTimestamp(runAt));
 
       const second = await runLoop();
       assert(second.kind === "idle");
@@ -697,6 +737,92 @@ describe("loop", () => {
         fromSegment(lastRecovery + RECOVERY_PERIOD_SEGMENTS) - Date.now();
       expect(result.timeoutMs).toBe(untilNextRecovery);
       expect(result.timeoutMs).toBeLessThan(5 * MINUTE);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────
+  // The held lane: near-future work waiting to be moved to its start time
+  // ────────────────────────────────────────────────────────────────────
+
+  describe("held lane", () => {
+    it("never lets held work sit in front of ready work", async () => {
+      // A bulk enqueue of near-future work lands ahead of anything enqueued
+      // after it, and only MAIN_BATCH_SIZE entries move per iteration. In its
+      // own lane it drains in parallel; in the main lane it would starve the
+      // ready item below for ceil(70/64) iterations.
+      await initialize({ maxParallelism: 3 });
+      const runAt = Date.now() + 100 * SECOND;
+      for (let i = 0; i < 70; i++) await enqueueWork({}, { runAt });
+      const readyId = await enqueueWork();
+
+      await runLoop();
+
+      const o = await observe();
+      expect(o.running.map((r) => r.workId)).toEqual([readyId]);
+      const moved = o.pendingStart.filter((p) => p.hasRunAt === undefined);
+      const held = o.pendingStart.filter((p) => p.hasRunAt === true);
+      expect(moved).toHaveLength(64); // one full batch moved alongside the start
+      expect(held).toHaveLength(6);
+      for (const p of moved) expect(p.segment).toBe(toTimestamp(runAt));
+    });
+
+    it("gives due held work start slots before fetching more ready work", async () => {
+      await initialize({ maxParallelism: 1 });
+      const heldId = await enqueueWork({}, { runAt: Date.now() + SECOND });
+      const readyId = await enqueueWork();
+      vi.advanceTimersByTime(SECOND);
+
+      // The due held entry claims the only slot, so no ready work is fetched.
+      await runLoop();
+      let o = await observe();
+      expect(o.running.map((r) => r.workId)).toEqual([heldId]);
+      expect(o.pendingStart.map((p) => p.workId)).toEqual([readyId]);
+
+      await simulateCompletion(
+        heldId,
+        { kind: "success", returnValue: null },
+        0,
+      );
+      await runLoop();
+      o = await observe();
+      expect(o.pendingStart).toHaveLength(0);
+      expect(o.running.map((r) => r.workId)).toEqual([readyId]);
+    });
+
+    it("starts held work directly once it's due, without moving it", async () => {
+      await initialize();
+      const workId = await enqueueWork({}, { runAt: Date.now() + SECOND });
+
+      vi.advanceTimersByTime(SECOND);
+      await runLoop();
+
+      const o = await observe();
+      expect(o.pendingStart).toHaveLength(0);
+      expect(o.running.map((r) => r.workId)).toEqual([workId]);
+    });
+
+    it("leaves due held work for the iteration that has capacity for it", async () => {
+      await initialize({ maxParallelism: 1 });
+      const firstId = await enqueueWork();
+      await runLoop(); // fills the only slot
+      const heldId = await enqueueWork({}, { runAt: Date.now() + SECOND });
+      vi.advanceTimersByTime(2 * SECOND);
+
+      // Saturated: nothing can start, so the held lane isn't even read.
+      const idle = await runLoop();
+      expect(idle.kind).toBe("idle");
+      expect((await observe()).pendingStart).toHaveLength(1);
+
+      // A completion frees the slot; the same iteration starts the held work.
+      await simulateCompletion(
+        firstId,
+        { kind: "success", returnValue: null },
+        0,
+      );
+      await runLoop();
+      const o = await observe();
+      expect(o.pendingStart).toHaveLength(0);
+      expect(o.running.map((r) => r.workId)).toEqual([heldId]);
     });
   });
 

@@ -7,22 +7,31 @@
   can appear behind a cursor the main loop has already read past. That removes
   the 15-second cursor rewind buffer and the once-a-minute full rescan that
   0.4.7 added to cope with out-of-order inserts — the loop now reads only rows
-  it hasn't seen. On a 5000-task saturation benchmark (parallelism 200, 20ms
-  tasks) this ran ~16% faster — 121 → 144 tasks/s, with p99 latency down from
-  ~32s to ~25s.
-- The `segment` fields keep their name and index, but now hold nanoseconds
-  rather than 100ms buckets. Work scheduled to start later stores its start time
-  there directly, which sorts after everything already committed, so one index
-  covers both ready and scheduled work.
+  it hasn't seen, which improves throughput and tail latency for saturated
+  pools.
+- The `segment` fields keep their name, but now hold nanoseconds rather than
+  100ms buckets. Work scheduled to start later stores its start time there
+  directly, which sorts after everything already committed, so ready and
+  scheduled work share an ordering.
+- Work scheduled less than five minutes out can't safely store its start time at
+  enqueue, so it's held at its commit position until the loop moves it. A
+  `hasRunAt` marker puts those entries in their own lane of the `pendingStart`
+  index, moved along at a full batch per iteration in parallel with starting
+  ready work — so a bulk enqueue of near-future work never delays work that's
+  ready now.
 - Upgrading in place is safe, including for work that hasn't come due yet. A
   `pendingStart` an older version wrote holds a 100ms bucket — eight orders of
   magnitude below a nanosecond timestamp — so the loop recognizes it, reads the
   bucket back as the time the work should start, and either starts it or
-  rewrites it as a timestamp and leaves it alone until then. Queued completions
-  and cancelations sort first and drain immediately, which is what they want.
-- Requires `convex` 1.43 or later. Downgrading is not supported: an older
-  version would read a nanosecond timestamp as a 100ms bucket far in the future
-  and never start the work.
+  rewrites it as a timestamp and leaves it alone until then. This is a one-time
+  re-ordering of every queued entry, 64 per loop iteration, so right after the
+  push a large backlog of scheduled work adds processing overhead and can
+  briefly delay work that's ready now. Queued completions and cancelations sort
+  first and drain immediately, which is what they want.
+- This change is not backwards compatible. It requires `convex` 1.43 or later,
+  and downgrading a workpool that has run this version is not supported: an
+  older version would read a nanosecond timestamp as a 100ms bucket far in the
+  future and never start the work.
 
 ## 0.4.10
 

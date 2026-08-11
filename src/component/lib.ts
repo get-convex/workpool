@@ -56,7 +56,8 @@ export const enqueue = mutation({
     return await enqueueHandler(ctx, console, itemArgs);
   },
 });
-async function enqueueHandler(
+/** Exported for tests, so they enqueue exactly what the public API writes. */
+export async function enqueueHandler(
   ctx: MutationCtx,
   console: Logger,
   { runAt, ...workArgs }: ObjectType<typeof itemArgs>,
@@ -116,12 +117,15 @@ async function enqueueHandler(
   // its start time directly. In between: order it by the commit timestamp so
   // it can't be lost, and let the loop move it forward once it sees the `runAt`
   // (see `promoteScheduled`) — one extra write, only for near-future work.
+  // `hasRunAt` puts that last case in its own index lane, so entries waiting
+  // to be moved never sit in front of ready work.
   const delayMs = runAt - Date.now();
   await ctx.db.insert("pendingStart", {
     workId,
     segment:
       delayMs > SAFE_FUTURE_MS ? toTimestamp(runAt) : ctx.db.vars.commitTs,
     ...(delayMs > 0 ? { runAt } : {}),
+    ...(delayMs > 0 && delayMs <= SAFE_FUTURE_MS ? { hasRunAt: true } : {}),
   });
   recordEnqueued(console, { workId, fnName: workArgs.fnName, runAt });
   return workId;

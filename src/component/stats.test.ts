@@ -305,7 +305,9 @@ describe("stats", () => {
       const cursor = await t.run(async (ctx) => {
         return await paginator(ctx.db, schema)
           .query("pendingStart")
-          .withIndex("segment", (q) => q.gte("segment", 0n))
+          .withIndex("hasRunAt_segment", (q) =>
+            q.eq("hasRunAt", undefined).gte("segment", 0n),
+          )
           .paginate({
             numItems: 1,
             cursor: null,
