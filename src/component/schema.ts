@@ -96,7 +96,7 @@ export default defineSchema({
     // into two lanes so those entries never sit in front of ready work — the
     // loop drains this lane in parallel with starting work from the other.
     // Entries whose `segment` is already their start time don't need it, and
-    // its absence puts entries older versions wrote in the main lane, where
+    // its absence puts entries older versions wrote in the incoming lane, where
     // the legacy handling lives.
     hasRunAt: v.optional(v.boolean()),
   })

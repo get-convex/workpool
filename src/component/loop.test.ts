@@ -401,11 +401,11 @@ describe("loop", () => {
       expect(o.running.map((r) => r.workId)).toEqual([workId]);
     });
 
-    it("moves near-future work a pre-lane version left in the main lane", async () => {
+    it("moves near-future work a pre-lane version left in the incoming lane", async () => {
       await initialize();
       const runAt = Date.now() + 100 * SECOND;
       // Held at its commit position with `runAt` but no `hasRunAt`: the shape
-      // written before the held lane existed.
+      // written before the scheduled lane existed.
       const workId = await t.run(async (ctx) => {
         const wid = await ctx.db.insert("work", {
           fnType: "action",
@@ -690,7 +690,7 @@ describe("loop", () => {
       await initialize();
       const runAt = Date.now() + 100 * SECOND;
       // Inside SAFE_FUTURE_MS, so the enqueue had to order it by its commit
-      // timestamp, in the held lane; the loop sees it there exactly once, to
+      // timestamp, in the scheduled lane; the loop sees it there exactly once, to
       // move it.
       const workId = await enqueueWork({}, { runAt });
 
@@ -702,7 +702,7 @@ describe("loop", () => {
       let o = await observe();
       expect(o.running).toHaveLength(0); // moved, not started
       expect(o.pendingStart[0].segment).toBe(toTimestamp(runAt));
-      // Moved out of the held lane, and that lane's cursor moved past where it
+      // Moved out of the scheduled lane, and that lane's cursor moved past where it
       // used to sit, so it won't come back.
       expect(o.pendingStart[0].hasRunAt).toBeUndefined();
       expect(o.segmentCursors!.scheduled).toBeGreaterThan(0n);
@@ -741,14 +741,14 @@ describe("loop", () => {
   });
 
   // ────────────────────────────────────────────────────────────────────
-  // The held lane: near-future work waiting to be moved to its start time
+  // The scheduled lane: near-future work waiting to be moved to its start time
   // ────────────────────────────────────────────────────────────────────
 
-  describe("held lane", () => {
+  describe("scheduled lane", () => {
     it("never lets held work sit in front of ready work", async () => {
       // A bulk enqueue of near-future work lands ahead of anything enqueued
       // after it, and only MAIN_BATCH_SIZE entries move per iteration. In its
-      // own lane it drains in parallel; in the main lane it would starve the
+      // own lane it drains in parallel; in the incoming lane it would starve the
       // ready item below for ceil(70/64) iterations.
       await initialize({ maxParallelism: 3 });
       const runAt = Date.now() + 100 * SECOND;
@@ -808,7 +808,7 @@ describe("loop", () => {
       const heldId = await enqueueWork({}, { runAt: Date.now() + SECOND });
       vi.advanceTimersByTime(2 * SECOND);
 
-      // Saturated: nothing can start, so the held lane isn't even read.
+      // Saturated: nothing can start, so the scheduled lane isn't even read.
       const idle = await runLoop();
       expect(idle.kind).toBe("idle");
       expect((await observe()).pendingStart).toHaveLength(1);
@@ -823,6 +823,64 @@ describe("loop", () => {
       const o = await observe();
       expect(o.pendingStart).toHaveLength(0);
       expect(o.running.map((r) => r.workId)).toEqual([heldId]);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────
+  // Cursor invariant: an entry is never left behind the cursor
+  //
+  // Nothing rescans a lane behind its cursor, so an entry written below it is
+  // lost for good. Both cases below are ones where the time the loop wants to
+  // write is behind a cursor that holds a commit timestamp from the same
+  // millisecond — the two clocks aren't the same, so the loop places its
+  // writes against the cursor rather than against `Date.now()`.
+  // ────────────────────────────────────────────────────────────────────
+
+  describe("cursor invariant", () => {
+    it("starts a retry whose backoff is shorter than the cursor's resolution", async () => {
+      await initialize();
+      const workId = await enqueueWork({
+        retryBehavior: { maxAttempts: 3, initialBackoffMs: 0, base: 2 },
+      });
+      await runLoop();
+      await simulateCompletion(workId, { kind: "failed", error: "boom" }, 0);
+      // A ready entry enqueued after the completion: its commit timestamp is
+      // above the retry's `Date.now()`-derived one, so an unclamped cursor
+      // would advance past the retry in the same iteration that wrote it.
+      const laterId = await enqueueWork();
+
+      await runLoop();
+      let o = await observe();
+      expect(o.running.map((r) => r.workId)).toEqual([laterId]);
+      const retry = o.pendingStart.find((p) => p.workId === workId);
+      assert(retry);
+      expect(retry.segment).toBeGreaterThanOrEqual(o.segmentCursors!.incoming);
+
+      // Still readable, so the next iteration starts it.
+      await runLoop();
+      o = await observe();
+      expect(o.pendingStart).toHaveLength(0);
+      expect(o.running.map((r) => r.workId)).toContain(workId);
+    });
+
+    it("keeps a sub-millisecond runAt readable when it moves out of the scheduled lane", async () => {
+      await initialize();
+      // Truncating this `runAt` to whole milliseconds lands it at or below the
+      // cursor, which by now holds a commit timestamp from this millisecond.
+      const workId = await enqueueWork({}, { runAt: Date.now() + 0.5 });
+      const readyId = await enqueueWork();
+
+      await runLoop();
+      const o = await observe();
+      expect(o.running.map((r) => r.workId)).toEqual([readyId]);
+      const moved = o.pendingStart.find((p) => p.workId === workId);
+      assert(moved);
+      expect(moved.hasRunAt).toBeUndefined();
+      expect(moved.segment).toBeGreaterThanOrEqual(o.segmentCursors!.incoming);
+
+      vi.advanceTimersByTime(1);
+      await runLoop();
+      expect((await observe()).running.map((r) => r.workId)).toContain(workId);
     });
   });
 

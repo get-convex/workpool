@@ -237,6 +237,8 @@ export const run = internalMutation({
     const globals = await getGlobals(ctx);
     const console = createLogger(globals.logLevel);
     const segment = getCurrentSegment();
+    const incomingGuard = cursorGuard(state.segmentCursors.incoming);
+    const scheduledGuard = cursorGuard(state.segmentCursors.scheduled ?? 0n);
 
     const compLabel = `[main] pendingCompletion(${batch.completions.length})`;
     console.time(compLabel);
@@ -245,6 +247,7 @@ export const run = internalMutation({
       state,
       batch.completions,
       console,
+      incomingGuard,
     );
     console.timeEnd(compLabel);
 
@@ -268,14 +271,14 @@ export const run = internalMutation({
     // ── Start new work ──
     // Entries whose `runAt` hasn't arrived were only visible because we
     // couldn't safely write that time into `segment` at enqueue. We can here:
-    // this transaction also writes the cursors, so a value past `now` is
-    // guaranteed to land ahead of them. Move them and they stop coming back.
+    // this transaction also writes the cursors, so the guard can place the
+    // entry relative to them. Move them and they stop coming back.
     const now = Date.now();
     const isDue = (s: Start) => s.runAt === undefined || s.runAt <= now;
     const scheduled = batch.scheduled ?? [];
     const all = [...batch.starts, ...scheduled];
     const notYet = all.filter((s) => !isDue(s));
-    // Oldest first across both lanes: the main lane's `segment` is when an
+    // Oldest first across both lanes: the incoming lane's `segment` is when an
     // entry became eligible, and a due entry from the scheduled lane has been
     // eligible since its `runAt`.
     const eligible = all
@@ -288,7 +291,7 @@ export const run = internalMutation({
     if (notYet.length > 0) {
       const promoteLabel = `[main] promote(${notYet.length})`;
       console.time(promoteLabel);
-      await promoteScheduled(ctx, notYet);
+      await promoteScheduled(ctx, notYet, incomingGuard);
       console.timeEnd(promoteLabel);
     }
 
@@ -335,16 +338,22 @@ export const run = internalMutation({
     // Capacity can cut the starts short, so only advance each lane's cursor
     // over the leading run we finished with — started or moved forward.
     // Stopping at the first entry we left alone is what keeps it from being
-    // skipped.
+    // skipped. The guards keep the advance safe against everything placed
+    // this transaction (only the incoming lane receives placements — promoting
+    // an entry is what takes it out of the scheduled lane).
     const handled = new Set([...pending, ...notYet].map((s) => s._id));
+    let incoming = state.segmentCursors.incoming;
     for (const start of batch.starts) {
       if (!handled.has(start._id)) break;
-      state.segmentCursors.incoming = start.segment;
+      incoming = start.segment;
     }
+    state.segmentCursors.incoming = incomingGuard.advance(incoming);
+    let scheduledCursor = state.segmentCursors.scheduled ?? 0n;
     for (const entry of scheduled) {
       if (!handled.has(entry._id)) break;
-      state.segmentCursors.scheduled = entry.segment;
+      scheduledCursor = entry.segment;
     }
+    state.segmentCursors.scheduled = scheduledGuard.advance(scheduledCursor);
 
     await ctx.db.replace("internalState", state._id, state);
     // Return null: batch-worker re-runs `getBatch` immediately to drain, and
@@ -468,6 +477,7 @@ async function handleCompletions(
   state: Doc<"internalState">,
   completed: Completion[],
   console: Logger,
+  guard: CursorGuard,
 ) {
   // Completions that were going to be retried but have since been canceled.
   const toCancel: CompleteJob[] = [];
@@ -489,7 +499,7 @@ async function handleCompletions(
           console.warn(`[main] ${c.workId} is gone, but trying to complete`);
           return;
         }
-        const retried = await rescheduleJob(ctx, work, console);
+        const retried = await rescheduleJob(ctx, work, console, guard);
         if (retried) {
           state.report.retries++;
           recordCompleted(console, work, "retrying", undefined);
@@ -627,25 +637,73 @@ async function handleRecovery(
   }
 }
 
+function maxTimestamp(a: bigint, b: bigint) {
+  return a > b ? a : b;
+}
+
+/**
+ * Nothing rescans a lane behind its cursor, so an entry below the cursor is
+ * lost for good. This guard is how the loop keeps the two sides of that
+ * invariant consistent within one transaction:
+ *
+ * - `place` raises a `segment` we're about to write to at least the cursor, so
+ *   we never put an entry somewhere the loop has already read past.
+ * - `advance` moves the cursor as far as the batch earned, but never past a
+ *   segment placed this transaction — the cursor isn't final when those writes
+ *   happen (a retry is written while completions are handled, before we know
+ *   which starts we'll get through) — and never backwards, since the batch was
+ *   built from a snapshot that may predate the cursor as read here.
+ *
+ * Placing against the cursor rather than against the clock is what makes the
+ * requirement local: nothing that writes a `segment` has to know where the
+ * eligibility bound sits or how a commit timestamp compares to `Date.now()`.
+ * Equality is fine throughout — lanes are read with `gte`.
+ */
+function cursorGuard(cursor: bigint) {
+  let lowestPlaced: bigint | undefined;
+  return {
+    place(segment: bigint): bigint {
+      const placed = maxTimestamp(segment, cursor);
+      if (lowestPlaced === undefined || placed < lowestPlaced) {
+        lowestPlaced = placed;
+      }
+      return placed;
+    },
+    advance(candidate: bigint): bigint {
+      const capped =
+        lowestPlaced !== undefined && lowestPlaced < candidate
+          ? lowestPlaced
+          : candidate;
+      return maxTimestamp(cursor, capped);
+    },
+  };
+}
+type CursorGuard = ReturnType<typeof cursorGuard>;
+
 /**
  * Moves entries that aren't due yet to sort at their `runAt` instead of at the
  * commit timestamp they were enqueued with, so the cursor can pass them and
  * they don't come back until they're actually due. Safe to compute from the
- * clock here, unlike at enqueue: this transaction writes the cursors too, so a
- * time past `now` can't end up behind either one.
+ * clock here, unlike at enqueue: this transaction writes the cursors too, so
+ * the guard can hold the entry above them.
  */
-async function promoteScheduled(ctx: MutationCtx, notYet: Start[]) {
+async function promoteScheduled(
+  ctx: MutationCtx,
+  notYet: Start[],
+  guard: CursorGuard,
+) {
   await Promise.all(
     notYet.map(async ({ _id, runAt }) => {
       // A concurrent cancelation may have removed it.
       if (!(await ctx.db.get("pendingStart", _id))) return;
       await ctx.db.patch("pendingStart", _id, {
-        // Round up to the next whole millisecond: the main-lane cursor has
-        // already reached `endOfMs(now)`, so a `runAt` part-way through the
-        // current millisecond would truncate to a timestamp behind it.
-        segment: toTimestamp(Math.ceil(runAt!)),
-        // Now ordered by its start time, so it leaves the held lane and waits
-        // in the main one like any far-future enqueue.
+        // Round a fractional `runAt` up to the next whole millisecond — the
+        // first one the clock can call it due. Rounding down would leave it
+        // readable while `isDue` still says no, so it'd be re-read and
+        // re-moved until the clock leaves the current millisecond.
+        segment: guard.place(toTimestamp(Math.ceil(runAt!))),
+        // Now ordered by its start time, so it leaves the scheduled lane and
+        // waits in the incoming one like any far-future enqueue.
         hasRunAt: undefined,
       });
     }),
@@ -791,6 +849,7 @@ async function rescheduleJob(
   ctx: MutationCtx,
   work: Doc<"work">,
   console: Logger,
+  guard: CursorGuard,
 ): Promise<boolean> {
   const pendingCancelation = await ctx.db
     .query("pendingCancelation")
@@ -822,11 +881,12 @@ async function rescheduleJob(
     Math.pow(work.retryBehavior.base, work.attempts - 1);
   const nextAttempt = withJitter(backoffMs);
   // The backoff can go straight into `segment` however short it is: we're in
-  // the transaction that writes the cursor, so a time past now is certain to
-  // sort ahead of it. No `runAt` needed — `segment` already is the start time.
+  // the transaction that writes the cursor, so the guard can keep the entry
+  // above it even for a zero backoff. No `runAt` needed — `segment` already is
+  // the start time.
   await ctx.db.insert("pendingStart", {
     workId: work._id,
-    segment: toTimestamp(Date.now() + nextAttempt),
+    segment: guard.place(toTimestamp(Date.now() + nextAttempt)),
   });
   return true;
 }

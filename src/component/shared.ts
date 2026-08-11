@@ -58,15 +58,6 @@ export function fromTimestamp(timestamp: bigint): number {
 /**
  * The exclusive upper bound on entries eligible at `ms` — the end of that
  * millisecond, not the start of it.
- *
- * The clock and the timestamps it gets compared against have different
- * resolutions: `Date.now()` is whole milliseconds, but a commit timestamp is
- * not. A row committing during millisecond `now` lands *above*
- * `toTimestamp(now)` (a transaction's timestamp measures ~0.2ms above its own
- * `Date.now()`), so bounding there would skip everything that committed this
- * millisecond — thousands of rows under load. Scheduled times are whole
- * milliseconds, so extending to the end of the millisecond can't let
- * not-yet-due work through.
  */
 export function endOfMs(ms: number): bigint {
   return toTimestamp(Math.floor(ms) + 1);
