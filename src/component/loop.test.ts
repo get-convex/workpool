@@ -459,6 +459,26 @@ describe("loop", () => {
       expect(o.pendingStart).toHaveLength(0);
       expect(o.running.map((r) => r.workId)).toEqual([workId]);
     });
+
+    it("drops the entry of canceled work that predates the pendingStartId pointer", async () => {
+      await initialize();
+      const runAt = Date.now() + 100 * SECOND;
+      const workId = await enqueueLegacyWork(runAt);
+      await runLoop(); // re-keys it to its start time
+      await runLoop(); // the sweep verifies the re-keyed entry
+
+      // Cancelation can't reach the entry (no pointer on old work docs), so
+      // it only marks the work; the scan drops the entry when it comes due.
+      await t.mutation(api.lib.cancel, { id: workId });
+      await runLoop();
+      expect((await observe()).pendingStart).toHaveLength(1);
+
+      vi.advanceTimersByTime(100 * SECOND);
+      await runLoop();
+      const o = await observe();
+      expect(o.pendingStart).toHaveLength(0);
+      expect(o.running).toHaveLength(0);
+    });
   });
 
   describe("capacity", () => {

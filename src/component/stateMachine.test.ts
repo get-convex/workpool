@@ -266,10 +266,13 @@ describe("state machine", () => {
 
       // pendingStart
       if (state.pendingStart) {
-        await ctx.db.insert("pendingStart", {
+        const pendingStartId = await ctx.db.insert("pendingStart", {
           workId: wId,
           segment: seg,
         });
+        if (await ctx.db.get("work", wId)) {
+          await ctx.db.patch("work", wId, { pendingStartId });
+        }
       }
 
       // pendingCompletion
@@ -305,10 +308,10 @@ describe("state machine", () => {
   async function observeState(workId: Id<"work">): Promise<ObservedState> {
     return t.run(async (ctx) => {
       const work = await ctx.db.get("work", workId);
-      const ps = await ctx.db
-        .query("pendingStart")
-        .withIndex("workId", (q) => q.eq("workId", workId))
-        .first();
+      const ps =
+        (await ctx.db.query("pendingStart").collect()).find(
+          (p) => p.workId === workId,
+        ) ?? null;
       const state = await ctx.db.query("internalState").unique();
       const inRunning =
         state?.running.some((r) => r.workId === workId) ?? false;
@@ -961,9 +964,11 @@ describe("state machine", () => {
           fnArgs: {},
           attempts: 0,
         });
-        await ctx.db.insert("pendingStart", {
-          workId: wId,
-          segment: seg,
+        await ctx.db.patch("work", wId, {
+          pendingStartId: await ctx.db.insert("pendingStart", {
+            workId: wId,
+            segment: seg,
+          }),
         });
         await ctx.db.insert("pendingCancelation", {
           workId: wId,
@@ -1155,17 +1160,21 @@ describe("state machine", () => {
           retry: false,
           runResult: { kind: "success", returnValue: null },
         });
-        await ctx.db.insert("pendingStart", {
-          workId: w2,
-          segment: seg,
+        await ctx.db.patch("work", w2, {
+          pendingStartId: await ctx.db.insert("pendingStart", {
+            workId: w2,
+            segment: seg,
+          }),
         });
         await ctx.db.insert("pendingCancelation", {
           workId: w2,
           segment: seg,
         });
-        await ctx.db.insert("pendingStart", {
-          workId: w3,
-          segment: seg,
+        await ctx.db.patch("work", w3, {
+          pendingStartId: await ctx.db.insert("pendingStart", {
+            workId: w3,
+            segment: seg,
+          }),
         });
 
         return { w1, w2, w3 };

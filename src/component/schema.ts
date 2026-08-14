@@ -86,6 +86,12 @@ export default defineSchema({
     onComplete: v.optional(vOnCompleteFnContext),
     retryBehavior: v.optional(retryBehavior),
     canceled: v.optional(v.boolean()),
+    // The queue entry waiting to start this work, if any — replacing a
+    // `workId` index on pendingStart. May be stale (the entry started and was
+    // deleted, or predates this pointer), so readers check the entry still
+    // exists. A pendingStart unreachable through this pointer is dropped
+    // reactively: the loop reads it and finds its work gone or canceled.
+    pendingStartId: v.optional(v.id("pendingStart")),
   }),
 
   // Written on enqueue & rescheduled for retry, read & deleted by `main`.
@@ -108,7 +114,6 @@ export default defineSchema({
     // separate index lane marked by this field; cleared like `runAt`.
     hasRunAt: v.optional(v.boolean()),
   })
-    .index("workId", ["workId"])
     .index("segment", ["segment"])
     .index("scheduledAt", ["scheduledAt"]),
 

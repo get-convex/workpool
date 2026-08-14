@@ -119,11 +119,12 @@ export async function enqueueHandler(
   // the loop sweeps that index in commit order and starts anything the cursor
   // passed over.
   const delayMs = runAt - Date.now();
-  await ctx.db.insert("pendingStart", {
+  const pendingStartId = await ctx.db.insert("pendingStart", {
     workId,
     segment: delayMs > 0 ? dueTimestamp(runAt) : ctx.db.vars.commitTs,
     ...(delayMs > 0 ? { scheduledAt: ctx.db.vars.commitTs } : {}),
   });
+  await ctx.db.patch("work", workId, { pendingStartId });
   recordEnqueued(console, { workId, fnName: workArgs.fnName, runAt });
   return workId;
 }
@@ -214,10 +215,10 @@ async function statusHandler(ctx: QueryCtx, { id }: { id: Id<"work"> }) {
   if (!work) {
     return { state: "finished" } as const;
   }
-  const pendingStart = await ctx.db
-    .query("pendingStart")
-    .withIndex("workId", (q) => q.eq("workId", id))
-    .unique();
+  // The pointer can be stale after the work starts; check the entry exists.
+  const pendingStart = work.pendingStartId
+    ? await ctx.db.get("pendingStart", work.pendingStartId)
+    : null;
   if (pendingStart) {
     return { state: "pending", previousAttempts: work.attempts } as const;
   }
