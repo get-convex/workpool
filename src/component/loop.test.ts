@@ -17,7 +17,7 @@ import { setupTest } from "./setup.test.js";
 import {
   DEFAULT_MAX_PARALLELISM,
   fromSegment,
-  SAFE_FUTURE_MS,
+  fromTimestamp,
   toSegment,
   toTimestamp,
   WORKER_NAME,
@@ -448,6 +448,7 @@ describe("loop", () => {
       expect(o.running).toHaveLength(0);
       expect(o.pendingStart[0].segment).toBe(toTimestamp(startsAt));
 
+      await runLoop(); // the sweep verifies the re-keyed entry, once
       const idle = await runLoop();
       assert(idle.kind === "idle");
       expect(idle.timeoutMs).toBe(startsAt - Date.now());
@@ -550,6 +551,7 @@ describe("loop", () => {
       await runLoop();
       await simulateCompletion(workId, { kind: "failed", error: "boom" }, 0);
       await runLoop();
+      await runLoop(); // the sweep verifies the retry's entry, once
 
       // Still held back by the backoff: nothing to start yet.
       expect((await runLoop()).kind).toBe("idle");
@@ -675,9 +677,10 @@ describe("loop", () => {
 
     it("idles with a timeoutMs when only far-future work remains", async () => {
       await initialize();
-      // Beyond SAFE_FUTURE_MS, so the enqueue ordered it by its start time and
-      // the loop never has to look at it.
-      await enqueueWork({}, { runAt: Date.now() + 2 * SAFE_FUTURE_MS });
+      // Ordered by its start time, so beyond the sweep's one-time
+      // verification the loop never has to look at it.
+      await enqueueWork({}, { runAt: Date.now() + 10 * MINUTE });
+      await runLoop(); // the sweep verifies the entry, once
 
       const result = await t.query(internal.loop.getBatch, {
         name: WORKER_NAME,
@@ -686,33 +689,32 @@ describe("loop", () => {
       expect(result.timeoutMs).toBeGreaterThan(0);
     });
 
-    it("moves near-future work forward once, then idles until it's due", async () => {
+    it("sweeps near-future work once, then idles until it's due", async () => {
       await initialize();
       const runAt = Date.now() + 100 * SECOND;
-      // Inside SAFE_FUTURE_MS, so the enqueue had to order it by its commit
-      // timestamp, in the scheduled lane; the loop sees it there exactly once, to
-      // move it.
+      // Keyed at its start time directly; the sweep just verifies its enqueue
+      // committed in order, once, and never rewrites it.
       const workId = await enqueueWork({}, { runAt });
 
       const first = await runLoop();
       assert(first.kind === "work");
       expect(first.batch.starts).toHaveLength(0);
-      expect(first.batch.scheduled?.map((s) => s.workId)).toEqual([workId]);
+      expect(first.batch.sweep).toHaveLength(1);
+      expect(first.batch.sweep![0].starts).toHaveLength(0);
 
       let o = await observe();
-      expect(o.running).toHaveLength(0); // moved, not started
+      expect(o.running).toHaveLength(0);
       expect(o.pendingStart[0].segment).toBe(toTimestamp(runAt));
-      // Moved out of the scheduled lane, and that lane's cursor moved past where it
-      // used to sit, so it won't come back.
-      expect(o.pendingStart[0].hasRunAt).toBeUndefined();
-      expect(o.segmentCursors!.scheduled).toBeGreaterThan(0n);
-      expect(o.segmentCursors!.scheduled).toBeLessThan(toTimestamp(runAt));
+      // The sweep cursor covers its commit stamp now, so it's never re-read.
+      expect(o.segmentCursors!.scheduled).toBe(
+        o.pendingStart[0].scheduledAt as bigint,
+      );
 
       const second = await runLoop();
       assert(second.kind === "idle");
       expect(second.timeoutMs).toBe(100 * SECOND);
 
-      // It starts when it comes due, without another move.
+      // It starts when it comes due, untouched in the meantime.
       vi.advanceTimersByTime(100 * SECOND);
       await runLoop();
       o = await observe();
@@ -726,7 +728,8 @@ describe("loop", () => {
       await runLoop(); // start it: running=1, lastRecovery=now
 
       // Future work well past the ~1min recovery period.
-      await enqueueWork({}, { runAt: Date.now() + 2 * SAFE_FUTURE_MS });
+      await enqueueWork({}, { runAt: Date.now() + 10 * MINUTE });
+      await runLoop(); // the sweep verifies the entry, once
 
       const result = await t.query(internal.loop.getBatch, {
         name: WORKER_NAME,
@@ -741,15 +744,13 @@ describe("loop", () => {
   });
 
   // ────────────────────────────────────────────────────────────────────
-  // The scheduled lane: near-future work waiting to be moved to its start time
+  // Scheduled work: keyed at its start time, invisible until due
   // ────────────────────────────────────────────────────────────────────
 
-  describe("scheduled lane", () => {
-    it("never lets held work sit in front of ready work", async () => {
-      // A bulk enqueue of near-future work lands ahead of anything enqueued
-      // after it, and only MAIN_BATCH_SIZE entries move per iteration. In its
-      // own lane it drains in parallel; in the incoming lane it would starve the
-      // ready item below for ceil(70/64) iterations.
+  describe("scheduled work", () => {
+    it("never lets a scheduled backlog sit in front of ready work", async () => {
+      // A bulk enqueue of near-future work sorts above the eligibility bound,
+      // so it costs the ready item below nothing — no re-keying, no waiting.
       await initialize({ maxParallelism: 3 });
       const runAt = Date.now() + 100 * SECOND;
       for (let i = 0; i < 70; i++) await enqueueWork({}, { runAt });
@@ -759,37 +760,41 @@ describe("loop", () => {
 
       const o = await observe();
       expect(o.running.map((r) => r.workId)).toEqual([readyId]);
-      const moved = o.pendingStart.filter((p) => p.hasRunAt === undefined);
-      const held = o.pendingStart.filter((p) => p.hasRunAt === true);
-      expect(moved).toHaveLength(64); // one full batch moved alongside the start
-      expect(held).toHaveLength(6);
-      for (const p of moved) expect(p.segment).toBe(toTimestamp(runAt));
+      expect(o.pendingStart).toHaveLength(70);
+      for (const p of o.pendingStart) {
+        expect(p.segment).toBe(toTimestamp(runAt));
+        expect(p.scheduledAt).toBeDefined();
+      }
+      // The sweep verified all 70 in one pass; nothing left to do before the
+      // sooner of their due time and the next stuck-job recovery check.
+      const idle = await runLoop();
+      assert(idle.kind === "idle");
+      expect(idle.timeoutMs).toBeLessThanOrEqual(100 * SECOND);
     });
 
-    it("gives due held work start slots before fetching more ready work", async () => {
+    it("starts due scheduled work and ready work in eligibility order", async () => {
       await initialize({ maxParallelism: 1 });
-      const heldId = await enqueueWork({}, { runAt: Date.now() + SECOND });
+      const scheduledId = await enqueueWork({}, { runAt: Date.now() + SECOND });
       const readyId = await enqueueWork();
       vi.advanceTimersByTime(SECOND);
 
-      // The due held entry claims the only slot, so no ready work is fetched.
+      // The ready item became eligible first: its commit precedes the runAt.
       await runLoop();
       let o = await observe();
-      expect(o.running.map((r) => r.workId)).toEqual([heldId]);
-      expect(o.pendingStart.map((p) => p.workId)).toEqual([readyId]);
+      expect(o.running.map((r) => r.workId)).toEqual([readyId]);
 
       await simulateCompletion(
-        heldId,
+        readyId,
         { kind: "success", returnValue: null },
         0,
       );
       await runLoop();
       o = await observe();
       expect(o.pendingStart).toHaveLength(0);
-      expect(o.running.map((r) => r.workId)).toEqual([readyId]);
+      expect(o.running.map((r) => r.workId)).toEqual([scheduledId]);
     });
 
-    it("starts held work directly once it's due, without moving it", async () => {
+    it("starts scheduled work once it's due, without ever rewriting it", async () => {
       await initialize();
       const workId = await enqueueWork({}, { runAt: Date.now() + SECOND });
 
@@ -801,19 +806,19 @@ describe("loop", () => {
       expect(o.running.map((r) => r.workId)).toEqual([workId]);
     });
 
-    it("leaves due held work for the iteration that has capacity for it", async () => {
+    it("holds due work while saturated, and starts it as capacity frees", async () => {
       await initialize({ maxParallelism: 1 });
       const firstId = await enqueueWork();
       await runLoop(); // fills the only slot
-      const heldId = await enqueueWork({}, { runAt: Date.now() + SECOND });
+      const dueId = await enqueueWork({}, { runAt: Date.now() + SECOND });
       vi.advanceTimersByTime(2 * SECOND);
 
-      // Saturated: nothing can start, so the scheduled lane isn't even read.
+      await runLoop(); // the sweep verifies the new entry, once
       const idle = await runLoop();
-      expect(idle.kind).toBe("idle");
+      expect(idle.kind).toBe("idle"); // saturated: nothing can start
       expect((await observe()).pendingStart).toHaveLength(1);
 
-      // A completion frees the slot; the same iteration starts the held work.
+      // A completion frees the slot; the same iteration starts the work.
       await simulateCompletion(
         firstId,
         { kind: "success", returnValue: null },
@@ -822,7 +827,99 @@ describe("loop", () => {
       await runLoop();
       const o = await observe();
       expect(o.pendingStart).toHaveLength(0);
-      expect(o.running.map((r) => r.workId)).toEqual([heldId]);
+      expect(o.running.map((r) => r.workId)).toEqual([dueId]);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────
+  // The out-of-order sweep: entries whose enqueue lost the race
+  // ────────────────────────────────────────────────────────────────────
+
+  describe("out-of-order sweep", () => {
+    /**
+     * A near-future enqueue whose commit took longer than its delay: the
+     * entry appears with a `segment` the cursor already passed, where the
+     * segment scan will never see it. Its `scheduledAt` commit stamp is how
+     * the sweep finds it.
+     */
+    async function enqueueBehindCursor(cursor: bigint): Promise<Id<"work">> {
+      return t.run(async (ctx) => {
+        const workId = await ctx.db.insert("work", {
+          fnType: "action",
+          fnHandle: "test_handle",
+          fnName: "test_handle",
+          fnArgs: {},
+          attempts: 0,
+        });
+        await ctx.db.insert("pendingStart", {
+          workId,
+          segment: cursor - 1n,
+          runAt: fromTimestamp(cursor - 1n),
+          scheduledAt: ctx.db.vars.commitTs,
+        });
+        return workId;
+      });
+    }
+
+    it("starts an entry whose enqueue lost the race with the cursor", async () => {
+      await initialize({ maxParallelism: 2 });
+      // Run something so the incoming cursor is somewhere real.
+      const readyId = await enqueueWork();
+      await runLoop();
+      const cursor = (await observe()).segmentCursors!.incoming;
+      expect(cursor).toBeGreaterThan(0n);
+
+      const lostId = await enqueueBehindCursor(cursor);
+
+      await runLoop();
+      const o = await observe();
+      expect(o.running.map((r) => r.workId)).toContain(lostId);
+      expect(o.pendingStart).toHaveLength(0);
+      // Its commit stamp is covered, so the sweep never re-reads it.
+      expect(o.segmentCursors!.scheduled).toBeGreaterThan(0n);
+      expect(readyId).toBeDefined();
+    });
+
+    it("waits for capacity to retire an out-of-order entry, without losing it", async () => {
+      await initialize({ maxParallelism: 1 });
+      const firstId = await enqueueWork();
+      await runLoop(); // fills the only slot
+      const cursor = (await observe()).segmentCursors!.incoming;
+      const lostId = await enqueueBehindCursor(cursor);
+
+      // Saturated: the entry can't start, so the sweep leaves its stamp
+      // uncovered rather than passing it.
+      const idle = await runLoop();
+      expect(idle.kind).toBe("idle");
+      expect((await observe()).pendingStart.map((p) => p.workId)).toEqual([
+        lostId,
+      ]);
+
+      await simulateCompletion(
+        firstId,
+        { kind: "success", returnValue: null },
+        0,
+      );
+      await runLoop();
+      const o = await observe();
+      expect(o.pendingStart).toHaveLength(0);
+      expect(o.running.map((r) => r.workId)).toEqual([lostId]);
+    });
+
+    it("caps the cursor at observed commit stamps when starting wall-keyed work", async () => {
+      await initialize();
+      const runAt = Date.now() + SECOND;
+      const workId = await enqueueWork({}, { runAt });
+      await runLoop(); // sweep verifies the entry
+      vi.advanceTimersByTime(SECOND);
+      await runLoop(); // starts it, keyed at its start time
+
+      const o = await observe();
+      expect(o.running.map((r) => r.workId)).toEqual([workId]);
+      // The cursor stops at the freshest commit stamp this run had seen, not
+      // at the wall-clock key: a commit racing this iteration could land
+      // below that key, and nothing relates the two clocks.
+      expect(o.segmentCursors!.incoming).toBeLessThan(toTimestamp(runAt));
     });
   });
 
@@ -863,20 +960,21 @@ describe("loop", () => {
       expect(o.running.map((r) => r.workId)).toContain(workId);
     });
 
-    it("keeps a sub-millisecond runAt readable when it moves out of the scheduled lane", async () => {
+    it("keys a sub-millisecond runAt to the next whole millisecond", async () => {
       await initialize();
-      // Truncating this `runAt` to whole milliseconds lands it at or below the
-      // cursor, which by now holds a commit timestamp from this millisecond.
-      const workId = await enqueueWork({}, { runAt: Date.now() + 0.5 });
+      // Truncated to whole milliseconds this `runAt` would be readable while
+      // `isDue` still says no; rounded up, it's invisible until the first
+      // millisecond the clock can call it due.
+      const runAt = Date.now() + 0.5;
+      const workId = await enqueueWork({}, { runAt });
       const readyId = await enqueueWork();
 
       await runLoop();
       const o = await observe();
       expect(o.running.map((r) => r.workId)).toEqual([readyId]);
-      const moved = o.pendingStart.find((p) => p.workId === workId);
-      assert(moved);
-      expect(moved.hasRunAt).toBeUndefined();
-      expect(moved.segment).toBeGreaterThanOrEqual(o.segmentCursors!.incoming);
+      const entry = o.pendingStart.find((p) => p.workId === workId);
+      assert(entry);
+      expect(entry.segment).toBe(toTimestamp(Math.ceil(runAt)));
 
       vi.advanceTimersByTime(1);
       await runLoop();

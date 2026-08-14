@@ -11,19 +11,24 @@
   pools.
 - The `segment` fields keep their name, but now hold nanoseconds rather than
   100ms buckets. Work scheduled to start later stores its start time there
-  directly, which sorts after everything already committed, so ready and
-  scheduled work share an ordering.
-- Work scheduled less than five minutes out can't safely store its start time at
-  enqueue, so it's held at its commit position until the loop moves it. A
-  `hasRunAt` marker puts those entries in their own lane of the `pendingStart`
-  index, moved along at a full batch per iteration in parallel with starting
-  ready work — so a bulk enqueue of near-future work never delays work that's
-  ready now.
+  directly, so ready and scheduled work share an ordering, scheduled work sorts
+  above the loop's read bound until it's due, and a bulk enqueue of scheduled
+  work never sits in front of ready work.
+- A scheduled start time can commit _behind_ the loop's cursor (when the enqueue
+  takes longer to commit than the delay), where the ordered scan would never see
+  it. Every entry keyed by a wall-clock time also records its commit timestamp
+  in a `scheduledAt` field; the loop sweeps that index in commit order — which
+  nothing can land behind — inspects each entry exactly once, and directly
+  starts the rare entry the cursor passed over. No entry is ever rewritten.
+- The loop's cursor never advances past the newest commit timestamp it has
+  observed, so a scheduled entry starting at its wall-clock time can't push the
+  cursor ahead of a racing enqueue's commit — the design makes no assumptions
+  about how wall clocks relate to the commit timestamp clock.
 - Upgrading in place is safe, including for work that hasn't come due yet. A
   `pendingStart` an older version wrote holds a 100ms bucket — eight orders of
   magnitude below a nanosecond timestamp — so the loop recognizes it, reads the
-  bucket back as the time the work should start, and either starts it or
-  rewrites it as a timestamp and leaves it alone until then. This is a one-time
+  bucket back as the time the work should start, and either starts it or re-keys
+  it as a timestamp and leaves it alone until then. This is a one-time
   re-ordering of every queued entry, 64 per loop iteration, so right after the
   push a large backlog of scheduled work adds processing overhead and can
   briefly delay work that's ready now. Queued completions and cancelations sort
