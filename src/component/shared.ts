@@ -56,6 +56,16 @@ export function fromTimestamp(timestamp: bigint): number {
 }
 
 /**
+ * A start time as an ordering value: rounded up to the next whole millisecond,
+ * the first one the clock can call it due. Rounding down would make an entry
+ * readable while `isDue` still says no, so the loop would re-read it until the
+ * clock leaves the current millisecond.
+ */
+export function dueTimestamp(runAt: number): bigint {
+  return toTimestamp(Math.ceil(runAt));
+}
+
+/**
  * The exclusive upper bound on entries eligible at `ms` — the end of that
  * millisecond, not the start of it.
  */
@@ -82,22 +92,6 @@ const MIN_TIMESTAMP = toTimestamp(Date.UTC(2000, 0, 1));
 export function legacyRunAt(segment: bigint): number | undefined {
   return segment < MIN_TIMESTAMP ? fromSegment(segment) : undefined;
 }
-
-/**
- * How far ahead a caller-supplied `runAt` has to be before we can write it
- * straight into the ordering field.
- *
- * Writing a wall-clock time there is only safe if the value is guaranteed to
- * land after every commit timestamp the loop has already read. The time is
- * chosen when the enqueue *starts*, so the margin has to cover however long
- * that transaction then takes to commit. Five minutes is far longer than any
- * mutation can run, so a `runAt` beyond it cannot land in the past. Anything
- * nearer is ordered by `db.vars.commitTs` instead, keeps its `runAt` in a
- * separate field, and is marked `hasRunAt` so it sits in its own index lane.
- * The loop then moves it to its start time itself, which is safe there; see
- * `promoteScheduled` in loop.ts.
- */
-export const SAFE_FUTURE_MS = 5 * MINUTE;
 
 export const vConfig = v.object({
   maxParallelism: v.number(),

@@ -21,9 +21,8 @@ import {
   fnType,
   vOnCompleteFnContext,
   retryBehavior,
-  SAFE_FUTURE_MS,
   status as statusValidator,
-  toTimestamp,
+  dueTimestamp,
 } from "./shared.js";
 import { recordEnqueued } from "./stats.js";
 import { getOrUpdateGlobals } from "./config.js";
@@ -112,20 +111,18 @@ export async function enqueueHandler(
   // Store the work item
   const workId = await ctx.db.insert("work", workItem);
 
-  // Ready now: order it by this transaction's commit timestamp. Far enough out
-  // that no commit latency could put it behind the loop's cursor: order it by
-  // its start time directly. In between: order it by the commit timestamp so
-  // it can't be lost, and let the loop move it forward once it sees the `runAt`
-  // (see `promoteScheduled`) — one extra write, only for near-future work.
-  // `hasRunAt` puts that last case in its own index lane, so entries waiting
-  // to be moved never sit in front of ready work.
+  // Ready now: order it by this transaction's commit timestamp, which can't
+  // land behind the loop's cursor. Scheduled for later: order it by its start
+  // time, so it stays invisible to the loop until it's due. A scheduled entry
+  // could commit *behind* the cursor (if this enqueue takes longer to commit
+  // than the delay), so it also records its commit stamp in `scheduledAt`;
+  // the loop sweeps that index in commit order and starts anything the cursor
+  // passed over.
   const delayMs = runAt - Date.now();
   await ctx.db.insert("pendingStart", {
     workId,
-    segment:
-      delayMs > SAFE_FUTURE_MS ? toTimestamp(runAt) : ctx.db.vars.commitTs,
-    ...(delayMs > 0 ? { runAt } : {}),
-    ...(delayMs > 0 && delayMs <= SAFE_FUTURE_MS ? { hasRunAt: true } : {}),
+    segment: delayMs > 0 ? dueTimestamp(runAt) : ctx.db.vars.commitTs,
+    ...(delayMs > 0 ? { scheduledAt: ctx.db.vars.commitTs } : {}),
   });
   recordEnqueued(console, { workId, fnName: workArgs.fnName, runAt });
   return workId;

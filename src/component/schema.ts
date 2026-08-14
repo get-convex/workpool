@@ -18,11 +18,12 @@ import {
 // is assigned when the mutation *starts*, so a slow mutation's row can land
 // behind rows that already committed and were read.)
 //
-// Entries that shouldn't be processed until later store that time directly,
-// which sorts after everything committed before then. `v.commitTs()` accepts any
-// int64, so both live in one field and one index.
+// Entries that shouldn't be processed until later store that time directly.
+// `v.commitTs()` accepts any int64, so both clocks live in one field and one
+// index, and scheduled work sorts above the loop's read bound until it's due.
 const segment = v.commitTs();
-// A cursor into a `segment` index. Reads of the field come back as a plain int64.
+// A cursor into an index on a commit-timestamp field. Reads of such a field
+// come back as a plain int64.
 const timestamp = v.int64();
 
 export default defineSchema({
@@ -41,10 +42,16 @@ export default defineSchema({
       incoming: timestamp,
       completion: timestamp,
       cancelation: timestamp,
-      // Cursor into pendingStart's `hasRunAt: true` lane. Optional because it
-      // didn't exist before that lane did; absent means "from the beginning".
+      // Cursor into pendingStart's `scheduledAt` index — the out-of-order
+      // sweep. Optional because it didn't always exist; absent means "from the
+      // beginning".
       scheduled: v.optional(timestamp),
     }),
+    // The commit timestamp of the previous `run`. Everything this run read is
+    // at least this recent, so the `incoming` cursor may advance up to the
+    // highest commit timestamp observed — but no further, or a commit racing
+    // this run could land behind it. See `run`'s cursor advance.
+    lastCommitTs: v.optional(v.commitTs()),
     // Unlike the cursors, this stays a 100ms "segment": it only paces how often
     // the loop checks for stuck jobs.
     lastRecovery: v.int64(),
@@ -85,23 +92,25 @@ export default defineSchema({
   pendingStart: defineTable({
     workId: v.id("work"),
     segment,
-    // Only set when the work shouldn't start yet. `segment` already holds that
-    // time whenever we could safely write it there; when we couldn't — a
-    // caller-supplied `runAt` too near to be sure it lands ahead of the loop's
-    // cursor — `segment` is the commit timestamp and this is what tells the
-    // loop to move the entry forward instead of starting it.
+    // The commit timestamp, recorded on every entry whose `segment` is a
+    // wall-clock start time rather than a commit timestamp. Such an entry can
+    // commit *behind* the loop's `segment` cursor (when the enqueue takes
+    // longer to commit than the delay); the sweep walks this index in commit
+    // order — which nothing can land behind — and starts any entry whose
+    // `segment` the cursor already passed. Its absence also tells the loop
+    // that `segment` is a commit timestamp it has observed, which is what
+    // bounds how far the cursor may advance. See `queryPending`.
+    scheduledAt: v.optional(v.commitTs()),
+    // @deprecated The exact start time of an entry written by an unreleased
+    // revision. The loop re-keys such entries and clears this on first read.
     runAt: v.optional(v.number()),
-    // Set (to true) on exactly the entries described above: held at their
-    // commit position awaiting a move to their start time. It splits the index
-    // into two lanes so those entries never sit in front of ready work — the
-    // loop drains this lane in parallel with starting work from the other.
-    // Entries whose `segment` is already their start time don't need it, and
-    // its absence puts entries older versions wrote in the incoming lane, where
-    // the legacy handling lives.
+    // @deprecated An unreleased revision held near-future entries in a
+    // separate index lane marked by this field; cleared like `runAt`.
     hasRunAt: v.optional(v.boolean()),
   })
     .index("workId", ["workId"])
-    .index("hasRunAt_segment", ["hasRunAt", "segment"]),
+    .index("segment", ["segment"])
+    .index("scheduledAt", ["scheduledAt"]),
 
   // Written by complete, read & deleted by `main`.
   pendingCompletion: defineTable({

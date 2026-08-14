@@ -80,13 +80,11 @@ export async function generateReport(
   }
   const currentSegment = getCurrentSegment();
   // Backlog is work that's eligible now; anything scheduled for later sorts
-  // above the current time — or sits in the held `hasRunAt` lane — and isn't
-  // waiting on us.
+  // above the current time and isn't waiting on us.
   const pendingStart = await paginator(ctx.db, schema)
     .query("pendingStart")
-    .withIndex("hasRunAt_segment", (q) =>
+    .withIndex("segment", (q) =>
       q
-        .eq("hasRunAt", undefined)
         .gte("segment", state.segmentCursors.incoming)
         .lt("segment", endOfMs(Date.now())),
     )

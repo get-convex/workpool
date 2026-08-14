@@ -29,7 +29,7 @@ import {
   SECOND,
   type RunResult,
   toSegment,
-  toTimestamp,
+  dueTimestamp,
   vResult,
 } from "./shared.js";
 import { generateReport, recordCompleted, recordStarted } from "./stats.js";
@@ -103,6 +103,18 @@ const vStart = v.object({
 });
 type Start = Infer<typeof vStart>;
 
+/**
+ * One commit stamp's worth of the out-of-order sweep, in commit order. The
+ * sweep cursor may advance to `scheduledAt` once every entry in `starts` has
+ * been retired; entries that shared the stamp but weren't behind the incoming
+ * cursor need nothing (the segment scan will reach them) and aren't carried.
+ */
+const vSweepStep = v.object({
+  scheduledAt: v.int64(),
+  starts: v.array(vStart),
+});
+type SweepStep = Infer<typeof vSweepStep>;
+
 /** The shape `getBatch` hands to `run`. */
 const batchFields = {
   // The segment at query time — what "now" was when the batch was built.
@@ -112,10 +124,16 @@ const batchFields = {
   completions: v.array(vCompletion),
   cancelations: v.array(vCancelation),
   starts: v.array(vStart),
-  // Entries from the `hasRunAt: true` lane: near-future work still ordered by
-  // its enqueue's commit timestamp, waiting to be moved to its start time.
-  // Optional so a batch built just before this field existed still validates.
+  // @deprecated Held-lane entries from a batch an unreleased revision built.
+  // Ignored: those rows stay put, and the segment scan re-reads them.
   scheduled: v.optional(v.array(vStart)),
+  // The out-of-order sweep's findings. Optional so a batch built just before
+  // this field existed still validates.
+  sweep: v.optional(v.array(vSweepStep)),
+  // The highest commit timestamp observed while building the batch — the
+  // frontier the incoming cursor may advance to, but not beyond. Optional for
+  // the same deploy-boundary reason; `run` falls back to its own last stamp.
+  cursorCeiling: v.optional(v.int64()),
 };
 type Batch = Infer<ReturnType<typeof v.object<typeof batchFields>>>;
 
@@ -146,24 +164,25 @@ export const getBatch = internalQuery({
     const isRecoveryIter =
       running.length > 0 && segment - lastRecovery >= RECOVERY_PERIOD_SEGMENTS;
 
-    const { starts, scheduled, cancelations, completions } = await queryPending(
-      ctx,
-      {
+    const { starts, sweep, cancelations, completions, cursorCeiling } =
+      await queryPending(ctx, {
         completionCursor: cursors.completion,
         cancelationCursor: cursors.cancelation,
         incomingCursor: cursors.incoming,
-        scheduledCursor: cursors.scheduled ?? 0n,
+        sweepCursor: cursors.scheduled ?? 0n,
+        lastCommitTs: (state?.lastCommitTs as bigint | undefined) ?? 0n,
         maxParallelism: globals.maxParallelism,
         runningCount: running.length,
         eligibleBefore,
-      },
-    );
+      });
 
+    // Every sweep step is progress — an entry to start, or a cursor advance —
+    // so its presence counts as work.
     const hasWork =
       completions.length > 0 ||
       cancelations.length > 0 ||
       starts.length > 0 ||
-      scheduled.length > 0 ||
+      sweep.length > 0 ||
       isRecoveryIter;
 
     if (hasWork) {
@@ -183,22 +202,20 @@ export const getBatch = internalQuery({
           segment: c.segment as bigint,
         })),
         starts,
-        scheduled,
+        sweep,
+        cursorCeiling,
       };
       return { kind: "work" as const, batch };
     }
 
     // Nothing to do now. Figure out when to wake up next: the sooner of the
     // earliest future-scheduled start and (if jobs are running) the next
-    // recovery scan. A ping still wakes us sooner. No need to check the
-    // `hasRunAt: true` lane: this iteration read it and it was empty. (The
-    // read is only skipped when the pool is saturated, and then jobs are
-    // running, so the recovery wait applies and completions ping us.)
+    // recovery scan. A ping still wakes us sooner. Work the sweep couldn't
+    // retire (a due entry with no capacity) is covered too: capacity implies
+    // jobs are running, so the recovery wait applies and completions ping us.
     const futureStart = await ctx.db
       .query("pendingStart")
-      .withIndex("hasRunAt_segment", (q) =>
-        q.eq("hasRunAt", undefined).gte("segment", eligibleBefore),
-      )
+      .withIndex("segment", (q) => q.gte("segment", eligibleBefore))
       .first();
     const waits: number[] = [];
     if (futureStart) {
@@ -237,17 +254,29 @@ export const run = internalMutation({
     const globals = await getGlobals(ctx);
     const console = createLogger(globals.logLevel);
     const segment = getCurrentSegment();
-    const incomingGuard = cursorGuard(state.segmentCursors.incoming);
-    const scheduledGuard = cursorGuard(state.segmentCursors.scheduled ?? 0n);
+    const sweep = batch.sweep ?? [];
+    // The bounds on this run's cursor movement, both plain values:
+    // - `floor`: the cursor as it stands. Every `segment` this run writes is
+    //   raised to at least the floor, so nothing lands where the loop already
+    //   read past; the cursor never moves backwards past it.
+    // - `ceiling`: the highest commit timestamp the batch's snapshot had
+    //   observed (computed alongside the batch in `queryPending`). The cursor
+    //   never advances beyond it: a wall-clock key can exceed every commit
+    //   stamp that exists, and a commit racing this run would land behind a
+    //   cursor set there. Nothing relates the two clocks; observed commit
+    //   stamps are the only safe frontier.
+    const floor = state.segmentCursors.incoming;
+    const ceiling =
+      batch.cursorCeiling ?? (state.lastCommitTs as bigint | undefined) ?? 0n;
 
     const compLabel = `[main] pendingCompletion(${batch.completions.length})`;
     console.time(compLabel);
-    const toCancel = await handleCompletions(
+    const { toCancel, lowestRetry } = await handleCompletions(
       ctx,
       state,
       batch.completions,
       console,
-      incomingGuard,
+      floor,
     );
     console.timeEnd(compLabel);
 
@@ -269,18 +298,20 @@ export const run = internalMutation({
     }
 
     // ── Start new work ──
-    // Entries whose `runAt` hasn't arrived were only visible because we
-    // couldn't safely write that time into `segment` at enqueue. We can here:
-    // this transaction also writes the cursors, so the guard can place the
-    // entry relative to them. Move them and they stop coming back.
+    // The segment scan's entries are all due (scheduled ones only become
+    // visible at their start time), except entries written by older versions,
+    // which the loop re-keys to their start time. Re-keying is safe here where
+    // it wasn't at enqueue: this transaction also writes the cursor, so the
+    // key can be placed relative to it. The sweep's entries are the opposite —
+    // committed *behind* the cursor, so the scan will never reach them; they
+    // start from here.
     const now = Date.now();
     const isDue = (s: Start) => s.runAt === undefined || s.runAt <= now;
-    const scheduled = batch.scheduled ?? [];
-    const all = [...batch.starts, ...scheduled];
+    const swept = sweep.flatMap((step) => step.starts);
+    const all = [...batch.starts, ...swept];
     const notYet = all.filter((s) => !isDue(s));
-    // Oldest first across both lanes: the incoming lane's `segment` is when an
-    // entry became eligible, and a due entry from the scheduled lane has been
-    // eligible since its `runAt`.
+    // Oldest first: `segment` is when an entry became eligible, and a swept
+    // entry has been eligible since its (past) start time.
     const eligible = all
       .filter(isDue)
       .sort(
@@ -288,10 +319,11 @@ export const run = internalMutation({
           (a.runAt ?? fromTimestamp(a.segment)) -
           (b.runAt ?? fromTimestamp(b.segment)),
       );
+    let lowestPromoted: bigint | undefined;
     if (notYet.length > 0) {
       const promoteLabel = `[main] promote(${notYet.length})`;
       console.time(promoteLabel);
-      await promoteScheduled(ctx, notYet, incomingGuard);
+      lowestPromoted = await promoteScheduled(ctx, notYet, floor);
       console.timeEnd(promoteLabel);
     }
 
@@ -335,25 +367,38 @@ export const run = internalMutation({
     if (batch.cancelations.length > 0) {
       state.segmentCursors.cancelation = batch.cancelations.at(-1)!.segment;
     }
-    // Capacity can cut the starts short, so only advance each lane's cursor
-    // over the leading run we finished with — started or moved forward.
-    // Stopping at the first entry we left alone is what keeps it from being
-    // skipped. The guards keep the advance safe against everything placed
-    // this transaction (only the incoming lane receives placements — promoting
-    // an entry is what takes it out of the scheduled lane).
+    // Capacity can cut the starts short, so only advance each cursor over the
+    // leading run we finished with — started or re-keyed. Stopping at the
+    // first entry we left alone is what keeps it from being skipped. The
+    // incoming cursor additionally never passes the ceiling, nor any segment
+    // this run wrote — a retry or re-keyed entry lands at or above the floor,
+    // but the cursor's final position isn't known when those writes happen.
+    // Equality is fine throughout: the index is read with `gte`.
     const handled = new Set([...pending, ...notYet].map((s) => s._id));
-    let incoming = state.segmentCursors.incoming;
+    let incoming = floor;
     for (const start of batch.starts) {
       if (!handled.has(start._id)) break;
       incoming = start.segment;
     }
-    state.segmentCursors.incoming = incomingGuard.advance(incoming);
-    let scheduledCursor = state.segmentCursors.scheduled ?? 0n;
-    for (const entry of scheduled) {
-      if (!handled.has(entry._id)) break;
-      scheduledCursor = entry.segment;
+    for (const cap of [ceiling, lowestRetry, lowestPromoted]) {
+      if (cap !== undefined && cap < incoming) incoming = cap;
     }
-    state.segmentCursors.scheduled = scheduledGuard.advance(scheduledCursor);
+    state.segmentCursors.incoming = maxTimestamp(floor, incoming);
+    // The sweep cursor moves a whole commit stamp at a time, and only past
+    // stamps whose behind-the-cursor entries were all retired. Its keys are
+    // observed commit stamps, so no ceiling is needed.
+    let sweepCursor = state.segmentCursors.scheduled ?? 0n;
+    for (const step of sweep) {
+      if (step.starts.some((s) => !handled.has(s._id))) break;
+      sweepCursor = step.scheduledAt;
+    }
+    state.segmentCursors.scheduled = maxTimestamp(
+      state.segmentCursors.scheduled ?? 0n,
+      sweepCursor,
+    );
+    // Record this run's own commit stamp: the next run reads this document,
+    // so its snapshot is at least this recent, and the mark seeds its ceiling.
+    state.lastCommitTs = ctx.db.vars.commitTs;
 
     await ctx.db.replace("internalState", state._id, state);
     // Return null: batch-worker re-runs `getBatch` immediately to drain, and
@@ -362,6 +407,13 @@ export const run = internalMutation({
   },
 });
 
+// How many `scheduledAt` entries the sweep inspects per iteration. Inspection
+// is read-only and each entry is inspected once ever, so this mainly bounds
+// per-iteration reads. It must exceed the most entries one transaction can
+// stamp identically (a maximal batch enqueue), or the cursor could never
+// clear that stamp.
+const SWEEP_BATCH = 2048;
+
 /** Read the three pending tables the loop processes. */
 async function queryPending(
   ctx: QueryCtx,
@@ -369,7 +421,8 @@ async function queryPending(
     completionCursor,
     cancelationCursor,
     incomingCursor,
-    scheduledCursor,
+    sweepCursor,
+    lastCommitTs,
     maxParallelism,
     runningCount,
     eligibleBefore,
@@ -377,7 +430,8 @@ async function queryPending(
     completionCursor: bigint;
     cancelationCursor: bigint;
     incomingCursor: bigint;
-    scheduledCursor: bigint;
+    sweepCursor: bigint;
+    lastCommitTs: bigint;
     maxParallelism: number;
     runningCount: number;
     eligibleBefore: bigint;
@@ -402,48 +456,97 @@ async function queryPending(
     ...completions.map((c) => c.workId),
     ...cancelations.map((c) => c.workId),
   ];
-  // Near-future work, still at its enqueue's commit position; `run` moves each
-  // entry to its start time (or starts it, if it came due first). Reading this
-  // lane separately means a backlog of it never sits in front of ready work —
-  // it drains at MAIN_BATCH_SIZE per iteration alongside the starts. Skipped
-  // when nothing can start: an already-due entry only leaves the lane by
-  // starting, so reading it with no capacity would spin the loop.
-  const scheduled =
-    startLimit === 0
-      ? []
-      : await ctx.db
-          .query("pendingStart")
-          .withIndex("hasRunAt_segment", (q) =>
-            q.eq("hasRunAt", true).gte("segment", scheduledCursor),
-          )
-          // eslint-disable-next-line @convex-dev/no-filter-in-query
-          .filter((q) =>
-            q.and(...excludedIds.map((id) => q.neq(q.field("workId"), id))),
-          )
-          .take(MAIN_BATCH_SIZE);
-  // Held entries that are already due take start slots, so only fetch ready
-  // work for the slots left over. Everything eligible, oldest first; work
-  // scheduled for later sorts above the bound, so it's left alone without
-  // pinning the cursor.
-  const now = Date.now();
-  const dueHeld = scheduled.filter((s) => (s.runAt ?? 0) <= now).length;
-  const readyLimit = Math.max(0, startLimit - dueHeld);
+
+  // ── The out-of-order sweep ──
+  // A scheduled enqueue writes its start time as its `segment`, but commits
+  // later — so if the commit took longer than the delay, the entry can land
+  // behind the incoming cursor, where the segment scan will never see it.
+  // Every wall-clock-keyed entry also records its commit stamp in
+  // `scheduledAt`, and commit order is the one order nothing can land behind:
+  // walking it from a cursor inspects every entry exactly once. An entry
+  // whose `segment` is still at or above the incoming cursor can be passed
+  // forever — the scan can only get past it by reading it. One behind the
+  // cursor is due (the cursor never passes the current time) and must start
+  // from here; those claim start slots first. The cursor moves a whole commit
+  // stamp at a time (`gt` — a batch enqueue shares one stamp, and a bare
+  // stamp can't split the group), and only past stamps whose stragglers all
+  // got retired.
+  const scanned = await ctx.db
+    .query("pendingStart")
+    .withIndex("scheduledAt", (q) => q.gt("scheduledAt", sweepCursor))
+    // eslint-disable-next-line @convex-dev/no-filter-in-query
+    .filter((q) =>
+      q.and(...excludedIds.map((id) => q.neq(q.field("workId"), id))),
+    )
+    .take(SWEEP_BATCH);
+  const exhausted = scanned.length < SWEEP_BATCH;
+  const sweep: SweepStep[] = [];
+  let oooBudget = startLimit;
+  for (let i = 0; i < scanned.length; ) {
+    const stamp = scanned[i].scheduledAt as bigint;
+    const group = [];
+    while (i < scanned.length && (scanned[i].scheduledAt as bigint) === stamp) {
+      group.push(scanned[i]);
+      i++;
+    }
+    // If the scan was cut mid-stamp, rows beyond it may share this stamp, so
+    // it can't be cleared yet. (Reachable only if one transaction stamped
+    // more entries than SWEEP_BATCH.)
+    if (i === scanned.length && !exhausted) break;
+    const behind = group.filter((r) => (r.segment as bigint) < incomingCursor);
+    if (behind.length > oooBudget) break;
+    oooBudget -= behind.length;
+    const starts = behind.map((r) => ({
+      _id: r._id,
+      workId: r.workId,
+      segment: r.segment as bigint,
+      runAt: r.runAt,
+    }));
+    // Fold stamp-only advances into the previous step to keep batches small;
+    // a step is only worth carrying for its starts or as the furthest bound.
+    const previous = sweep.at(-1);
+    if (starts.length === 0 && previous && previous.starts.length === 0) {
+      previous.scheduledAt = stamp;
+    } else {
+      sweep.push({ scheduledAt: stamp, starts });
+    }
+  }
+
+  // Entries the sweep starts take slots first; only fetch ready work for the
+  // slots left over. Everything eligible, oldest first; work scheduled for
+  // later sorts above the bound, so it's left alone without pinning the
+  // cursor.
+  const sweptCount = sweep.reduce((n, s) => n + s.starts.length, 0);
+  const readyLimit = Math.max(0, startLimit - sweptCount);
   const starts =
     readyLimit === 0
       ? []
       : await ctx.db
           .query("pendingStart")
-          .withIndex("hasRunAt_segment", (q) =>
-            q
-              .eq("hasRunAt", undefined)
-              .gte("segment", incomingCursor)
-              .lt("segment", eligibleBefore),
+          .withIndex("segment", (q) =>
+            q.gte("segment", incomingCursor).lt("segment", eligibleBefore),
           )
           // eslint-disable-next-line @convex-dev/no-filter-in-query
           .filter((q) =>
             q.and(...excludedIds.map((id) => q.neq(q.field("workId"), id))),
           )
           .take(readyLimit);
+  // The highest commit timestamp observed while building this batch. Every
+  // source is the stamp of a transaction visible to this snapshot, so
+  // anything committing later is stamped above it — the frontier the cursor
+  // may advance to. Entries with `scheduledAt` are wall-clock-keyed and don't
+  // count (their stamps do); entries without it carry an observed commit
+  // stamp in `segment` (an older version's tiny buckets can't win a max).
+  const cursorCeiling = [
+    lastCommitTs,
+    ...completions.map((c) => c.segment as bigint),
+    ...cancelations.map((c) => c.segment as bigint),
+    ...starts
+      .filter((s) => s.scheduledAt === undefined)
+      .map((s) => s.segment as bigint),
+    ...scanned.map((r) => r.scheduledAt as bigint),
+  ].reduce(maxTimestamp);
+
   return {
     completions,
     cancelations,
@@ -454,33 +557,33 @@ async function queryPending(
         workId: s.workId,
         segment,
         // An entry from before commit-timestamp ordering keeps its start time
-        // in `segment`; recovering it here means `run` handles it like any
-        // other scheduled entry and rewrites it as a timestamp.
+        // in `segment` (or in its deprecated `runAt`); recovering it here
+        // means `run` handles it like any other not-yet-due entry and re-keys
+        // it as a timestamp.
         runAt: s.runAt ?? legacyRunAt(segment),
       };
     }) satisfies Start[],
-    scheduled: scheduled.map((s) => ({
-      _id: s._id,
-      workId: s.workId,
-      segment: s.segment as bigint,
-      runAt: s.runAt,
-    })) satisfies Start[],
+    sweep,
+    cursorCeiling,
   };
 }
 
 /**
  * Handles the completion of pending completions.
  * This only processes work that succeeded or failed, not canceled.
+ * Returns the lowest `segment` written for a retry, which bounds how far the
+ * incoming cursor may advance this iteration.
  */
 async function handleCompletions(
   ctx: MutationCtx,
   state: Doc<"internalState">,
   completed: Completion[],
   console: Logger,
-  guard: CursorGuard,
+  floor: bigint,
 ) {
   // Completions that were going to be retried but have since been canceled.
   const toCancel: CompleteJob[] = [];
+  let lowestRetry: bigint | undefined;
   await Promise.all(
     completed.map(async (c) => {
       await ctx.db.delete("pendingCompletion", c._id);
@@ -499,8 +602,11 @@ async function handleCompletions(
           console.warn(`[main] ${c.workId} is gone, but trying to complete`);
           return;
         }
-        const retried = await rescheduleJob(ctx, work, console, guard);
-        if (retried) {
+        const retriedAt = await rescheduleJob(ctx, work, console, floor);
+        if (retriedAt !== undefined) {
+          if (lowestRetry === undefined || retriedAt < lowestRetry) {
+            lowestRetry = retriedAt;
+          }
           state.report.retries++;
           recordCompleted(console, work, "retrying", undefined);
         } else {
@@ -529,7 +635,7 @@ async function handleCompletions(
   const numCompleted = before - state.running.length;
   state.report.completed += numCompleted;
   console.debug(`[main] completed ${numCompleted} work`);
-  return toCancel;
+  return { toCancel, lowestRetry };
 }
 
 /**
@@ -642,72 +748,39 @@ function maxTimestamp(a: bigint, b: bigint) {
 }
 
 /**
- * Nothing rescans a lane behind its cursor, so an entry below the cursor is
- * lost for good. This guard is how the loop keeps the two sides of that
- * invariant consistent within one transaction:
- *
- * - `place` raises a `segment` we're about to write to at least the cursor, so
- *   we never put an entry somewhere the loop has already read past.
- * - `advance` moves the cursor as far as the batch earned, but never past a
- *   segment placed this transaction — the cursor isn't final when those writes
- *   happen (a retry is written while completions are handled, before we know
- *   which starts we'll get through) — and never backwards, since the batch was
- *   built from a snapshot that may predate the cursor as read here.
- *
- * Placing against the cursor rather than against the clock is what makes the
- * requirement local: nothing that writes a `segment` has to know where the
- * eligibility bound sits or how a commit timestamp compares to `Date.now()`.
- * Equality is fine throughout — lanes are read with `gte`.
- */
-function cursorGuard(cursor: bigint) {
-  let lowestPlaced: bigint | undefined;
-  return {
-    place(segment: bigint): bigint {
-      const placed = maxTimestamp(segment, cursor);
-      if (lowestPlaced === undefined || placed < lowestPlaced) {
-        lowestPlaced = placed;
-      }
-      return placed;
-    },
-    advance(candidate: bigint): bigint {
-      const capped =
-        lowestPlaced !== undefined && lowestPlaced < candidate
-          ? lowestPlaced
-          : candidate;
-      return maxTimestamp(cursor, capped);
-    },
-  };
-}
-type CursorGuard = ReturnType<typeof cursorGuard>;
-
-/**
- * Moves entries that aren't due yet to sort at their `runAt` instead of at the
- * commit timestamp they were enqueued with, so the cursor can pass them and
- * they don't come back until they're actually due. Safe to compute from the
- * clock here, unlike at enqueue: this transaction writes the cursors too, so
- * the guard can hold the entry above them.
+ * Re-keys entries that are visible but not due to sort at their start time,
+ * so the cursor can pass them and they don't come back until they're actually
+ * due. New-format entries are keyed at their start time and only become
+ * visible once due, so this handles what older versions wrote — 100ms
+ * buckets, and an unreleased revision's entries held at their commit
+ * position — clearing that revision's fields as it goes. Safe to compute from
+ * the clock here, unlike at enqueue: this transaction writes the cursor too,
+ * and raising the key to at least `floor` keeps the entry readable. Returns
+ * the lowest key written, which bounds how far the cursor may advance.
  */
 async function promoteScheduled(
   ctx: MutationCtx,
   notYet: Start[],
-  guard: CursorGuard,
-) {
+  floor: bigint,
+): Promise<bigint | undefined> {
+  let lowest: bigint | undefined;
   await Promise.all(
     notYet.map(async ({ _id, runAt }) => {
       // A concurrent cancelation may have removed it.
       if (!(await ctx.db.get("pendingStart", _id))) return;
+      const segment = maxTimestamp(dueTimestamp(runAt!), floor);
+      if (lowest === undefined || segment < lowest) lowest = segment;
       await ctx.db.patch("pendingStart", _id, {
-        // Round a fractional `runAt` up to the next whole millisecond — the
-        // first one the clock can call it due. Rounding down would leave it
-        // readable while `isDue` still says no, so it'd be re-read and
-        // re-moved until the clock leaves the current millisecond.
-        segment: guard.place(toTimestamp(Math.ceil(runAt!))),
-        // Now ordered by its start time, so it leaves the scheduled lane and
-        // waits in the incoming one like any far-future enqueue.
+        segment,
+        // The key is now a wall-clock time, and `scheduledAt` is what records
+        // that (its absence marks a key as an observed commit stamp).
+        scheduledAt: ctx.db.vars.commitTs,
+        runAt: undefined,
         hasRunAt: undefined,
       });
     }),
   );
+  return lowest;
 }
 
 /**
@@ -843,14 +916,14 @@ async function beginWorkBatch(
 /**
  * Reschedules a job for retry.
  * If it's been canceled in the mean time, don't retry.
- * @returns true if the job was rescheduled, false if it was not.
+ * @returns the `segment` it was rescheduled at, or undefined if it was not.
  */
 async function rescheduleJob(
   ctx: MutationCtx,
   work: Doc<"work">,
   console: Logger,
-  guard: CursorGuard,
-): Promise<boolean> {
+  floor: bigint,
+): Promise<bigint | undefined> {
   const pendingCancelation = await ctx.db
     .query("pendingCancelation")
     .withIndex("workId", (q) => q.eq("workId", work._id))
@@ -858,14 +931,14 @@ async function rescheduleJob(
   if (pendingCancelation) {
     // If there's an un-processed cancelation request, don't retry.
     console.warn(`[main] ${work._id} in pendingCancelation so not retrying`);
-    return false;
+    return undefined;
   }
   if (work.canceled) {
-    return false;
+    return undefined;
   }
   if (!work.retryBehavior) {
     console.warn(`[main] ${work._id} has no retryBehavior so not retrying`);
-    return false;
+    return undefined;
   }
   const existing = await ctx.db
     .query("pendingStart")
@@ -874,21 +947,24 @@ async function rescheduleJob(
   if (existing) {
     // Not sure why this would ever happen, but ensure uniqueness explicitly.
     console.error(`[main] ${work._id} already in pendingStart so not retrying`);
-    return false;
+    return undefined;
   }
   const backoffMs =
     work.retryBehavior.initialBackoffMs *
     Math.pow(work.retryBehavior.base, work.attempts - 1);
   const nextAttempt = withJitter(backoffMs);
   // The backoff can go straight into `segment` however short it is: we're in
-  // the transaction that writes the cursor, so the guard can keep the entry
-  // above it even for a zero backoff. No `runAt` needed — `segment` already is
-  // the start time.
+  // the transaction that writes the cursor, and raising the key to at least
+  // `floor` keeps the entry readable even for a zero backoff. The key is a
+  // wall-clock time, so it records its commit stamp in `scheduledAt` like any
+  // scheduled enqueue (its absence marks a key as an observed commit stamp).
+  const segment = maxTimestamp(dueTimestamp(Date.now() + nextAttempt), floor);
   await ctx.db.insert("pendingStart", {
     workId: work._id,
-    segment: guard.place(toTimestamp(Date.now() + nextAttempt)),
+    segment,
+    scheduledAt: ctx.db.vars.commitTs,
   });
-  return true;
+  return segment;
 }
 
 export function withJitter(delay: number) {
