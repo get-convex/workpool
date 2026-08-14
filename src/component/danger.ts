@@ -70,10 +70,12 @@ export const clearOldWork = internalMutation({
       .withIndex("by_creation_time", (q) => q.lte("_creationTime", time))
       .order("desc")) {
       i++;
-      const pendingStart = await ctx.db
-        .query("pendingStart")
-        .withIndex("workId", (q) => q.eq("workId", entry._id))
-        .unique();
+      // The pointer can be stale or missing on entries older versions wrote;
+      // a pendingStart missed here is dropped when the loop reads it and
+      // finds the work gone.
+      const pendingStart = entry.pendingStartId
+        ? await ctx.db.get("pendingStart", entry.pendingStartId)
+        : null;
       const pendingCompletion = await ctx.db
         .query("pendingCompletion")
         .withIndex("workId", (q) => q.eq("workId", entry._id))

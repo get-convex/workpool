@@ -668,23 +668,19 @@ async function handleCancelation(
           }
           const work = await ctx.db.get("work", workId);
           if (!work) {
+            // A pendingStart left pointing at it, if any, is dropped when the
+            // segment scan reads it and finds the work gone.
             console.warn(`[main] ${workId} is gone, but trying to cancel`);
-            // Drop any pendingStart left pointing at it. Nothing rescans that
-            // lane, so a row left behind here would never be read again.
-            const orphan = await ctx.db
-              .query("pendingStart")
-              .withIndex("workId", (q) => q.eq("workId", workId))
-              .unique();
-            if (orphan) await ctx.db.delete("pendingStart", orphan._id);
             return null;
           }
-          // Ensure it doesn't retry.
+          // Ensure it doesn't retry — and doesn't start, if its pendingStart
+          // is only reachable through the scan (the pointer can be missing on
+          // entries older versions wrote; `handleStart` checks this flag).
           await ctx.db.patch("work", workId, { canceled: true });
-          // Ensure it doesn't start.
-          const pendingStart = await ctx.db
-            .query("pendingStart")
-            .withIndex("workId", (q) => q.eq("workId", workId))
-            .unique();
+          // Ensure it doesn't start. The pointer can be stale; check it.
+          const pendingStart = work.pendingStartId
+            ? await ctx.db.get("pendingStart", work.pendingStartId)
+            : null;
           if (pendingStart && !canceledWork.has(workId)) {
             state.report.canceled++;
             await ctx.db.delete("pendingStart", pendingStart._id);
@@ -816,6 +812,23 @@ async function handleStart(
           console.error(`Trying to start, but work not found: ${workId}`);
           return null;
         }
+        if (work.canceled) {
+          // Canceled while its entry was only reachable through this scan
+          // (no `pendingStartId` pointer — written by an older version).
+          // Finish the cancelation that couldn't find the entry then.
+          console.debug(`[main] ${workId} was canceled (not starting)`);
+          state.report.canceled++;
+          await ctx.scheduler.runAfter(0, internal.complete.complete, {
+            jobs: [
+              {
+                workId,
+                runResult: { kind: "canceled" as const },
+                attempt: work.attempts,
+              },
+            ],
+          });
+          return null;
+        }
         return {
           work,
           // `segment` is when this became eligible: the time it was scheduled
@@ -940,11 +953,12 @@ async function rescheduleJob(
     console.warn(`[main] ${work._id} has no retryBehavior so not retrying`);
     return undefined;
   }
-  const existing = await ctx.db
-    .query("pendingStart")
-    .withIndex("workId", (q) => q.eq("workId", work._id))
-    .first();
-  if (existing) {
+  // The pointer can be stale (its entry started); check before declaring a
+  // duplicate.
+  if (
+    work.pendingStartId &&
+    (await ctx.db.get("pendingStart", work.pendingStartId))
+  ) {
     // Not sure why this would ever happen, but ensure uniqueness explicitly.
     console.error(`[main] ${work._id} already in pendingStart so not retrying`);
     return undefined;
@@ -959,11 +973,12 @@ async function rescheduleJob(
   // wall-clock time, so it records its commit stamp in `scheduledAt` like any
   // scheduled enqueue (its absence marks a key as an observed commit stamp).
   const segment = maxTimestamp(dueTimestamp(Date.now() + nextAttempt), floor);
-  await ctx.db.insert("pendingStart", {
+  const pendingStartId = await ctx.db.insert("pendingStart", {
     workId: work._id,
     segment,
     scheduledAt: ctx.db.vars.commitTs,
   });
+  await ctx.db.patch("work", work._id, { pendingStartId });
   return segment;
 }
 
