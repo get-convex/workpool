@@ -215,10 +215,15 @@ async function statusHandler(ctx: QueryCtx, { id }: { id: Id<"work"> }) {
   if (!work) {
     return { state: "finished" } as const;
   }
-  // The pointer can be stale after the work starts; check the entry exists.
-  const pendingStart = work.pendingStartId
-    ? await ctx.db.get("pendingStart", work.pendingStartId)
-    : null;
+  if (work.pendingStartId === undefined) {
+    // Written before the pointer existed (every enqueue sets it now), so this
+    // could be queued or mid-attempt. Report the longer-lived state: queued
+    // can last until a far-future start time, mid-attempt lasts one attempt —
+    // after which the work finishes (correct) or retries (sets the pointer).
+    return { state: "pending", previousAttempts: work.attempts } as const;
+  }
+  // The pointer goes stale when the work starts; check the entry exists.
+  const pendingStart = await ctx.db.get("pendingStart", work.pendingStartId);
   if (pendingStart) {
     return { state: "pending", previousAttempts: work.attempts } as const;
   }
