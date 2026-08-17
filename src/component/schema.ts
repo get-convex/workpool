@@ -107,12 +107,6 @@ export default defineSchema({
     // that `segment` is a commit timestamp it has observed, which is what
     // bounds how far the cursor may advance. See `queryPending`.
     scheduledAt: v.optional(v.commitTs()),
-    // @deprecated The exact start time of an entry written by an unreleased
-    // revision. The loop re-keys such entries and clears this on first read.
-    runAt: v.optional(v.number()),
-    // @deprecated An unreleased revision held near-future entries in a
-    // separate index lane marked by this field; cleared like `runAt`.
-    hasRunAt: v.optional(v.boolean()),
   })
     .index("segment", ["segment"])
     .index("scheduledAt", ["scheduledAt"]),

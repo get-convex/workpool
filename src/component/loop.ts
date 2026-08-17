@@ -99,6 +99,9 @@ const vStart = v.object({
   _id: v.id("pendingStart"),
   workId: v.id("work"),
   segment: v.int64(),
+  // Not a stored field: the start time recovered from an entry an older
+  // version wrote (its `segment` is a 100ms bucket, not a timestamp). Absent
+  // on anything written by this version — such entries are due when visible.
   runAt: v.optional(v.number()),
 });
 type Start = Infer<typeof vStart>;
@@ -500,7 +503,6 @@ async function queryPending(
       _id: r._id,
       workId: r.workId,
       segment: r.segment as bigint,
-      runAt: r.runAt,
     }));
     // Fold stamp-only advances into the previous step to keep batches small;
     // a step is only worth carrying for its starts or as the furthest bound.
@@ -557,10 +559,9 @@ async function queryPending(
         workId: s.workId,
         segment,
         // An entry from before commit-timestamp ordering keeps its start time
-        // in `segment` (or in its deprecated `runAt`); recovering it here
-        // means `run` handles it like any other not-yet-due entry and re-keys
-        // it as a timestamp.
-        runAt: s.runAt ?? legacyRunAt(segment),
+        // in `segment`; recovering it here means `run` handles it like any
+        // other not-yet-due entry and re-keys it as a timestamp.
+        runAt: legacyRunAt(segment),
       };
     }) satisfies Start[],
     sweep,
@@ -747,12 +748,11 @@ function maxTimestamp(a: bigint, b: bigint) {
  * Re-keys entries that are visible but not due to sort at their start time,
  * so the cursor can pass them and they don't come back until they're actually
  * due. New-format entries are keyed at their start time and only become
- * visible once due, so this handles what older versions wrote — 100ms
- * buckets, and an unreleased revision's entries held at their commit
- * position — clearing that revision's fields as it goes. Safe to compute from
- * the clock here, unlike at enqueue: this transaction writes the cursor too,
- * and raising the key to at least `floor` keeps the entry readable. Returns
- * the lowest key written, which bounds how far the cursor may advance.
+ * visible once due, so this only handles the 100ms buckets older versions
+ * wrote. Safe to compute from the clock here, unlike at enqueue: this
+ * transaction writes the cursor too, and raising the key to at least `floor`
+ * keeps the entry readable. Returns the lowest key written, which bounds how
+ * far the cursor may advance.
  */
 async function promoteScheduled(
   ctx: MutationCtx,
@@ -771,8 +771,6 @@ async function promoteScheduled(
         // The key is now a wall-clock time, and `scheduledAt` is what records
         // that (its absence marks a key as an observed commit stamp).
         scheduledAt: ctx.db.vars.commitTs,
-        runAt: undefined,
-        hasRunAt: undefined,
       });
     }),
   );

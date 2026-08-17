@@ -17,7 +17,6 @@ import { setupTest } from "./setup.test.js";
 import {
   DEFAULT_MAX_PARALLELISM,
   fromSegment,
-  fromTimestamp,
   toSegment,
   toTimestamp,
   WORKER_NAME,
@@ -399,38 +398,6 @@ describe("loop", () => {
       const o = await observe();
       expect(o.pendingStart).toHaveLength(0);
       expect(o.running.map((r) => r.workId)).toEqual([workId]);
-    });
-
-    it("moves near-future work a pre-lane version left in the incoming lane", async () => {
-      await initialize();
-      const runAt = Date.now() + 100 * SECOND;
-      // Held at its commit position with `runAt` but no `hasRunAt`: the shape
-      // written before the scheduled lane existed.
-      const workId = await t.run(async (ctx) => {
-        const wid = await ctx.db.insert("work", {
-          fnType: "action",
-          fnHandle: "test_handle",
-          fnName: "test_handle",
-          fnArgs: {},
-          attempts: 0,
-        });
-        await ctx.db.insert("pendingStart", {
-          workId: wid,
-          segment: ctx.db.vars.commitTs,
-          runAt,
-        });
-        return wid;
-      });
-
-      await runLoop();
-
-      const o = await observe();
-      expect(o.running).toHaveLength(0);
-      expect(o.pendingStart[0].segment).toBe(toTimestamp(runAt));
-
-      vi.advanceTimersByTime(100 * SECOND);
-      await runLoop();
-      expect((await observe()).running.map((r) => r.workId)).toEqual([workId]);
     });
 
     it("keeps holding work scheduled for later, rather than starting it early", async () => {
@@ -871,12 +838,12 @@ describe("loop", () => {
           fnArgs: {},
           attempts: 0,
         });
-        await ctx.db.insert("pendingStart", {
+        const pendingStartId = await ctx.db.insert("pendingStart", {
           workId,
           segment: cursor - 1n,
-          runAt: fromTimestamp(cursor - 1n),
           scheduledAt: ctx.db.vars.commitTs,
         });
+        await ctx.db.patch("work", workId, { pendingStartId });
         return workId;
       });
     }
