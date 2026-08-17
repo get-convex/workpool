@@ -33,6 +33,11 @@
   push a large backlog of scheduled work adds processing overhead and can
   briefly delay work that's ready now. Queued completions and cancelations sort
   first and drain immediately, which is what they want.
+- Work docs now carry a `pendingStartId` pointer to their queue entry, replacing
+  an index. Work enqueued by an older version has no pointer, so until it next
+  starts, `status` reports it as `"pending"` — even if it's mid-attempt (queued
+  is the longer-lived of the two states it could be in) — and canceling it takes
+  effect immediately but only clears its queue entry when that entry comes due.
 - This change is not backwards compatible. It requires `convex` 1.43 or later,
   and downgrading a workpool that has run this version is not supported: an
   older version would read a nanosecond timestamp as a 100ms bucket far in the

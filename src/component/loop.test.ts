@@ -427,6 +427,14 @@ describe("loop", () => {
       expect(o.running.map((r) => r.workId)).toEqual([workId]);
     });
 
+    it("reports work that predates the pendingStartId pointer as pending", async () => {
+      await initialize();
+      const workId = await enqueueLegacyWork(Date.now() + 100 * SECOND);
+      // Without the pointer, queued and mid-attempt are indistinguishable;
+      // pending is the longer-lived state, so it's the safer report.
+      expect(await statusOf(workId)).toMatchObject({ state: "pending" });
+    });
+
     it("drops the entry of canceled work that predates the pendingStartId pointer", async () => {
       await initialize();
       const runAt = Date.now() + 100 * SECOND;
