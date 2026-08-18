@@ -410,11 +410,14 @@ export const run = internalMutation({
   },
 });
 
-// How many `scheduledAt` entries the sweep inspects per iteration. Inspection
-// is read-only and each entry is inspected once ever, so this mainly bounds
-// per-iteration reads. It must exceed the most entries one transaction can
-// stamp identically (a maximal batch enqueue), or the cursor could never
-// clear that stamp.
+// How many `scheduledAt` entries the sweep inspects per iteration — a read
+// budget, not a work bound: inspection is read-only and each entry is
+// inspected once ever, because the cursor advances a whole commit stamp at a
+// time and never revisits a cleared stamp. (Advancing inclusively instead
+// would re-read the boundary stamp's group every iteration for as long as its
+// entries wait to come due — unbounded for far-future work.) A stamp group
+// larger than one page is paged through in the same iteration, so this needn't
+// exceed the largest batch enqueue.
 const SWEEP_BATCH = 1024;
 
 /** Read the three pending tables the loop processes. */
@@ -482,7 +485,35 @@ async function queryPending(
       q.and(...excludedIds.map((id) => q.neq(q.field("workId"), id))),
     )
     .take(SWEEP_BATCH);
-  const exhausted = scanned.length < SWEEP_BATCH;
+  let exhausted = scanned.length < SWEEP_BATCH;
+  // A single (very large) batch enqueue can stamp more entries than one page.
+  // The cursor can't split a stamp, so page through to the end of the
+  // boundary stamp within this iteration; the extra reads are bounded by
+  // transaction write limits and paid once ever, like the rest of the sweep.
+  while (
+    !exhausted &&
+    (scanned[0].scheduledAt as bigint) ===
+      (scanned.at(-1)!.scheduledAt as bigint)
+  ) {
+    const last = scanned.at(-1)!;
+    const more = await ctx.db
+      .query("pendingStart")
+      .withIndex("scheduledAt", (q) =>
+        q
+          .eq("scheduledAt", last.scheduledAt)
+          .gt("_creationTime", last._creationTime),
+      )
+      // eslint-disable-next-line @convex-dev/no-filter-in-query
+      .filter((q) =>
+        q.and(...excludedIds.map((id) => q.neq(q.field("workId"), id))),
+      )
+      .take(SWEEP_BATCH);
+    scanned.push(...more);
+    if (more.length < SWEEP_BATCH) {
+      // The boundary stamp is complete; later stamps wait for next iteration.
+      exhausted = true;
+    }
+  }
   const sweep: SweepStep[] = [];
   let oooBudget = startLimit;
   for (let i = 0; i < scanned.length; ) {
@@ -829,8 +860,11 @@ async function handleStart(
         }
         return {
           work,
-          // `segment` is when this became eligible: the time it was scheduled
-          // for, or the commit timestamp of the enqueue if it was ready then.
+          // `segment` round-trips to when this became eligible, in whole
+          // milliseconds: the scheduled start time, or the commit timestamp
+          // of the enqueue if it was ready then. `runAt` only exists for an
+          // entry an older version wrote, whose `segment` is a 100ms bucket
+          // rather than a timestamp.
           lagMs: Date.now() - (runAt ?? fromTimestamp(segment)),
         };
       }),
@@ -967,9 +1001,12 @@ async function rescheduleJob(
   const nextAttempt = withJitter(backoffMs);
   // The backoff can go straight into `segment` however short it is: we're in
   // the transaction that writes the cursor, and raising the key to at least
-  // `floor` keeps the entry readable even for a zero backoff. The key is a
-  // wall-clock time, so it records its commit stamp in `scheduledAt` like any
-  // scheduled enqueue (its absence marks a key as an observed commit stamp).
+  // `floor` keeps the entry readable even for a zero backoff — so unlike an
+  // enqueue, this can't commit out of order and doesn't need the sweep.
+  // `scheduledAt` is still set, for the other thing it means: its absence
+  // marks a `segment` as an observed commit stamp when computing the cursor
+  // ceiling, and this key is a wall-clock time. The sweep just verifies it
+  // once and passes.
   const segment = maxTimestamp(dueTimestamp(Date.now() + nextAttempt), floor);
   const pendingStartId = await ctx.db.insert("pendingStart", {
     workId: work._id,
@@ -996,6 +1033,7 @@ async function getGlobals(ctx: QueryCtx) {
 }
 
 async function getOrCreateState(ctx: MutationCtx) {
+  // TODO: this might be very slow and improved by .order("desc").first() instead.
   const state = await ctx.db.query("internalState").unique();
   if (state) return state;
   const globals = await getGlobals(ctx);
