@@ -55,13 +55,15 @@ wall-clock-keyed entry; its absence marks a key as an observed commit timestamp
 (see the ceiling below). A bulk enqueue of delayed work naturally sorts after
 current work, and no entry needs to be rewritten.
 
-Retries get written by the loop, so they can write the start time
-transactionally with advancing the cursor, ensuring they will never be missed by
-writing them ≥ the cursor value — they can't commit out of order, so they don't
-need the sweep's protection. They still carry `scheduledAt` for its other
-meaning: their key is a wall-clock time, and without the stamp it would be
-counted as an observed commit timestamp when computing the cursor ceiling. The
-sweep verifies each retry once and passes.
+Retries get written by the loop, so they can't be missed without any explicit
+comparison against the cursor: their key is strictly in the future (a backoff
+rounds up to at least the end of the current millisecond), and no cursor ever
+reaches the end of the current millisecond — the scan's bound is exclusive and
+the ceiling only pulls it lower. So unlike an enqueue, a retry can't commit out
+of order and doesn't need the sweep's protection. It still carries `scheduledAt`
+for its other meaning: its key is a wall-clock time, and without the stamp it
+would be counted as an observed commit timestamp when computing the cursor
+ceiling. The sweep verifies each retry once and passes.
 
 ## Reading jobs in order
 
@@ -78,13 +80,12 @@ so the common case is a single pass:
   delay). It is necessarily overdue, as the cursor never passes the current
   time, and was ordered before anything in the segment scan.
 
-Each entry is inspected once ever: the sweep cursor advances a whole commit
-stamp at a time (`gt` — a batch enqueue shares one stamp, and a bare stamp can't
-split the group), and only past stamps whose missed entries were all started.
-Inclusive advancement would instead re-read the boundary stamp's group every
-iteration until its entries come due — unbounded for far-future work. A stamp
-group larger than one batch (a huge batch enqueue) is paged through to its end
-within the same iteration, so the batch size is purely a read budget.
+Each entry is inspected once ever: the sweep cursor is a (commit stamp, creation
+time) pair — a batch enqueue shares one stamp, and the creation time (the
+index's implicit tiebreak) resumes inside it — so already-inspected entries are
+never re-read, and iteration can stop at any point: at the read budget, or as
+soon as a missed entry exceeds the available start slots, rather than reading
+entries that couldn't start anyway.
 
 **The segment scan** reads the `[segment]` index for “due” items, from the
 incoming cursor until “now.” Skipped if all available slots were taken by the
@@ -94,10 +95,12 @@ sweep, otherwise does a `take` on for remaining slots.
 
 The incoming cursor's bounds are plain values, computed where the data is:
 
-- **Floor**: the cursor as read. Every `segment` the loop writes (retries,
-  re-keyed legacy entries) is raised to at least the floor, so nothing lands
-  where the loop already read past. Safe because the write and the cursor
-  advance share a transaction; at enqueue time this comparison would be racy.
+- **Loop writes stay ahead by construction**: every `segment` the loop writes
+  (retries, re-keyed legacy entries) is a strictly-future start time, rounded up
+  to at least the end of the current millisecond — which no cursor ever reaches,
+  since the scan's bound is exclusive and the ceiling only pulls it lower. No
+  comparison against the cursor is needed; at enqueue time even that wouldn't be
+  available.
 - **Ceiling**: the highest commit timestamp observed while building the batch —
   completion/cancelation keys, ready entries' keys, sweep stamps, and the
   previous run's own commit stamp (recorded in `internalState.lastCommitTs`; the
@@ -107,8 +110,8 @@ The incoming cursor's bounds are plain values, computed where the data is:
   cursor set there. Nothing anywhere relates wall clocks to the commit clock.
 - **Advance**: to the last entry of the leading run the iteration fully handled
   (stopping at the first entry left alone, e.g. by capacity), capped by the
-  ceiling and by the lowest `segment` written this transaction (the cursor's
-  final position isn't known when a retry is written), never backwards.
+  ceiling, and never backwards (a batch that observed no commit stamps at all —
+  e.g. a recovery-only iteration — carries a ceiling below the cursor).
 
 Cursors are inclusive (`gte`): a commit timestamp is unique per transaction, not
 per row, so a batch enqueue writes N rows sharing one key, and an exclusive
@@ -139,13 +142,24 @@ becomes out-of-order behind it.
 reads it once to verify it committed in order, and it's untouched until due.
 
 **Small action retry backoff.** Retries are written from the loop's own
-transaction, raised to the cursor floor, so even a zero-millisecond backoff
-lands readable and starts on the next iteration.
+transaction, keyed at least one millisecond in the future, so even a
+zero-millisecond backoff lands ahead of the cursor and starts as soon as its
+millisecond arrives.
 
 **An enqueue loses the race.** `runAfter(1000)` on an enqueue that takes 1.5s to
 commit lands its entry behind the cursor. The sweep finds it by its commit
 stamp, sees its `segment` below the cursor, and starts it directly — no rewrite,
 at most one sweep-batch behind.
+
+## Future ideas
+
+- Clamp near-future starts (e.g. within ~100–250ms) to "now": they'd be
+  commit-keyed with no `scheduledAt` to sweep, at the cost of starting up to
+  that much early (or paired with an execution-side delay to keep exact start
+  times).
+- Pack many pending starts sharing a commit stamp into one document (each worker
+  patches itself out on start, found via `pendingStartId`), cutting write/delete
+  churn and document counts for large batch enqueues.
 
 ## Upgrading
 
