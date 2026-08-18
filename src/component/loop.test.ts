@@ -901,6 +901,41 @@ describe("loop", () => {
       expect(o.running.map((r) => r.workId)).toEqual([lostId]);
     });
 
+    it("pages through a commit stamp larger than one sweep batch", async () => {
+      await initialize();
+      const runAt = Date.now() + 100 * SECOND;
+      // One transaction stamps every entry identically, and the sweep cursor
+      // can't split a stamp — so it pages to the end of the group (larger
+      // than SWEEP_BATCH = 1024) within one iteration.
+      await t.run(async (ctx) => {
+        const workId = await ctx.db.insert("work", {
+          fnType: "action",
+          fnHandle: "test_handle",
+          fnName: "test_handle",
+          fnArgs: {},
+          attempts: 0,
+        });
+        for (let i = 0; i < 1030; i++) {
+          await ctx.db.insert("pendingStart", {
+            workId,
+            segment: toTimestamp(runAt),
+            scheduledAt: ctx.db.vars.commitTs,
+          });
+        }
+      });
+
+      const first = await runLoop();
+      assert(first.kind === "work");
+      const idle = await runLoop();
+      assert(idle.kind === "idle");
+
+      const o = await observe();
+      expect(o.pendingStart).toHaveLength(1030); // verified, never rewritten
+      expect(o.segmentCursors!.scheduled).toBe(
+        o.pendingStart[0].scheduledAt as bigint,
+      );
+    });
+
     it("caps the cursor at observed commit stamps when starting wall-keyed work", async () => {
       await initialize();
       const runAt = Date.now() + SECOND;
