@@ -694,8 +694,8 @@ describe("loop", () => {
       const first = await runLoop();
       assert(first.kind === "work");
       expect(first.batch.starts).toHaveLength(0);
-      expect(first.batch.sweep).toHaveLength(1);
-      expect(first.batch.sweep[0].start).toBeUndefined();
+      expect(first.batch.sweepStarts).toHaveLength(0);
+      expect(first.batch.sweepStop).toBeDefined();
 
       let o = await observe();
       expect(o.running).toHaveLength(0);

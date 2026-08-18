@@ -106,20 +106,6 @@ const vStart = v.object({
 });
 type Start = Infer<typeof vStart>;
 
-/**
- * One inspection point of the out-of-order sweep, in commit order. The sweep
- * cursor may advance to (`scheduledAt`, `creationTime`) once the step's
- * `start` — an entry whose enqueue committed behind the incoming cursor — has
- * been retired; runs of in-order entries, which need nothing, fold into a
- * single start-less step.
- */
-const vSweepStep = v.object({
-  scheduledAt: v.int64(),
-  creationTime: v.number(),
-  start: v.optional(vStart),
-});
-type SweepStep = Infer<typeof vSweepStep>;
-
 // batch-worker runs `getBatch` and `run` in the same transaction, so a batch
 // never crosses a deploy or a snapshot: `run` sees exactly the state the
 // batch was built from.
@@ -132,8 +118,14 @@ const batchFields = {
   completions: v.array(vCompletion),
   cancelations: v.array(vCancelation),
   starts: v.array(vStart),
-  // The out-of-order sweep's findings.
-  sweep: v.array(vSweepStep),
+  // Entries the out-of-order sweep found behind the incoming cursor (their
+  // enqueues lost the race), and how far its inspection got — the position
+  // its cursor may advance to once every found entry is retired. `sweepStop`
+  // is absent when it inspected nothing.
+  sweepStarts: v.array(vStart),
+  sweepStop: v.optional(
+    v.object({ scheduledAt: v.int64(), creationTime: v.number() }),
+  ),
   // The highest commit timestamp observed while building the batch — the
   // frontier the incoming cursor may advance to, but not beyond.
   cursorCeiling: v.int64(),
@@ -167,26 +159,32 @@ export const getBatch = internalQuery({
     const isRecoveryIter =
       running.length > 0 && segment - lastRecovery >= RECOVERY_PERIOD_SEGMENTS;
 
-    const { starts, sweep, cancelations, completions, cursorCeiling } =
-      await queryPending(ctx, {
-        completionCursor: cursors.completion,
-        cancelationCursor: cursors.cancelation,
-        incomingCursor: cursors.incoming,
-        sweepCursor: cursors.scheduled ?? 0n,
-        sweepCreationTime: cursors.scheduledCreationTime,
-        lastCommitTs: (state?.lastCommitTs as bigint | undefined) ?? 0n,
-        maxParallelism: globals.maxParallelism,
-        runningCount: running.length,
-        eligibleBefore,
-      });
+    const {
+      starts,
+      sweepStarts,
+      sweepStop,
+      cancelations,
+      completions,
+      cursorCeiling,
+    } = await queryPending(ctx, {
+      completionCursor: cursors.completion,
+      cancelationCursor: cursors.cancelation,
+      incomingCursor: cursors.incoming,
+      sweepCursor: cursors.scheduled ?? 0n,
+      sweepCreationTime: cursors.scheduledCreationTime,
+      lastCommitTs: (state?.lastCommitTs as bigint | undefined) ?? 0n,
+      maxParallelism: globals.maxParallelism,
+      runningCount: running.length,
+      eligibleBefore,
+    });
 
-    // Every sweep step is progress — an entry to start, or a cursor advance —
-    // so its presence counts as work.
+    // Anything the sweep inspected is progress — an entry to start, or at
+    // minimum a cursor advance — so it counts as work.
     const hasWork =
       completions.length > 0 ||
       cancelations.length > 0 ||
       starts.length > 0 ||
-      sweep.length > 0 ||
+      sweepStop !== undefined ||
       isRecoveryIter;
 
     if (hasWork) {
@@ -206,7 +204,8 @@ export const getBatch = internalQuery({
           segment: c.segment as bigint,
         })),
         starts,
-        sweep,
+        sweepStarts,
+        sweepStop,
         cursorCeiling,
       };
       return { kind: "work" as const, batch };
@@ -258,7 +257,6 @@ export const run = internalMutation({
     const globals = await getGlobals(ctx);
     const console = createLogger(globals.logLevel);
     const segment = getCurrentSegment();
-    const sweep = batch.sweep;
 
     const compLabel = `[main] pendingCompletion(${batch.completions.length})`;
     console.time(compLabel);
@@ -296,8 +294,7 @@ export const run = internalMutation({
     const now = Date.now();
     const isDue = (s: Start) =>
       s.legacyStartTime === undefined || s.legacyStartTime <= now;
-    const swept = sweep.flatMap((step) => (step.start ? [step.start] : []));
-    const all = [...batch.starts, ...swept];
+    const all = [...batch.starts, ...batch.sweepStarts];
     const notYet = all.filter((s) => !isDue(s));
     // Oldest first: `segment` is when an entry became eligible, and a swept
     // entry has been eligible since its (past) start time.
@@ -379,13 +376,17 @@ export const run = internalMutation({
       incoming < batch.cursorCeiling ? incoming : batch.cursorCeiling,
     );
     // The sweep cursor rests at the last inspected entry — (commit stamp,
-    // creation time), since a batch enqueue shares one stamp — and only moves
-    // past an out-of-order entry once it was retired. Its components are read
-    // straight off inspected entries, so no ceiling is needed.
-    for (const step of sweep) {
-      if (step.start && !handled.has(step.start._id)) break;
-      state.segmentCursors.scheduled = step.scheduledAt;
-      state.segmentCursors.scheduledCreationTime = step.creationTime;
+    // creation time), since a batch enqueue shares one stamp. Its components
+    // are read straight off inspected entries, so no ceiling is needed. If
+    // capacity cut one of the sweep's entries (rare: the estimate and the
+    // real capacity disagree only when a completion didn't free a slot), the
+    // cursor stays put and the next sweep re-inspects from the old position.
+    if (
+      batch.sweepStop !== undefined &&
+      batch.sweepStarts.every((s) => handled.has(s._id))
+    ) {
+      state.segmentCursors.scheduled = batch.sweepStop.scheduledAt;
+      state.segmentCursors.scheduledCreationTime = batch.sweepStop.creationTime;
     }
     // Record this run's own commit stamp: the next run reads this document,
     // so its snapshot is at least this recent, and the mark seeds its ceiling.
@@ -459,19 +460,20 @@ async function queryPending(
   // behind the incoming cursor, where the segment scan will never see it.
   // Every wall-clock-keyed entry also records its commit stamp in
   // `scheduledAt`, and commit order is the one order nothing can land behind:
-  // walking it from a cursor inspects every entry exactly once. An entry
-  // whose `segment` is still at or above the incoming cursor can be passed
+  // walking it from a cursor inspects every entry once. An entry whose
+  // `segment` is still at or above the incoming cursor can be passed
   // forever — the scan can only get past it by reading it. One behind the
   // cursor is due (the cursor never passes the current time) and must start
   // from here; those claim start slots first. The cursor is a (commit stamp,
   // creation time) pair — a batch enqueue shares one stamp, and the creation
   // time (the index's tiebreak) resumes inside it — so iteration can stop at
-  // any point: at the read budget, or as soon as an out-of-order entry
-  // exceeds the start slots, leaving later entries uninspected rather than
-  // reading work that couldn't start anyway.
-  const sweep: SweepStep[] = [];
+  // any point: at the read budget, or once entries to start fill the slots,
+  // leaving later entries uninspected rather than reading work that couldn't
+  // start anyway. Only two things come out: the entries to start, and how far
+  // inspection got.
+  const sweepStarts: Start[] = [];
+  let sweepStop: { scheduledAt: bigint; creationTime: number } | undefined;
   {
-    let oooBudget = startLimit;
     let inspected = 0;
     // Resume inside the cursor's stamp if it stopped mid-stamp, then continue
     // with later stamps. The first query is empty when the stamp is done.
@@ -499,33 +501,18 @@ async function queryPending(
       for await (const row of filtered) {
         if (inspected >= SWEEP_BATCH) break scan;
         const behind = (row.segment as bigint) < incomingCursor;
-        if (behind) {
-          if (oooBudget === 0) break scan;
-          oooBudget--;
-        }
+        if (behind && sweepStarts.length >= startLimit) break scan;
         inspected++;
-        const step: SweepStep = {
+        sweepStop = {
           scheduledAt: row.scheduledAt as bigint,
           creationTime: row._creationTime,
-          ...(behind
-            ? {
-                start: {
-                  _id: row._id,
-                  workId: row.workId,
-                  segment: row.segment as bigint,
-                },
-              }
-            : {}),
         };
-        // Fold runs of in-order entries into one step to keep batches small;
-        // a step is only worth carrying for its start or as the furthest
-        // inspection point.
-        const previous = sweep.at(-1);
-        if (!behind && previous && previous.start === undefined) {
-          previous.scheduledAt = step.scheduledAt;
-          previous.creationTime = step.creationTime;
-        } else {
-          sweep.push(step);
+        if (behind) {
+          sweepStarts.push({
+            _id: row._id,
+            workId: row.workId,
+            segment: row.segment as bigint,
+          });
         }
       }
     }
@@ -535,8 +522,7 @@ async function queryPending(
   // slots left over. Everything eligible, oldest first; work scheduled for
   // later sorts above the bound, so it's left alone without pinning the
   // cursor.
-  const sweptCount = sweep.filter((s) => s.start !== undefined).length;
-  const readyLimit = Math.max(0, startLimit - sweptCount);
+  const readyLimit = Math.max(0, startLimit - sweepStarts.length);
   const starts =
     readyLimit === 0
       ? []
@@ -564,7 +550,7 @@ async function queryPending(
     ...starts
       .filter((s) => s.scheduledAt === undefined)
       .map((s) => s.segment as bigint),
-    ...sweep.map((s) => s.scheduledAt),
+    ...(sweepStop === undefined ? [] : [sweepStop.scheduledAt]),
   ].reduce(maxTimestamp);
 
   return {
@@ -582,7 +568,8 @@ async function queryPending(
         legacyStartTime: legacyRunAt(segment),
       };
     }) satisfies Start[],
-    sweep,
+    sweepStarts,
+    sweepStop,
     cursorCeiling,
   };
 }
