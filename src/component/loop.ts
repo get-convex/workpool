@@ -56,7 +56,7 @@ export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
     incoming: 0n,
     completion: 0n,
     cancelation: 0n,
-    scheduled: 0n,
+    sweep: 0n,
   },
   lastRecovery: 0n,
   report: {
@@ -168,7 +168,7 @@ export const getBatch = internalQuery({
       completionCursor: cursors.completion,
       cancelationCursor: cursors.cancelation,
       incomingCursor: cursors.incoming,
-      sweepCursor: cursors.scheduled ?? 0n,
+      sweepCursor: cursors.sweep ?? 0n,
       lastCommitTs: (state?.lastCommitTs as bigint | undefined) ?? 0n,
       maxParallelism: globals.maxParallelism,
       runningCount: running.length,
@@ -183,7 +183,7 @@ export const getBatch = internalQuery({
       cancelations.length > 0 ||
       starts.length > 0 ||
       sweepStarts.length > 0 ||
-      (sweepStop !== undefined && sweepStop > (cursors.scheduled ?? 0n)) ||
+      (sweepStop !== undefined && sweepStop > (cursors.sweep ?? 0n)) ||
       isRecoveryIter;
 
     if (hasWork) {
@@ -384,8 +384,8 @@ export const run = internalMutation({
       batch.sweepStop !== undefined &&
       batch.sweepStarts.every((s) => handled.has(s._id))
     ) {
-      state.segmentCursors.scheduled = maxTimestamp(
-        state.segmentCursors.scheduled ?? 0n,
+      state.segmentCursors.sweep = maxTimestamp(
+        state.segmentCursors.sweep ?? 0n,
         batch.sweepStop,
       );
     }

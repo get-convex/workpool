@@ -109,23 +109,7 @@ describe("loop", () => {
     { runAt, segment }: { runAt?: number; segment?: bigint } = {},
   ): Promise<Id<"work">> {
     return t.run(async (ctx) => {
-      if (segment !== undefined) {
-        const workId = await ctx.db.insert("work", {
-          fnType: "action",
-          fnHandle: "test_handle",
-          fnName: "test_handle",
-          fnArgs: {},
-          attempts: 0,
-          ...overrides,
-        });
-        const pendingStartId = await ctx.db.insert("pendingStart", {
-          workIds: [workId],
-          segment,
-        });
-        await ctx.db.patch("work", workId, { pendingStartId });
-        return workId;
-      }
-      return enqueueHandler(ctx, createLogger("WARN"), {
+      const workId = await enqueueHandler(ctx, createLogger("WARN"), {
         fnType: "action",
         fnHandle: "test_handle",
         fnName: "test_handle",
@@ -133,6 +117,12 @@ describe("loop", () => {
         runAt: runAt ?? Date.now(),
         ...overrides,
       });
+      if (segment !== undefined) {
+        // Pin the ordering value, e.g. to simulate a shared commit stamp.
+        const work = (await ctx.db.get("work", workId))!;
+        await ctx.db.patch("pendingStart", work.pendingStartId!, { segment });
+      }
+      return workId;
     });
   }
 
@@ -705,9 +695,7 @@ describe("loop", () => {
       expect(o.running).toHaveLength(0);
       expect(o.pendingStart[0].segment).toBe(toTimestamp(runAt));
       // The sweep cursor covers its commit stamp now.
-      expect(o.segmentCursors!.scheduled).toBe(
-        o.pendingStart[0].scanTs as bigint,
-      );
+      expect(o.segmentCursors!.sweep).toBe(o.pendingStart[0].scanTs as bigint);
 
       const second = await runLoop();
       assert(second.kind === "idle");
@@ -921,7 +909,7 @@ describe("loop", () => {
       expect(o.running.map((r) => r.workId)).toContain(lostId);
       expect(o.pendingStart).toHaveLength(0);
       // Its commit stamp is covered, so the sweep never re-reads it.
-      expect(o.segmentCursors!.scheduled).toBeGreaterThan(0n);
+      expect(o.segmentCursors!.sweep).toBeGreaterThan(0n);
       expect(readyId).toBeDefined();
     });
 

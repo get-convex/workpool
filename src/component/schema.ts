@@ -47,7 +47,7 @@ export default defineSchema({
       // so the boundary stamp's few documents are re-read until they retire.
       // Optional because it didn't always exist; absent means "from the
       // beginning".
-      scheduled: v.optional(timestamp),
+      sweep: v.optional(timestamp),
     }),
     // The commit timestamp of the previous `run`. It says nothing about what
     // that run had read (commits can land between its snapshot and its
@@ -129,7 +129,7 @@ export default defineSchema({
     scanTs: v.optional(v.commitTs()),
   })
     .index("segment", ["segment"])
-    .index("scanTs", ["scanTs"]),
+    .index("scanTs", ["scanTs", "segment"]),
 
   // Written by complete, read & deleted by `main`.
   pendingCompletion: defineTable({
