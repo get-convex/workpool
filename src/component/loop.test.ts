@@ -695,7 +695,7 @@ describe("loop", () => {
       assert(first.kind === "work");
       expect(first.batch.starts).toHaveLength(0);
       expect(first.batch.sweep).toHaveLength(1);
-      expect(first.batch.sweep![0].starts).toHaveLength(0);
+      expect(first.batch.sweep[0].start).toBeUndefined();
 
       let o = await observe();
       expect(o.running).toHaveLength(0);
@@ -703,6 +703,9 @@ describe("loop", () => {
       // The sweep cursor covers its commit stamp now, so it's never re-read.
       expect(o.segmentCursors!.scheduled).toBe(
         o.pendingStart[0].scheduledAt as bigint,
+      );
+      expect(o.segmentCursors!.scheduledCreationTime).toBe(
+        o.pendingStart[0]._creationTime,
       );
 
       const second = await runLoop();
@@ -901,12 +904,12 @@ describe("loop", () => {
       expect(o.running.map((r) => r.workId)).toEqual([lostId]);
     });
 
-    it("pages through a commit stamp larger than one sweep batch", async () => {
+    it("resumes inside a commit stamp larger than one sweep batch", async () => {
       await initialize();
       const runAt = Date.now() + 100 * SECOND;
-      // One transaction stamps every entry identically, and the sweep cursor
-      // can't split a stamp — so it pages to the end of the group (larger
-      // than SWEEP_BATCH = 1024) within one iteration.
+      // One transaction stamps every entry identically. The cursor's creation
+      // time component lets it rest inside the group (larger than
+      // SWEEP_BATCH = 1024) and resume, inspecting each entry exactly once.
       await t.run(async (ctx) => {
         const workId = await ctx.db.insert("work", {
           fnType: "action",
@@ -924,8 +927,14 @@ describe("loop", () => {
         }
       });
 
-      const first = await runLoop();
+      const first = await runLoop(); // inspects the first 1024
       assert(first.kind === "work");
+      const mid = await observe();
+      expect(mid.segmentCursors!.scheduledCreationTime).toBeLessThan(
+        mid.pendingStart.at(-1)!._creationTime,
+      );
+      const second = await runLoop(); // the remaining 6
+      assert(second.kind === "work");
       const idle = await runLoop();
       assert(idle.kind === "idle");
 
@@ -933,6 +942,9 @@ describe("loop", () => {
       expect(o.pendingStart).toHaveLength(1030); // verified, never rewritten
       expect(o.segmentCursors!.scheduled).toBe(
         o.pendingStart[0].scheduledAt as bigint,
+      );
+      expect(o.segmentCursors!.scheduledCreationTime).toBe(
+        o.pendingStart.at(-1)!._creationTime,
       );
     });
 
@@ -956,11 +968,10 @@ describe("loop", () => {
   // ────────────────────────────────────────────────────────────────────
   // Cursor invariant: an entry is never left behind the cursor
   //
-  // Nothing rescans a lane behind its cursor, so an entry written below it is
-  // lost for good. Both cases below are ones where the time the loop wants to
-  // write is behind a cursor that holds a commit timestamp from the same
-  // millisecond — the two clocks aren't the same, so the loop places its
-  // writes against the cursor rather than against `Date.now()`.
+  // Nothing rescans the segment index behind its cursor, so a readable entry
+  // written below it would be lost for good. The loop's own writes stay ahead
+  // of the cursor by being strictly in the future — at least the end of the
+  // current millisecond, which the cursor never reaches.
   // ────────────────────────────────────────────────────────────────────
 
   describe("cursor invariant", () => {
@@ -972,8 +983,8 @@ describe("loop", () => {
       await runLoop();
       await simulateCompletion(workId, { kind: "failed", error: "boom" }, 0);
       // A ready entry enqueued after the completion: its commit timestamp is
-      // above the retry's `Date.now()`-derived one, so an unclamped cursor
-      // would advance past the retry in the same iteration that wrote it.
+      // above the retry's `Date.now()`-derived one, so a cursor advancing to
+      // it in the same iteration would strand a same-millisecond retry key.
       const laterId = await enqueueWork();
 
       await runLoop();
@@ -983,7 +994,8 @@ describe("loop", () => {
       assert(retry);
       expect(retry.segment).toBeGreaterThanOrEqual(o.segmentCursors!.incoming);
 
-      // Still readable, so the next iteration starts it.
+      // Keyed at the next millisecond, so it starts as soon as that arrives.
+      vi.advanceTimersByTime(1);
       await runLoop();
       o = await observe();
       expect(o.pendingStart).toHaveLength(0);

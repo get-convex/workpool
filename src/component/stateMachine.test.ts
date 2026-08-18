@@ -15,7 +15,6 @@ import {
   DEFAULT_MAX_PARALLELISM,
   fromSegment,
   getCurrentSegment,
-  getNextSegment,
   SECOND,
   WORKER_NAME,
 } from "./shared.js";
@@ -166,6 +165,11 @@ const S12_CANCELED_AWAITING_COMPLETE: CompositeState = {
 // ---------------------------------------------------------------------------
 
 const ACTION_RECOVERY_THRESHOLD_MS = 5 * 60 * 1000;
+
+/** The bucket after the current one, as older versions computed it. */
+function getNextSegment(): bigint {
+  return getCurrentSegment() + 1n;
+}
 
 describe("state machine", () => {
   let t: ReturnType<typeof setupTest>;

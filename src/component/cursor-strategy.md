@@ -1,9 +1,10 @@
 # Commit-timestamp cursors for scheduled work
 
-Workpool drains pending work by scanning an ordered index with a cursor. The
-index is ordered by a hybrid of commit timestamp and desired execution time,
-avoiding both tombstone re-scans and out-of-order commits while running work in
-a reasonable order.
+Workpool drains pending work by scanning an ordered index with a cursor. This
+change avoids tombstone re-scans without losing out-of-order commits, while
+running work in a reasonable order. It orders the index by a hybrid of commit
+timestamp and desired execution time, with a second cursored index on commits
+using wall-clock time to check for out-of-order entries.
 
 ## Benefit
 
@@ -16,68 +17,78 @@ recent load.
 
 Continuously scanning for the first entries in a table, then deleting them,
 produces a mountain of tombstones (markers of deleted documents) that need to be
-scanned on subsequent queries. We solve this by keeping a cursor per index
-region we walk, jumping ahead to where new entries actually are.
+scanned on subsequent queries.
+
+We solve this by keeping a cursor per index region we walk, jumping ahead to
+where new entries actually are.
 
 ## The out-of-order commit problem
 
 A cursor is only safe if nothing can appear behind it. A sort key chosen from
 the wall clock is chosen when the writing transaction starts, but the row only
-appears when it commits — a slow enqueue can insert a row keyed behind a cursor
-that already moved past it, orphaning the row. The previous design compensated
-by scanning 15 seconds behind the cursor on every query and rescanning the table
-once a minute.
+appears when it commits, so a slow enqueue can insert a row keyed behind a
+cursor that already moved past it, orphaning the row.
 
-A commit timestamp can't do this: any row not yet visible to a read must have
-committed later, so its key is above any cursor derived from that read. But a
-commit timestamp says nothing about when the work should run.
+The previous design compensated by scanning 15 seconds behind the cursor on
+every query and rescanning the table once a minute.
 
-## The approach
+A commit timestamp, on the other hand, is guaranteed to always move forward: any
+row not yet visible to a read must have committed later, so its key is above any
+cursor derived from rows being read.
 
-One column, `segment` (nanoseconds), holds either clock, chosen at enqueue:
+But a commit timestamp doesn’t always correspond directly to when the work
+should run.
+
+## Blending commit time and target time
+
+One column, `segment` (nanoseconds), holds either clock, chosen at enqueue time:
 
 | When should it run     | `segment`          | `scheduledAt`      |
 | ---------------------- | ------------------ | ------------------ |
 | Now (`runAfter <= 0`)  | `db.vars.commitTs` | `-`                |
 | Later (`runAfter > 0`) | the start time     | `db.vars.commitTs` |
+| After retry backoff    | the start time     | `db.vars.commitTs` |
 
-Scheduled entries are keyed at their start time (rounded up to a whole
-millisecond), so they sort above the loop's read bound until due — a bulk
-enqueue of delayed work costs ready work nothing, and no entry is ever
-rewritten. `scheduledAt` records the commit stamp of every wall-clock-keyed
-entry; its absence marks a key as an observed commit timestamp. Retries written
-by the loop get the same shape.
+Scheduled entries are keyed at their start time, so they sort above the loop's
+read bound until due. `scheduledAt` records the commit stamp of every
+wall-clock-keyed entry; its absence marks a key as an observed commit timestamp
+(see the ceiling below). A bulk enqueue of delayed work naturally sorts after
+current work, and no entry needs to be rewritten.
 
-Two indexes: `[segment]` and `[scheduledAt]`. (A third `[workId]` index was
-replaced by a `pendingStartId` pointer on the work document; it can be stale, so
-readers check the entry still exists, and unreachable entries are dropped
-reactively when the scan reads them and finds their work gone or canceled.)
+Retries get written by the loop, so they can write the start time
+transactionally with advancing the cursor, ensuring they will never be missed by
+writing them ≥ the cursor value — they can't commit out of order, so they don't
+need the sweep's protection. They still carry `scheduledAt` for its other
+meaning: their key is a wall-clock time, and without the stamp it would be
+counted as an observed commit timestamp when computing the cursor ceiling. The
+sweep verifies each retry once and passes.
 
-## Reads per iteration
+## Reading jobs in order
 
-**The sweep** walks `[scheduledAt]` in commit order — the one order nothing can
-land behind — inspecting each entry exactly once, up to 2048 per iteration:
+Two indexes: `[segment]` (when it’s due) and `[scheduledAt]` (when a future job
+was enqueued).
 
-- An entry whose `segment` is at or above the incoming cursor is safe forever:
-  the segment scan can only get past it by reading it. Pass.
-- An entry whose `segment` is behind the cursor was committed by an enqueue that
-  lost the race (commit latency exceeded its delay). The scan will never see it,
-  and it is necessarily due (the cursor never passes the current time), so it
-  starts from here, taking start slots first.
+**The sweep** walks `[scheduledAt]` in commit order, inspecting each
+wall-clock-based entry, up to 1024 per iteration. Out-of-order entries are rare,
+so the common case is a single pass:
 
-The sweep cursor advances a whole commit stamp at a time (`gt` — a batch enqueue
-shares one stamp, and a bare stamp can't split the group), and only past stamps
-whose behind-the-cursor entries were all retired. Out-of-order entries are rare
-— they require the enqueue's commit latency to exceed its delay — so the common
-case is a read-only pass.
+- `segment >= segment cursor`: safe, the **segment scan** will read it.
+- `segment < segment cursor`: missed by cursor. Prioritized to start next. It
+  was committed by an enqueue that lost the race (commit latency exceeded its
+  delay). It is necessarily overdue, as the cursor never passes the current
+  time, and was ordered before anything in the segment scan.
 
-**The segment scan** reads `[segment]` from the incoming cursor up to the end of
-the current millisecond, taking however many start slots the sweep left.
-Everything it returns is due: scheduled entries only become visible at their
-start time. (The one exception is entries written by 0.4.9 and earlier, whose
-`segment` is a 100ms wall-clock bucket — recognized by magnitude, eight orders
-below any nanosecond timestamp — and re-keyed to their start time on first
-read.)
+Each entry is inspected once ever: the sweep cursor advances a whole commit
+stamp at a time (`gt` — a batch enqueue shares one stamp, and a bare stamp can't
+split the group), and only past stamps whose missed entries were all started.
+Inclusive advancement would instead re-read the boundary stamp's group every
+iteration until its entries come due — unbounded for far-future work. A stamp
+group larger than one batch (a huge batch enqueue) is paged through to its end
+within the same iteration, so the batch size is purely a read budget.
+
+**The segment scan** reads the `[segment]` index for “due” items, from the
+incoming cursor until “now.” Skipped if all available slots were taken by the
+sweep, otherwise does a `take` on for remaining slots.
 
 ## Cursor rules
 
@@ -113,7 +124,7 @@ work.
 
 **Burst of delayed work.** 10k jobs enqueued with a 60s delay, then one ready
 job. The ready job starts on the first iteration; the delayed jobs sit above the
-read bound, unrewritten, while the sweep verifies them ~2048 per iteration. A
+read bound, unrewritten, while the sweep verifies them ~1024 per iteration. A
 1s-delayed task enqueued after the burst surfaces at its own start time,
 unaffected by the backlog.
 

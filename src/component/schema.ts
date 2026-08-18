@@ -46,11 +46,23 @@ export default defineSchema({
       // sweep. Optional because it didn't always exist; absent means "from the
       // beginning".
       scheduled: v.optional(timestamp),
+      // The `_creationTime` of the last entry the sweep inspected at the
+      // `scheduled` stamp, letting the cursor rest inside a stamp shared by a
+      // whole batch enqueue (`_creationTime` is the index's tiebreak). Absent
+      // means the stamp was fully inspected.
+      scheduledCreationTime: v.optional(v.number()),
     }),
-    // The commit timestamp of the previous `run`. Everything this run read is
-    // at least this recent, so the `incoming` cursor may advance up to the
-    // highest commit timestamp observed — but no further, or a commit racing
-    // this run could land behind it. See `run`'s cursor advance.
+    // The commit timestamp of the previous `run`. It says nothing about what
+    // that run had read (commits can land between its snapshot and its
+    // commit) — but the *next* run reads this document, so its snapshot
+    // includes every transaction stamped at or below this value, making it a
+    // safe addition to that run's cursor ceiling (see `run`). It only bounds
+    // cursor advancement. Without it the ceiling would come only from commit
+    // stamps observed in the batch itself, which still converges — every
+    // start eventually produces a commit-stamped completion — but a pool
+    // running only scheduled (wall-clock-keyed) work would leave its cursor
+    // behind each entry it starts, re-reading those tombstones until the
+    // completion arrives. This closes that gap by the very next iteration.
     lastCommitTs: v.optional(v.commitTs()),
     // Unlike the cursors, this stays a 100ms "segment": it only paces how often
     // the loop checks for stuck jobs.
