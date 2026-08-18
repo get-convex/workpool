@@ -415,7 +415,7 @@ export const run = internalMutation({
 // per-iteration reads. It must exceed the most entries one transaction can
 // stamp identically (a maximal batch enqueue), or the cursor could never
 // clear that stamp.
-const SWEEP_BATCH = 2048;
+const SWEEP_BATCH = 1024;
 
 /** Read the three pending tables the loop processes. */
 async function queryPending(
