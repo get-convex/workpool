@@ -42,15 +42,12 @@ export default defineSchema({
       incoming: timestamp,
       completion: timestamp,
       cancelation: timestamp,
-      // Cursor into pendingStart's `scheduledAt` index — the out-of-order
-      // sweep. Optional because it didn't always exist; absent means "from the
+      // Cursor into pendingStart's `scanTs` index — the out-of-order sweep.
+      // Inclusive: a transaction can write several documents with one stamp,
+      // so the boundary stamp's few documents are re-read until they retire.
+      // Optional because it didn't always exist; absent means "from the
       // beginning".
       scheduled: v.optional(timestamp),
-      // The `_creationTime` of the last entry the sweep inspected at the
-      // `scheduled` stamp, letting the cursor rest inside a stamp shared by a
-      // whole batch enqueue (`_creationTime` is the index's tiebreak). Absent
-      // means the stamp was fully inspected.
-      scheduledCreationTime: v.optional(v.number()),
     }),
     // The commit timestamp of the previous `run`. It says nothing about what
     // that run had read (commits can land between its snapshot and its
@@ -106,22 +103,33 @@ export default defineSchema({
     pendingStartId: v.optional(v.id("pendingStart")),
   }),
 
-  // Written on enqueue & rescheduled for retry, read & deleted by `main`.
+  // Written on enqueue & rescheduled for retry, read, shrunk & deleted by
+  // `main`. One document carries every entry of a single transaction that
+  // shares a `segment` (up to a cap), so a batch enqueue writes a few
+  // documents rather than hundreds, and starting or canceling one entry
+  // patches it out of `workIds` (found via the work doc's `pendingStartId`).
   pendingStart: defineTable({
-    workId: v.id("work"),
+    // The work waiting to start at `segment`. Entries leave as they start or
+    // cancel; the document is deleted when none remain.
+    workIds: v.optional(v.array(v.id("work"))),
+    // @deprecated The single entry of a document written by version ≤ 0.4.9.
+    workId: v.optional(v.id("work")),
     segment,
-    // The commit timestamp, recorded on every entry whose `segment` is a
-    // wall-clock start time rather than a commit timestamp. Such an entry can
-    // commit *behind* the loop's `segment` cursor (when the enqueue takes
-    // longer to commit than the delay); the sweep walks this index in commit
-    // order — which nothing can land behind — and starts any entry whose
-    // `segment` the cursor already passed. Its absence also tells the loop
-    // that `segment` is a commit timestamp it has observed, which is what
-    // bounds how far the cursor may advance. See `queryPending`.
-    scheduledAt: v.optional(v.commitTs()),
+    // Present iff `segment` is a wall-clock start time rather than a commit
+    // timestamp — so the cursor ceiling knows not to count it as an observed
+    // commit stamp. See `run`.
+    scheduled: v.optional(v.boolean()),
+    // The enqueue's commit timestamp, present only on documents that could
+    // commit out of order — scheduled enqueues, where commit latency can
+    // exceed the delay and land the document behind the loop's `segment`
+    // cursor. The sweep walks this index in commit order — which nothing can
+    // land behind — and starts anything the cursor passed over. Loop-written
+    // documents (retries, re-keyed legacy entries) can't be out of order and
+    // omit it. See `queryPending`.
+    scanTs: v.optional(v.commitTs()),
   })
     .index("segment", ["segment"])
-    .index("scheduledAt", ["scheduledAt"]),
+    .index("scanTs", ["scanTs"]),
 
   // Written by complete, read & deleted by `main`.
   pendingCompletion: defineTable({

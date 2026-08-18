@@ -16,10 +16,13 @@
   work never sits in front of ready work.
 - A scheduled start time can commit _behind_ the loop's cursor (when the enqueue
   takes longer to commit than the delay), where the ordered scan would never see
-  it. Every entry keyed by a wall-clock time also records its commit timestamp
-  in a `scheduledAt` field; the loop sweeps that index in commit order — which
-  nothing can land behind — inspects each entry exactly once, and directly
-  starts the rare entry the cursor passed over. No entry is ever rewritten.
+  it. Scheduled enqueues also record their commit timestamp in a `scanTs` field;
+  the loop sweeps that index in commit order — which nothing can land behind —
+  and directly starts the rare entries the cursor passed over. No entry is ever
+  rewritten.
+- A batch enqueue packs entries sharing a start time into one `pendingStart`
+  document (up to 256), so it writes a few documents rather than hundreds;
+  starting or canceling an entry patches it out of its document.
 - The loop's cursor never advances past the newest commit timestamp it has
   observed, so a scheduled entry starting at its wall-clock time can't push the
   cursor ahead of a racing enqueue's commit — the design makes no assumptions

@@ -41,18 +41,29 @@ should run.
 
 ## Blending commit time and target time
 
-One column, `segment` (nanoseconds), holds either clock, chosen at enqueue time:
+A `pendingStart` document carries every entry of one transaction that shares a
+`segment` (up to 256), in a `workIds` array — so a batch enqueue writes a few
+documents rather than hundreds, and starting or canceling one entry patches it
+out of its document (found via the work doc's `pendingStartId`), deleting the
+document when empty.
 
-| When should it run     | `segment`          | `scheduledAt`      |
-| ---------------------- | ------------------ | ------------------ |
-| Now (`runAfter <= 0`)  | `db.vars.commitTs` | `-`                |
-| Later (`runAfter > 0`) | the start time     | `db.vars.commitTs` |
-| After retry backoff    | the start time     | `db.vars.commitTs` |
+One column, `segment` (nanoseconds), holds either clock, chosen at enqueue time,
+with two markers whose semantics are worth stating exactly:
+
+| When should it run     | `segment`          | `scheduled` | `scanTs`           |
+| ---------------------- | ------------------ | ----------- | ------------------ |
+| Now (`runAfter <= 0`)  | `db.vars.commitTs` | `-`         | `-`                |
+| Later (`runAfter > 0`) | the start time     | `true`      | `db.vars.commitTs` |
+| After retry backoff    | the start time     | `true`      | `-`                |
+
+- `scheduled` is present iff `segment` is a wall-clock time rather than a commit
+  timestamp, which tells the cursor ceiling (below) not to count it as an
+  observed commit stamp.
+- `scanTs` is the enqueue's commit stamp, present only on documents that could
+  commit out of order — the sweep's index.
 
 Scheduled entries are keyed at their start time, so they sort above the loop's
-read bound until due. `scheduledAt` records the commit stamp of every
-wall-clock-keyed entry; its absence marks a key as an observed commit timestamp
-(see the ceiling below). A bulk enqueue of delayed work naturally sorts after
+read bound until due. A bulk enqueue of delayed work naturally sorts after
 current work, and no entry needs to be rewritten.
 
 Retries get written by the loop, so they can't be missed without any explicit
@@ -60,36 +71,33 @@ comparison against the cursor: their key is strictly in the future (a backoff
 rounds up to at least the end of the current millisecond), and no cursor ever
 reaches the end of the current millisecond — the scan's bound is exclusive and
 the ceiling only pulls it lower. So unlike an enqueue, a retry can't commit out
-of order and doesn't need the sweep's protection. It still carries `scheduledAt`
-for its other meaning: its key is a wall-clock time, and without the stamp it
-would be counted as an observed commit timestamp when computing the cursor
-ceiling. The sweep verifies each retry once and passes.
+of order, and it carries no `scanTs`: the sweep never reads it.
 
 ## Reading jobs in order
 
-Two indexes: `[segment]` (when it’s due) and `[scheduledAt]` (when a future job
-was enqueued).
+Two indexes: `[segment]` (when it’s due) and `[scanTs]` (when a scheduled
+document was enqueued).
 
-**The sweep** walks `[scheduledAt]` in commit order, inspecting each
-wall-clock-based entry, up to 1024 per iteration. Out-of-order entries are rare,
-so the common case is a single pass:
+**The sweep** walks `[scanTs]` in commit order, inspecting each scheduled
+document once. Out-of-order documents are rare, so the common case is a single
+pass:
 
 - `segment >= segment cursor`: safe, the **segment scan** will read it.
-- `segment < segment cursor`: missed by cursor. Prioritized to start next. It
-  was committed by an enqueue that lost the race (commit latency exceeded its
-  delay). It is necessarily overdue, as the cursor never passes the current
-  time, and was ordered before anything in the segment scan.
+- `segment < segment cursor`: missed by the cursor — its enqueue lost the race
+  (commit latency exceeded its delay). All of its entries are necessarily
+  overdue, as the cursor never passes the current time, so they're prioritized
+  to start next, taking slots first.
 
-Each entry is inspected once ever: the sweep cursor is a (commit stamp, creation
-time) pair — a batch enqueue shares one stamp, and the creation time (the
-index's implicit tiebreak) resumes inside it — so already-inspected entries are
-never re-read, and iteration can stop at any point: at the read budget, or as
-soon as a missed entry exceeds the available start slots, rather than reading
-entries that couldn't start anyway.
+The sweep cursor is inclusive (`gte`): a transaction can write several documents
+with one stamp, so the few live documents at the boundary stamp are re-verified
+until they retire — cheap, because they're documents, not entries. Iteration
+stops at the read budget, or once a missed document's entries fill the remaining
+start slots; a partially-taken document keeps the cursor at bay, its started
+entries patch out, and the next sweep picks up the remainder.
 
-**The segment scan** reads the `[segment]` index for “due” items, from the
-incoming cursor until “now.” Skipped if all available slots were taken by the
-sweep, otherwise does a `take` on for remaining slots.
+**The segment scan** reads the `[segment]` index for “due” documents, from the
+incoming cursor until “now,” taking entries for the slots the sweep left.
+Skipped when the sweep took them all.
 
 ## Cursor rules
 
@@ -126,10 +134,10 @@ work.
 ## Scenarios
 
 **Burst of delayed work.** 10k jobs enqueued with a 60s delay, then one ready
-job. The ready job starts on the first iteration; the delayed jobs sit above the
-read bound, unrewritten, while the sweep verifies them ~1024 per iteration. A
-1s-delayed task enqueued after the burst surfaces at its own start time,
-unaffected by the backlog.
+job. The batch packs into a few dozen documents; the ready job starts on the
+first iteration while the sweep verifies those documents in one pass, and
+nothing is rewritten. A 1s-delayed task enqueued after the burst surfaces at its
+own start time, unaffected by the backlog.
 
 **Saturated pool, scheduled work comes due.** The entry becomes visible to the
 segment scan at its start time and competes in eligibility order as capacity
@@ -154,12 +162,8 @@ at most one sweep-batch behind.
 ## Future ideas
 
 - Clamp near-future starts (e.g. within ~100–250ms) to "now": they'd be
-  commit-keyed with no `scheduledAt` to sweep, at the cost of starting up to
-  that much early (or paired with an execution-side delay to keep exact start
-  times).
-- Pack many pending starts sharing a commit stamp into one document (each worker
-  patches itself out on start, found via `pendingStartId`), cutting write/delete
-  churn and document counts for large batch enqueues.
+  commit-keyed with nothing to sweep, at the cost of starting up to that much
+  early (or paired with an execution-side delay to keep exact start times).
 
 ## Upgrading
 

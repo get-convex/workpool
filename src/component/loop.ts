@@ -123,9 +123,7 @@ const batchFields = {
   // its cursor may advance to once every found entry is retired. `sweepStop`
   // is absent when it inspected nothing.
   sweepStarts: v.array(vStart),
-  sweepStop: v.optional(
-    v.object({ scheduledAt: v.int64(), creationTime: v.number() }),
-  ),
+  sweepStop: v.optional(v.int64()),
   // The highest commit timestamp observed while building the batch — the
   // frontier the incoming cursor may advance to, but not beyond.
   cursorCeiling: v.int64(),
@@ -171,20 +169,21 @@ export const getBatch = internalQuery({
       cancelationCursor: cursors.cancelation,
       incomingCursor: cursors.incoming,
       sweepCursor: cursors.scheduled ?? 0n,
-      sweepCreationTime: cursors.scheduledCreationTime,
       lastCommitTs: (state?.lastCommitTs as bigint | undefined) ?? 0n,
       maxParallelism: globals.maxParallelism,
       runningCount: running.length,
       eligibleBefore,
     });
 
-    // Anything the sweep inspected is progress — an entry to start, or at
-    // minimum a cursor advance — so it counts as work.
+    // The sweep counts as work when it found entries to start or moved past
+    // new documents; re-verifying the live documents at its inclusive
+    // boundary is not progress and must not keep the loop awake.
     const hasWork =
       completions.length > 0 ||
       cancelations.length > 0 ||
       starts.length > 0 ||
-      sweepStop !== undefined ||
+      sweepStarts.length > 0 ||
+      (sweepStop !== undefined && sweepStop > (cursors.scheduled ?? 0n)) ||
       isRecoveryIter;
 
     if (hasWork) {
@@ -385,8 +384,10 @@ export const run = internalMutation({
       batch.sweepStop !== undefined &&
       batch.sweepStarts.every((s) => handled.has(s._id))
     ) {
-      state.segmentCursors.scheduled = batch.sweepStop.scheduledAt;
-      state.segmentCursors.scheduledCreationTime = batch.sweepStop.creationTime;
+      state.segmentCursors.scheduled = maxTimestamp(
+        state.segmentCursors.scheduled ?? 0n,
+        batch.sweepStop,
+      );
     }
     // Record this run's own commit stamp: the next run reads this document,
     // so its snapshot is at least this recent, and the mark seeds its ceiling.
@@ -417,7 +418,6 @@ async function queryPending(
     cancelationCursor,
     incomingCursor,
     sweepCursor,
-    sweepCreationTime,
     lastCommitTs,
     maxParallelism,
     runningCount,
@@ -427,7 +427,6 @@ async function queryPending(
     cancelationCursor: bigint;
     incomingCursor: bigint;
     sweepCursor: bigint;
-    sweepCreationTime: number | undefined;
     lastCommitTs: bigint;
     maxParallelism: number;
     runningCount: number;
@@ -449,129 +448,142 @@ async function queryPending(
     MAIN_BATCH_SIZE,
     Math.max(0, maxParallelism - runningCount + completions.length),
   );
-  const excludedIds = [
+  // Work completing or canceling this iteration is skipped when reading; the
+  // same iteration removes those entries, so the cursors may pass them.
+  const excluded = new Set([
     ...completions.map((c) => c.workId),
     ...cancelations.map((c) => c.workId),
-  ];
+  ]);
 
   // ── The out-of-order sweep ──
   // A scheduled enqueue writes its start time as its `segment`, but commits
-  // later — so if the commit took longer than the delay, the entry can land
-  // behind the incoming cursor, where the segment scan will never see it.
-  // Every wall-clock-keyed entry also records its commit stamp in
-  // `scheduledAt`, and commit order is the one order nothing can land behind:
-  // walking it from a cursor inspects every entry once. An entry whose
-  // `segment` is still at or above the incoming cursor can be passed
-  // forever — the scan can only get past it by reading it. One behind the
-  // cursor is due (the cursor never passes the current time) and must start
-  // from here; those claim start slots first. The cursor is a (commit stamp,
-  // creation time) pair — a batch enqueue shares one stamp, and the creation
-  // time (the index's tiebreak) resumes inside it — so iteration can stop at
-  // any point: at the read budget, or once entries to start fill the slots,
-  // leaving later entries uninspected rather than reading work that couldn't
-  // start anyway. Only two things come out: the entries to start, and how far
-  // inspection got.
+  // later — so if the commit took longer than the delay, the document can
+  // land behind the incoming cursor, where the segment scan will never see
+  // it. Every scheduled enqueue also records its commit stamp in `scanTs`,
+  // and commit order is the one order nothing can land behind: walking it
+  // from a cursor inspects every document once (plus re-verifying the few
+  // live documents sharing the boundary stamp — the cursor is inclusive
+  // because a transaction can write several documents with one stamp). A
+  // document whose `segment` is at or above the incoming cursor can be passed
+  // forever: the scan can only get past it by reading it. One behind the
+  // cursor is due (the cursor never passes the current time), and all its
+  // entries must start from here, claiming start slots first. Iteration
+  // stops at the read budget, or when a behind document's entries exceed the
+  // remaining slots, leaving it uninspected rather than reading work that
+  // couldn't start.
   const sweepStarts: Start[] = [];
-  let sweepStop: { scheduledAt: bigint; creationTime: number } | undefined;
+  let sweepStop: bigint | undefined;
   {
     let inspected = 0;
-    // Resume inside the cursor's stamp if it stopped mid-stamp, then continue
-    // with later stamps. The first query is empty when the stamp is done.
-    const streams = [
-      ...(sweepCreationTime === undefined
-        ? []
-        : [
-            ctx.db
-              .query("pendingStart")
-              .withIndex("scheduledAt", (q) =>
-                q
-                  .eq("scheduledAt", sweepCursor)
-                  .gt("_creationTime", sweepCreationTime),
-              ),
-          ]),
-      ctx.db
-        .query("pendingStart")
-        .withIndex("scheduledAt", (q) => q.gt("scheduledAt", sweepCursor)),
-    ];
-    scan: for (const stream of streams) {
-      // eslint-disable-next-line @convex-dev/no-filter-in-query
-      const filtered = stream.filter((q) =>
-        q.and(...excludedIds.map((id) => q.neq(q.field("workId"), id))),
-      );
-      for await (const row of filtered) {
-        if (inspected >= SWEEP_BATCH) break scan;
-        const behind = (row.segment as bigint) < incomingCursor;
-        if (behind && sweepStarts.length >= startLimit) break scan;
-        inspected++;
-        sweepStop = {
-          scheduledAt: row.scheduledAt as bigint,
-          creationTime: row._creationTime,
-        };
-        if (behind) {
-          sweepStarts.push({
-            _id: row._id,
-            workId: row.workId,
-            segment: row.segment as bigint,
-          });
+    const stream = ctx.db
+      .query("pendingStart")
+      .withIndex("scanTs", (q) => q.gte("scanTs", sweepCursor));
+    for await (const doc of stream) {
+      const segment = doc.segment as bigint;
+      const ids = memberIds(doc).filter((id) => !excluded.has(id));
+      const behind = segment < incomingCursor;
+      if (behind) {
+        // Take what fits in the start slots. A partially-taken document keeps
+        // the cursor at bay: its started entries patch out, and the next
+        // sweep re-finds the remainder.
+        const room = startLimit - sweepStarts.length;
+        if (room <= 0) break;
+        const taken = ids.slice(0, room);
+        inspected += taken.length;
+        for (const workId of taken) {
+          sweepStarts.push({ _id: doc._id, workId, segment });
         }
+        if (taken.length < ids.length) break;
+      } else {
+        if (inspected > 0 && inspected + ids.length > SWEEP_BATCH) break;
+        inspected += ids.length;
       }
+      sweepStop = doc.scanTs as bigint;
     }
   }
 
   // Entries the sweep starts take slots first; only fetch ready work for the
   // slots left over. Everything eligible, oldest first; work scheduled for
   // later sorts above the bound, so it's left alone without pinning the
-  // cursor.
+  // cursor. Documents are read whole, but a partially-taken document is safe:
+  // the cursor stops at its `segment`, and the inclusive re-read picks up the
+  // entries left behind.
   const readyLimit = Math.max(0, startLimit - sweepStarts.length);
-  const starts =
-    readyLimit === 0
-      ? []
-      : await ctx.db
-          .query("pendingStart")
-          .withIndex("segment", (q) =>
-            q.gte("segment", incomingCursor).lt("segment", eligibleBefore),
-          )
-          // eslint-disable-next-line @convex-dev/no-filter-in-query
-          .filter((q) =>
-            q.and(...excludedIds.map((id) => q.neq(q.field("workId"), id))),
-          )
-          .take(readyLimit);
+  const starts: Start[] = [];
+  const readyStamps: bigint[] = [];
+  if (readyLimit > 0) {
+    const stream = ctx.db
+      .query("pendingStart")
+      .withIndex("segment", (q) =>
+        q.gte("segment", incomingCursor).lt("segment", eligibleBefore),
+      );
+    scan: for await (const doc of stream) {
+      const segment = doc.segment as bigint;
+      // A document from before commit-timestamp ordering keeps its start time
+      // in `segment`; recovering it here means `run` handles it like any
+      // other not-yet-due entry and re-keys it as a timestamp.
+      const legacyStartTime = legacyRunAt(segment);
+      if (doc.scheduled !== true && legacyStartTime === undefined) {
+        readyStamps.push(segment);
+      }
+      for (const workId of memberIds(doc)) {
+        if (excluded.has(workId)) continue;
+        if (starts.length >= readyLimit) break scan;
+        starts.push({ _id: doc._id, workId, segment, legacyStartTime });
+      }
+    }
+  }
   // The highest commit timestamp observed while building this batch. Every
   // source is the stamp of a transaction visible to this snapshot, so
   // anything committing later is stamped above it — the frontier the cursor
-  // may advance to. Entries with `scheduledAt` are wall-clock-keyed and don't
-  // count (their stamps do, via the sweep); entries without it carry an
-  // observed commit stamp in `segment` (an older version's tiny buckets can't
-  // win a max).
+  // may advance to. `scheduled` documents are wall-clock-keyed and don't
+  // count (their stamps do, via the sweep); the rest carry an observed commit
+  // stamp in `segment` (an older version's tiny buckets are excluded with the
+  // same check that recovers their start time).
   const cursorCeiling = [
     lastCommitTs,
     ...completions.map((c) => c.segment as bigint),
     ...cancelations.map((c) => c.segment as bigint),
-    ...starts
-      .filter((s) => s.scheduledAt === undefined)
-      .map((s) => s.segment as bigint),
-    ...(sweepStop === undefined ? [] : [sweepStop.scheduledAt]),
+    ...readyStamps,
+    ...(sweepStop === undefined ? [] : [sweepStop]),
   ].reduce(maxTimestamp);
 
   return {
     completions,
     cancelations,
-    starts: starts.map((s) => {
-      const segment = s.segment as bigint;
-      return {
-        _id: s._id,
-        workId: s.workId,
-        segment,
-        // An entry from before commit-timestamp ordering keeps its start time
-        // in `segment`; recovering it here means `run` handles it like any
-        // other not-yet-due entry and re-keys it as a timestamp.
-        legacyStartTime: legacyRunAt(segment),
-      };
-    }) satisfies Start[],
+    starts,
     sweepStarts,
     sweepStop,
     cursorCeiling,
   };
+}
+
+/** The work queued in a pendingStart document. */
+function memberIds(doc: {
+  workIds?: Id<"work">[];
+  workId?: Id<"work">;
+}): Id<"work">[] {
+  return doc.workIds ?? (doc.workId ? [doc.workId] : []);
+}
+
+/**
+ * Remove entries from a queue document, deleting it once empty (also clearing
+ * the deprecated single-entry field a ≤ 0.4.9 version may have written).
+ */
+async function removeFromPendingStart(
+  ctx: MutationCtx,
+  doc: Doc<"pendingStart">,
+  workIds: Id<"work">[],
+) {
+  const remaining = memberIds(doc).filter((id) => !workIds.includes(id));
+  if (remaining.length === 0) {
+    await ctx.db.delete("pendingStart", doc._id);
+  } else {
+    await ctx.db.patch("pendingStart", doc._id, {
+      workIds: remaining,
+      workId: undefined,
+    });
+  }
 }
 
 /**
@@ -675,13 +687,18 @@ async function handleCancelation(
           // is only reachable through the scan (the pointer can be missing on
           // entries older versions wrote; `handleStart` checks this flag).
           await ctx.db.patch("work", workId, { canceled: true });
-          // Ensure it doesn't start. The pointer can be stale; check it.
+          // Ensure it doesn't start: remove it from its queue document. The
+          // pointer can be stale; check membership.
           const pendingStart = work.pendingStartId
             ? await ctx.db.get("pendingStart", work.pendingStartId)
             : null;
-          if (pendingStart && !canceledWork.has(workId)) {
+          if (
+            pendingStart &&
+            memberIds(pendingStart).includes(workId) &&
+            !canceledWork.has(workId)
+          ) {
             state.report.canceled++;
-            await ctx.db.delete("pendingStart", pendingStart._id);
+            await removeFromPendingStart(ctx, pendingStart, [workId]);
             canceledWork.add(workId);
             return { workId, runResult, attempt: work.attempts };
           }
@@ -757,16 +774,19 @@ async function promoteScheduled(ctx: MutationCtx, notYet: Start[]) {
       if (!(await ctx.db.get("pendingStart", _id))) return;
       await ctx.db.patch("pendingStart", _id, {
         segment: dueTimestamp(legacyStartTime!),
-        // The key is now a wall-clock time, and `scheduledAt` is what records
-        // that (its absence marks a key as an observed commit stamp).
-        scheduledAt: ctx.db.vars.commitTs,
+        // The key is now a wall-clock time, and `scheduled` is what records
+        // that (so the cursor ceiling doesn't count it as a commit stamp).
+        // No `scanTs`: written by the loop, it can't be out of order.
+        scheduled: true,
       });
     }),
   );
 }
 
 /**
- * Starts pending work.
+ * Starts pending work. Entries are removed from their queue documents as
+ * they're handled — started, found gone, or found canceled — one patch (or
+ * delete, when empty) per document.
  */
 async function handleStart(
   ctx: MutationCtx,
@@ -776,57 +796,63 @@ async function handleStart(
   { logLevel }: Config,
 ) {
   console.debug(`[main] scheduling ${pending.length} pending work`);
-  const starts = (
-    await Promise.all(
-      pending.map(async ({ _id, workId, segment, legacyStartTime }) => {
-        if (state.running.some((r) => r.workId === workId)) {
-          console.error(`[main] ${workId} already running (skipping start)`);
-          // The row is spurious, and nothing rescans the lane behind the
-          // cursor, so drop it rather than leave it unreadable.
-          if (await ctx.db.get("pendingStart", _id)) {
-            await ctx.db.delete("pendingStart", _id);
-          }
-          return null;
-        }
-        // Guard against a pendingStart a concurrent cancelation removed.
-        if (!(await ctx.db.get("pendingStart", _id))) {
-          return null;
-        }
-        const work = await ctx.db.get("work", workId);
-        await ctx.db.delete("pendingStart", _id);
-        if (!work) {
-          console.error(`Trying to start, but work not found: ${workId}`);
-          return null;
-        }
-        if (work.canceled) {
-          // Canceled while its entry was only reachable through this scan
-          // (no `pendingStartId` pointer — written by an older version).
-          // Finish the cancelation that couldn't find the entry then.
-          console.debug(`[main] ${workId} was canceled (not starting)`);
-          state.report.canceled++;
-          await ctx.scheduler.runAfter(0, internal.complete.complete, {
-            jobs: [
-              {
-                workId,
-                runResult: { kind: "canceled" as const },
-                attempt: work.attempts,
-              },
-            ],
-          });
-          return null;
-        }
-        return {
-          work,
-          // `segment` round-trips to when this became eligible: the
-          // scheduled start time, or the commit timestamp of the enqueue if
-          // it was ready then. `legacyStartTime` only exists for an entry an
-          // older version wrote, whose `segment` is a 100ms bucket rather
-          // than a timestamp.
-          lagMs: Date.now() - (legacyStartTime ?? fromTimestamp(segment)),
-        };
-      }),
-    )
-  ).flatMap((r) => (r ? [r] : []));
+  const byDoc = new Map<Id<"pendingStart">, Start[]>();
+  for (const entry of pending) {
+    const entries = byDoc.get(entry._id);
+    if (entries) entries.push(entry);
+    else byDoc.set(entry._id, [entry]);
+  }
+  const starts: { work: Doc<"work">; lagMs: number }[] = [];
+  for (const [docId, entries] of byDoc) {
+    // Guard against a document a concurrent cancelation emptied.
+    const doc = await ctx.db.get("pendingStart", docId);
+    if (!doc) continue;
+    const members = memberIds(doc);
+    const removed: Id<"work">[] = [];
+    for (const { workId, segment, legacyStartTime } of entries) {
+      // A concurrent cancelation may have removed just this entry.
+      if (!members.includes(workId)) continue;
+      // Whatever happens below, the entry leaves the queue: nothing rescans
+      // behind the cursor, so it must not be left unreadable.
+      removed.push(workId);
+      if (state.running.some((r) => r.workId === workId)) {
+        console.error(`[main] ${workId} already running (skipping start)`);
+        continue;
+      }
+      const work = await ctx.db.get("work", workId);
+      if (!work) {
+        console.error(`Trying to start, but work not found: ${workId}`);
+        continue;
+      }
+      if (work.canceled) {
+        // Canceled while its entry was only reachable through this scan
+        // (no `pendingStartId` pointer — written by an older version).
+        // Finish the cancelation that couldn't find the entry then.
+        console.debug(`[main] ${workId} was canceled (not starting)`);
+        state.report.canceled++;
+        await ctx.scheduler.runAfter(0, internal.complete.complete, {
+          jobs: [
+            {
+              workId,
+              runResult: { kind: "canceled" as const },
+              attempt: work.attempts,
+            },
+          ],
+        });
+        continue;
+      }
+      starts.push({
+        work,
+        // `segment` round-trips to when this became eligible: the
+        // scheduled start time, or the commit timestamp of the enqueue if
+        // it was ready then. `legacyStartTime` only exists for an entry an
+        // older version wrote, whose `segment` is a 100ms bucket rather
+        // than a timestamp.
+        lagMs: Date.now() - (legacyStartTime ?? fromTimestamp(segment)),
+      });
+    }
+    await removeFromPendingStart(ctx, doc, removed);
+  }
 
   state.running.push(...(await beginWorkBatch(ctx, starts, console, logLevel)));
 }
@@ -943,10 +969,10 @@ async function rescheduleJob(
   }
   // The pointer can be stale (its entry started); check before declaring a
   // duplicate.
-  if (
-    work.pendingStartId &&
-    (await ctx.db.get("pendingStart", work.pendingStartId))
-  ) {
+  const existing = work.pendingStartId
+    ? await ctx.db.get("pendingStart", work.pendingStartId)
+    : null;
+  if (existing && memberIds(existing).includes(work._id)) {
     // Not sure why this would ever happen, but ensure uniqueness explicitly.
     console.error(`[main] ${work._id} already in pendingStart so not retrying`);
     return false;
@@ -959,15 +985,14 @@ async function rescheduleJob(
   // future, so it rounds up to at least the end of the current millisecond,
   // which no cursor ever reaches — the scan's bound is exclusive and the
   // ceiling can only pull it lower. So unlike an enqueue, this can't land
-  // behind the cursor and doesn't need the sweep. `scheduledAt` is still set,
-  // for the other thing it means: its absence marks a `segment` as an
-  // observed commit stamp when computing the cursor ceiling, and this key is
-  // a wall-clock time. The sweep just verifies it once and passes.
+  // behind the cursor and needs no `scanTs` for the sweep. `scheduled` still
+  // marks the key as a wall-clock time, so the cursor ceiling doesn't count
+  // it as an observed commit stamp.
   const segment = dueTimestamp(Date.now() + Math.max(nextAttempt, 1));
   const pendingStartId = await ctx.db.insert("pendingStart", {
-    workId: work._id,
+    workIds: [work._id],
     segment,
-    scheduledAt: ctx.db.vars.commitTs,
+    scheduled: true,
   });
   await ctx.db.patch("work", work._id, { pendingStartId });
   return true;

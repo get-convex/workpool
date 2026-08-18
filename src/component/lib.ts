@@ -59,6 +59,17 @@ export const enqueue = mutation({
 export async function enqueueHandler(
   ctx: MutationCtx,
   console: Logger,
+  item: ObjectType<typeof itemArgs>,
+) {
+  const created = await createWork(ctx, console, item);
+  await insertPendingStarts(ctx, [created]);
+  return created.workId;
+}
+
+/** Create the work document (and any payload), but not its queue entry. */
+async function createWork(
+  ctx: MutationCtx,
+  console: Logger,
   { runAt, ...workArgs }: ObjectType<typeof itemArgs>,
 ) {
   runAt = boundScheduledTime(runAt, console);
@@ -110,23 +121,54 @@ export async function enqueueHandler(
 
   // Store the work item
   const workId = await ctx.db.insert("work", workItem);
-
-  // Ready now: order it by this transaction's commit timestamp, which can't
-  // land behind the loop's cursor. Scheduled for later: order it by its start
-  // time, so it stays invisible to the loop until it's due. A scheduled entry
-  // could commit *behind* the cursor (if this enqueue takes longer to commit
-  // than the delay), so it also records its commit stamp in `scheduledAt`;
-  // the loop sweeps that index in commit order and starts anything the cursor
-  // passed over.
-  const delayMs = runAt - Date.now();
-  const pendingStartId = await ctx.db.insert("pendingStart", {
-    workId,
-    segment: delayMs > 0 ? dueTimestamp(runAt) : ctx.db.vars.commitTs,
-    ...(delayMs > 0 ? { scheduledAt: ctx.db.vars.commitTs } : {}),
-  });
-  await ctx.db.patch("work", workId, { pendingStartId });
   recordEnqueued(console, { workId, fnName: workArgs.fnName, runAt });
-  return workId;
+  return { workId, runAt };
+}
+
+// How many entries one pendingStart document carries at most. Entries are
+// ids (~34 bytes), so a full document is well under the size limits while a
+// maximal batch enqueue still collapses into a handful of documents.
+const MAX_PACKED = 256;
+
+/**
+ * Queue freshly created work, packing entries that share an ordering value
+ * into one pendingStart document and pointing each work doc at its document.
+ *
+ * Ready-now entries are ordered by this transaction's commit timestamp, which
+ * can't land behind the loop's cursor. Scheduled entries are ordered by their
+ * start time, invisible to the loop until due — but such a document could
+ * commit *behind* the cursor (if the enqueue takes longer to commit than the
+ * delay), so it's marked `scheduled` and records its commit stamp in
+ * `scanTs`; the loop sweeps that index in commit order and starts anything
+ * the cursor passed over.
+ */
+async function insertPendingStarts(
+  ctx: MutationCtx,
+  entries: { workId: Id<"work">; runAt: number }[],
+) {
+  const now = Date.now();
+  const groups = new Map<bigint | "now", Id<"work">[]>();
+  for (const { workId, runAt } of entries) {
+    const key = runAt > now ? dueTimestamp(runAt) : "now";
+    const group = groups.get(key);
+    if (group) group.push(workId);
+    else groups.set(key, [workId]);
+  }
+  for (const [key, workIds] of groups) {
+    for (let i = 0; i < workIds.length; i += MAX_PACKED) {
+      const chunk = workIds.slice(i, i + MAX_PACKED);
+      const pendingStartId = await ctx.db.insert("pendingStart", {
+        workIds: chunk,
+        segment: key === "now" ? ctx.db.vars.commitTs : key,
+        ...(key === "now"
+          ? {}
+          : { scheduled: true, scanTs: ctx.db.vars.commitTs }),
+      });
+      await Promise.all(
+        chunk.map((workId) => ctx.db.patch("work", workId, { pendingStartId })),
+      );
+    }
+  }
 }
 
 export const enqueueBatch = mutation({
@@ -139,7 +181,12 @@ export const enqueueBatch = mutation({
     const globals = await getOrUpdateGlobals(ctx, config);
     const console = createLogger(globals.logLevel);
     await kickMainLoop(ctx, "enqueue");
-    return Promise.all(items.map((item) => enqueueHandler(ctx, console, item)));
+    const created = [];
+    for (const item of items) {
+      created.push(await createWork(ctx, console, item));
+    }
+    await insertPendingStarts(ctx, created);
+    return created.map((c) => c.workId);
   },
 });
 

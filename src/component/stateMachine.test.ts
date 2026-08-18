@@ -330,7 +330,7 @@ describe("state machine", () => {
       const work = await ctx.db.get("work", workId);
       const ps =
         (await ctx.db.query("pendingStart").collect()).find(
-          (p) => p.workId === workId,
+          (p) => p.workId === workId || p.workIds?.includes(workId),
         ) ?? null;
       const state = await ctx.db.query("internalState").unique();
       const inRunning =
