@@ -9,7 +9,6 @@ import {
   type Config,
   DEFAULT_MAX_PARALLELISM,
   endOfMs,
-  getCurrentSegment,
   WORKER_NAME,
 } from "./shared.js";
 import { createLogger, type Logger, logLevel, shouldLog } from "./logging.js";
@@ -78,7 +77,6 @@ export async function generateReport(
     // Don't waste time if we're not going to log.
     return;
   }
-  const currentSegment = getCurrentSegment();
   // Backlog is work that's eligible now; anything scheduled for later sorts
   // above the current time and isn't waiting on us.
   const pendingStart = await paginator(ctx.db, schema)
@@ -100,8 +98,6 @@ export async function generateReport(
     });
   } else {
     await ctx.scheduler.runAfter(0, internal.stats.calculateBacklogAndReport, {
-      startSegment: 0n,
-      endSegment: currentSegment,
       cursor: pendingStart.continueCursor,
       report: state.report,
       running: state.running.length,
@@ -112,8 +108,10 @@ export async function generateReport(
 
 export const calculateBacklogAndReport = internalMutation({
   args: {
-    startSegment: v.int64(),
-    endSegment: v.int64(),
+    // @deprecated Unused; accepted so in-flight calls from older versions
+    // still validate.
+    startSegment: v.optional(v.int64()),
+    endSegment: v.optional(v.int64()),
     cursor: v.string(),
     report: schema.tables.internalState.validator.fields.report,
     running: v.number(),

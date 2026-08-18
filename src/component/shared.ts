@@ -19,16 +19,19 @@ export const HOUR = 60 * MINUTE;
 export const DAY = 24 * HOUR;
 export const YEAR = 365 * DAY;
 
+// ── 100ms segment buckets ────────────────────────────────────────────────
+// The unit versions ≤ 0.4.9 ordered the pending queues by. Kept for exactly
+// two purposes: pacing the periodic stuck-job check (`lastRecovery`), and
+// decoding the buckets those versions left in `pendingStart.segment` (see
+// `legacyRunAt`). Never use these for ordering keys — keys are nanoseconds on
+// the commit-timestamp scale (see `toTimestamp`).
+
 export function toSegment(ms: number): bigint {
   return BigInt(Math.floor(ms / SEGMENT_MS));
 }
 
 export function getCurrentSegment(): bigint {
   return toSegment(Date.now());
-}
-
-export function getNextSegment(): bigint {
-  return toSegment(Date.now()) + 1n;
 }
 
 export function fromSegment(segment: bigint): number {
@@ -41,25 +44,31 @@ export function fromSegment(segment: bigint): number {
 const NS_PER_MS = 1_000_000n;
 
 /**
- * A wall-clock time on the commit-timestamp scale. `Date.now()` is whole
- * milliseconds in Convex, so nothing is lost converting it; the floor only
- * rounds a caller-supplied fractional `runAt`, and never upward, so work can't
- * be held past its time.
+ * A wall-clock time on the commit-timestamp scale, preserving any fractional
+ * milliseconds exactly: the whole and fractional parts convert separately, so
+ * no precision is lost multiplying a large float. Round-trips through
+ * `fromTimestamp`.
  */
 export function toTimestamp(ms: number): bigint {
-  return BigInt(Math.floor(ms)) * NS_PER_MS;
+  const whole = Math.floor(ms);
+  return BigInt(whole) * NS_PER_MS + BigInt(Math.round((ms - whole) * 1e6));
 }
 
-/** Back to whole milliseconds, the resolution `Date.now()` reports. */
+/**
+ * Back to (possibly fractional) milliseconds, dividing the whole and
+ * remainder parts separately so large values don't lose precision.
+ */
 export function fromTimestamp(timestamp: bigint): number {
-  return Number(timestamp / NS_PER_MS);
+  return Number(timestamp / NS_PER_MS) + Number(timestamp % NS_PER_MS) / 1e6;
 }
 
 /**
  * A start time as an ordering value: rounded up to the next whole millisecond,
- * the first one the clock can call it due. Rounding down would make an entry
- * readable while `isDue` still says no, so the loop would re-read it until the
- * clock leaves the current millisecond.
+ * the first one in which the work is due for the whole millisecond's duration.
+ * Rounding down would start a fractionally-scheduled entry before its time
+ * (due-ness is visibility, and the read bound moves in whole milliseconds).
+ * If sub-millisecond earliness stops mattering — e.g. once near-future starts
+ * are clamped to "now" — this could carry the fraction instead.
  */
 export function dueTimestamp(runAt: number): bigint {
   return toTimestamp(Math.ceil(runAt));
