@@ -208,12 +208,22 @@ describe("state machine", () => {
       oldForRecovery?: boolean;
       /** Override the segment for pending entries. */
       segment?: bigint;
+      /**
+       * Delete the running entry's row from _scheduled_functions, simulating
+       * a scheduledId whose scheduled function has been garbage-collected.
+       */
+      gcScheduledRow?: boolean;
     },
-  ): Promise<{ workId: Id<"work">; segment: bigint }> {
+  ): Promise<{
+    workId: Id<"work">;
+    segment: bigint;
+    scheduledId?: Id<"_scheduled_functions">;
+  }> {
     // Default to the current segment so pendingStart entries are eligible
     // to start in the same iteration; loop reads pendingStart with
     // segment <= getCurrentSegment().
     const seg = opts?.segment ?? getCurrentSegment();
+    let scheduledId: Id<"_scheduled_functions"> | undefined;
     const workId = await t.run<Id<"work">>(async (ctx) => {
       let wId: Id<"work">;
       if (state.work) {
@@ -234,7 +244,13 @@ describe("state machine", () => {
       // Set up running array
       const runningEntry: Doc<"internalState">["running"] = [];
       if (state.running) {
-        const scheduledId = await makeDummyScheduledFunction(ctx, wId);
+        scheduledId = await makeDummyScheduledFunction(ctx, wId);
+        if (opts?.gcScheduledRow) {
+          await ctx.db.delete(
+            "_scheduled_functions" as any,
+            scheduledId as any,
+          );
+        }
         const started = opts?.oldForRecovery
           ? Date.now() - ACTION_RECOVERY_THRESHOLD_MS - 10000
           : Date.now();
@@ -291,7 +307,7 @@ describe("state machine", () => {
       return wId;
     });
 
-    return { workId, segment: seg };
+    return { workId, segment: seg, scheduledId };
   }
 
   /** Read the DB and return the observed state for a given workId. */
@@ -720,6 +736,98 @@ describe("state machine", () => {
       // Should still be in a valid state
       assert(s.work);
       expect(s.work.canceled).toBe(true);
+    });
+  });
+
+  // =========================================================================
+  // GC'd scheduled functions (issue #225)
+  // =========================================================================
+  // The running entry's scheduledId can point at a _scheduled_functions row
+  // that no longer exists (Convex garbage-collects completed rows). Nothing
+  // in the loop may wedge or throw on that state.
+
+  describe("GC'd scheduledId in running", () => {
+    it("consumes a pending completion and starts backlog despite GC'd scheduledId", async () => {
+      // The state observed in issue #225: running references a GC'd
+      // scheduledId, the job's success completion is unconsumed, and a
+      // backlog of other work is waiting.
+      const { workId, segment } = await setupState(
+        {
+          work: false,
+          pendingStart: false,
+          running: true,
+          pendingCompletion: { retry: false, resultKind: "success" },
+          pendingCancelation: false,
+        },
+        { gcScheduledRow: true },
+      );
+      const backlogWorkId = await t.run(async (ctx) => {
+        const backlogWorkId = await makeDummyWork(ctx);
+        await ctx.db.insert("pendingStart", {
+          workId: backlogWorkId,
+          segment,
+        });
+        return backlogWorkId;
+      });
+
+      await runLoop(segment);
+
+      const s = await observeState(workId);
+      expect(s.pendingCompletion).toBe(false);
+      expect(s.running).toBe(false);
+      const backlog = await observeState(backlogWorkId);
+      expect(backlog.pendingStart).toBe(false);
+      expect(backlog.running).toBe(true);
+    });
+
+    it("recovery fails a job whose scheduledId is GC'd and no completion exists", async () => {
+      const { workId, scheduledId } = await setupState(
+        {
+          work: { attempts: 0, hasRetryBehavior: true, fnType: "action" },
+          pendingStart: false,
+          running: true,
+          pendingCompletion: false,
+          pendingCancelation: false,
+        },
+        { oldForRecovery: true, gcScheduledRow: true },
+      );
+      assert(scheduledId);
+
+      // Exercise the real (unmocked) system.get -> null path.
+      await t.mutation(internal.recovery.recover, {
+        jobs: [
+          { scheduledId, workId, attempt: 0, started: Date.now() },
+        ],
+      });
+
+      // completeHandler marks it failed with retry (attempts 1 < maxAttempts).
+      const afterRecover = await observeState(workId);
+      assert(afterRecover.work);
+      expect(afterRecover.work.attempts).toBe(1);
+      expect(afterRecover.pendingCompletion).toEqual({
+        retry: true,
+        resultKind: "failed",
+      });
+
+      // The loop consumes the completion and re-enqueues the retry.
+      await runLoop(getCurrentSegment());
+      const s = await observeState(workId);
+      expect(s.pendingCompletion).toBe(false);
+      expect(s.pendingStart || s.running).toBe(true);
+    });
+
+    it("recovery scan tolerates a GC'd scheduledId for a live job", async () => {
+      // Old running entry, work still present, no completion yet: the scan
+      // schedules recover for it and must not throw on the missing row.
+      const { workId, segment } = await setupState(S2_RUNNING, {
+        oldForRecovery: true,
+        gcScheduledRow: true,
+      });
+      const recoverySeg = segment + RECOVERY_PERIOD_SEGMENTS + 1n;
+      await runLoop(recoverySeg);
+      // Still tracked; the scheduled recover mutation resolves it separately.
+      const s = await observeState(workId);
+      expect(s.running).toBe(true);
     });
   });
 
