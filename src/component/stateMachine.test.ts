@@ -15,10 +15,11 @@ import {
   DEFAULT_MAX_PARALLELISM,
   fromSegment,
   getCurrentSegment,
+  toTimestamp,
   SECOND,
   WORKER_NAME,
 } from "./shared.js";
-import { RECOVERY_PERIOD_SEGMENTS } from "./loop.js";
+
 import { setupTest } from "./setup.test.js";
 
 // ---------------------------------------------------------------------------
@@ -165,6 +166,8 @@ const S12_CANCELED_AWAITING_COMPLETE: CompositeState = {
 // ---------------------------------------------------------------------------
 
 const ACTION_RECOVERY_THRESHOLD_MS = 5 * 60 * 1000;
+/** One recovery period in the 100ms buckets `runLoop` picks times with. */
+const RECOVERY_PERIOD_SEGMENTS = 600n;
 
 /** The bucket after the current one, as older versions computed it. */
 function getNextSegment(): bigint {
@@ -263,8 +266,8 @@ describe("state machine", () => {
 
       // Set up internalState
       const lastRecovery = opts?.oldForRecovery
-        ? getCurrentSegment() - RECOVERY_PERIOD_SEGMENTS - 1n
-        : getCurrentSegment();
+        ? toTimestamp(Date.now() - 61 * SECOND)
+        : toTimestamp(Date.now());
       await ctx.db.insert("internalState", {
         generation: 0n,
         segmentCursors: {
@@ -993,7 +996,7 @@ describe("state machine", () => {
             completion: 0n,
             cancelation: 0n,
           },
-          lastRecovery: getCurrentSegment(),
+          lastRecovery: toTimestamp(Date.now()),
           report: {
             completed: 0,
             succeeded: 0,
@@ -1096,7 +1099,7 @@ describe("state machine", () => {
             completion: 0n,
             cancelation: 0n,
           },
-          lastRecovery: getCurrentSegment(),
+          lastRecovery: toTimestamp(Date.now()),
           report: {
             completed: 0,
             succeeded: 0,
@@ -1158,7 +1161,7 @@ describe("state machine", () => {
             completion: 0n,
             cancelation: 0n,
           },
-          lastRecovery: getCurrentSegment(),
+          lastRecovery: toTimestamp(Date.now()),
           report: {
             completed: 0,
             succeeded: 0,
@@ -1252,7 +1255,7 @@ describe("state machine", () => {
             completion: 0n,
             cancelation: 0n,
           },
-          lastRecovery: getCurrentSegment(),
+          lastRecovery: toTimestamp(Date.now()),
           report: {
             completed: 0,
             succeeded: 0,
@@ -1343,7 +1346,7 @@ describe("state machine", () => {
             completion: 0n,
             cancelation: 0n,
           },
-          lastRecovery: getCurrentSegment(),
+          lastRecovery: toTimestamp(Date.now()),
           report: {
             completed: 0,
             succeeded: 0,

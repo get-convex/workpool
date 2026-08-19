@@ -40,9 +40,9 @@ export default defineSchema({
     // at or below it is visible to any reader of this document, so it is a
     // safe lower bound on the next run's snapshot.
     lastCommitTs: v.optional(v.commitTs()),
-    // Unlike the cursors, this stays a 100ms "segment": it only paces how often
-    // the loop checks for stuck jobs.
-    lastRecovery: v.int64(),
+    // When the loop last checked for stuck jobs, in nanoseconds. Values an
+    // older version wrote are 100ms buckets, read as long ago; harmless.
+    lastRecovery: timestamp,
     report: v.object({
       completed: v.number(), // finished running, counts retries & failures
       succeeded: v.number(), // finished successfully, regardless of retries

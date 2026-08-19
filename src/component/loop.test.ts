@@ -12,11 +12,12 @@ import { api, components, internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { enqueueHandler } from "./lib.js";
 import { createLogger } from "./logging.js";
-import { RECOVERY_PERIOD_SEGMENTS } from "./loop.js";
+import { RECOVERY_PERIOD_NS } from "./loop.js";
 import { setupTest } from "./setup.test.js";
 import {
   DEFAULT_MAX_PARALLELISM,
   fromSegment,
+  fromTimestamp,
   toSegment,
   toTimestamp,
   WORKER_NAME,
@@ -724,7 +725,7 @@ describe("loop", () => {
       assert(result.kind === "idle");
       const { lastRecovery } = await observe();
       const untilNextRecovery =
-        fromSegment(lastRecovery + RECOVERY_PERIOD_SEGMENTS) - Date.now();
+        fromTimestamp(lastRecovery + RECOVERY_PERIOD_NS) - Date.now();
       expect(result.timeoutMs).toBe(untilNextRecovery);
       expect(result.timeoutMs).toBeLessThan(5 * MINUTE);
     });

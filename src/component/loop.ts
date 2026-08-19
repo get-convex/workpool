@@ -21,14 +21,12 @@ import {
   type Config,
   DEFAULT_MAX_PARALLELISM,
   endOfMs,
-  fromSegment,
   fromTimestamp,
-  getCurrentSegment,
   legacyRunAt,
   MINUTE,
   SECOND,
   type RunResult,
-  toSegment,
+  toTimestamp,
   dueTimestamp,
   vResult,
 } from "./shared.js";
@@ -42,7 +40,7 @@ const START_BATCH_SIZE = 32;
 // it's draining, so smaller cheaper iterations carry the same work in aggregate.
 const MAIN_BATCH_SIZE = 64;
 const RECOVERY_THRESHOLD_MS = 5 * MINUTE; // attempt to recover jobs this old.
-export const RECOVERY_PERIOD_SEGMENTS = toSegment(1 * MINUTE); // how often to check.
+export const RECOVERY_PERIOD_NS = toTimestamp(MINUTE); // how often to check.
 // While the queue is idle we keep the loop warm for this long (measured from
 // when it last saw work) so a trickle of new work doesn't thrash the run
 // status, re-polling this often during that window — preserving the old loop's
@@ -110,8 +108,8 @@ type Start = Infer<typeof vStart>;
 // batch was built from.
 /** The shape `getBatch` hands to `run`. */
 const batchFields = {
-  // The segment at query time — what "now" was when the batch was built.
-  segment: v.int64(),
+  // What "now" was (in nanoseconds) when the batch was built.
+  now: v.int64(),
   // Whether this iteration should run the periodic work-recovery scan.
   recovery: v.boolean(),
   completions: v.array(vCompletion),
@@ -143,18 +141,18 @@ export const getBatch = internalQuery({
   returns: vBatchResult(v.object(batchFields)),
   handler: async (ctx): Promise<BatchResult<Batch>> => {
     const globals = await getGlobals(ctx);
-    const state = await ctx.db.query("internalState").unique();
+    const state = await ctx.db.query("internalState").order("desc").first();
     const running = state?.running ?? INITIAL_STATE.running;
     const cursors = state?.segmentCursors ?? INITIAL_STATE.segmentCursors;
     const lastRecovery = state?.lastRecovery ?? INITIAL_STATE.lastRecovery;
-    const segment = getCurrentSegment();
+    const nowTs = toTimestamp(Date.now());
     const eligibleBefore = endOfMs(Date.now());
 
     // Once per recovery period (≈1min), check for stuck running jobs. The
     // pending queues need no periodic rescan: they're ordered by commit
     // timestamp, so nothing can appear behind a cursor we've read past.
     const isRecoveryIter =
-      running.length > 0 && segment - lastRecovery >= RECOVERY_PERIOD_SEGMENTS;
+      running.length > 0 && nowTs - lastRecovery >= RECOVERY_PERIOD_NS;
 
     const {
       starts,
@@ -187,7 +185,7 @@ export const getBatch = internalQuery({
 
     if (hasWork) {
       const batch: Batch = {
-        segment,
+        now: nowTs,
         recovery: isRecoveryIter,
         completions: completions.map((c) => ({
           _id: c._id,
@@ -223,8 +221,8 @@ export const getBatch = internalQuery({
       waits.push(fromTimestamp(futureStart.segment as bigint) - Date.now());
     }
     if (running.length > 0) {
-      const nextRecovery = lastRecovery + RECOVERY_PERIOD_SEGMENTS;
-      waits.push(fromSegment(nextRecovery) - Date.now());
+      const nextRecovery = lastRecovery + RECOVERY_PERIOD_NS;
+      waits.push(fromTimestamp(nextRecovery) - Date.now());
     }
     const timeoutMs =
       waits.length > 0 ? Math.max(0, Math.min(...waits)) : undefined;
@@ -254,7 +252,7 @@ export const run = internalMutation({
     const state = await getOrCreateState(ctx);
     const globals = await getGlobals(ctx);
     const console = createLogger(globals.logLevel);
-    const segment = getCurrentSegment();
+    const nowTs = toTimestamp(Date.now());
 
     const compLabel = `[main] pendingCompletion(${batch.completions.length})`;
     console.time(compLabel);
@@ -273,14 +271,14 @@ export const run = internalMutation({
 
     if (state.running.length === 0) {
       // If there's nothing active, reset lastRecovery.
-      state.lastRecovery = segment;
+      state.lastRecovery = nowTs;
     } else if (batch.recovery) {
       // Otherwise schedule recovery for any old jobs.
       const recoveryLabel = `[main] recovery(${state.running.length})`;
       console.time(recoveryLabel);
       await handleRecovery(ctx, state, console);
       console.timeEnd(recoveryLabel);
-      state.lastRecovery = segment;
+      state.lastRecovery = nowTs;
     }
 
     // ── Start new work ──
@@ -1013,8 +1011,11 @@ async function getGlobals(ctx: QueryCtx) {
 }
 
 async function getOrCreateState(ctx: MutationCtx) {
-  // TODO: this might be very slow and improved by .order("desc").first() instead.
-  const state = await ctx.db.query("internalState").unique();
+  // Newest-first rather than `.unique()`: this is a singleton, so the two read
+  // the same document, but `.unique()` throws if a duplicate ever appears
+  // where this carries on with the newest. Benchmarked as a wash to slightly
+  // faster; taken for the robustness, not the speed.
+  const state = await ctx.db.query("internalState").order("desc").first();
   if (state) return state;
   const globals = await getGlobals(ctx);
   const console = createLogger(globals.logLevel);

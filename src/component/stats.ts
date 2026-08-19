@@ -160,7 +160,10 @@ export const running = internalQuery({
     }),
   ),
   handler: async (ctx) => {
-    const internalState = await ctx.db.query("internalState").unique();
+    const internalState = await ctx.db
+      .query("internalState")
+      .order("desc")
+      .first();
     if (!internalState) return [];
     return Promise.all(
       internalState.running.map(async ({ workId, scheduledId, started }) => {
@@ -186,7 +189,10 @@ export const diagnostics = internalQuery({
   returns: v.any(),
   handler: async (ctx) => {
     const global = await ctx.db.query("globals").unique();
-    const internalState = await ctx.db.query("internalState").unique();
+    const internalState = await ctx.db
+      .query("internalState")
+      .order("desc")
+      .first();
     const inProgressWork = internalState?.running.length ?? 0;
     const maxParallelism = global?.maxParallelism ?? DEFAULT_MAX_PARALLELISM;
     const pendingStart = await (ctx.db.query("pendingStart") as any).count();
