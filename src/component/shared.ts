@@ -19,13 +19,10 @@ export const HOUR = 60 * MINUTE;
 export const DAY = 24 * HOUR;
 export const YEAR = 365 * DAY;
 
-// ── 100ms segment buckets ────────────────────────────────────────────────
-// The unit versions ≤ 0.4.9 ordered the pending queues by. Kept for exactly
-// two purposes: pacing the periodic stuck-job check (`lastRecovery`), and
-// decoding the buckets those versions left in `pendingStart.segment` (see
-// `legacyRunAt`). Never use these for ordering keys — keys are nanoseconds on
-// the commit-timestamp scale (see `toTimestamp`).
-
+// Versions ≤ 0.4.9 ordered the pending queues by SEGMENT_MS-sized buckets.
+// Kept for two purposes: the periodic stuck-job check (`lastRecovery`), and
+// decoding segments those versions left in `pendingStart` (see `legacyRunAt`).
+// Now segment is nanoseconds on the commit-timestamp scale (see `toTimestamp`).
 export function toSegment(ms: number): bigint {
   return BigInt(Math.floor(ms / SEGMENT_MS));
 }
@@ -51,7 +48,10 @@ const NS_PER_MS = 1_000_000n;
  */
 export function toTimestamp(ms: number): bigint {
   const whole = Math.floor(ms);
-  return BigInt(whole) * NS_PER_MS + BigInt(Math.round((ms - whole) * 1e6));
+  return (
+    BigInt(whole) * NS_PER_MS +
+    BigInt(Math.round((ms - whole) * Number(NS_PER_MS)))
+  );
 }
 
 /**
@@ -59,7 +59,10 @@ export function toTimestamp(ms: number): bigint {
  * remainder parts separately so large values don't lose precision.
  */
 export function fromTimestamp(timestamp: bigint): number {
-  return Number(timestamp / NS_PER_MS) + Number(timestamp % NS_PER_MS) / 1e6;
+  return (
+    Number(timestamp / NS_PER_MS) +
+    Number(timestamp % NS_PER_MS) / Number(NS_PER_MS)
+  );
 }
 
 /**

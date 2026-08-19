@@ -166,31 +166,41 @@ async function insertPendingStarts(
         ? await ctx.db
             .query("pendingStart")
             .withIndex("segment", (q) => q.eq("segment", ctx.db.vars.commitTs))
+            .order("desc")
             .first()
         : await ctx.db
             .query("pendingStart")
             .withIndex("scanTs", (q) =>
               q.eq("scanTs", ctx.db.vars.commitTs).eq("segment", key),
             )
+            .order("desc")
             .first();
-    for (let i = 0; i < workIds.length; i += MAX_PACKED) {
-      const chunk = workIds.slice(i, i + MAX_PACKED);
-      let pendingStartId = existing?._id;
-      const room = existing ? MAX_PACKED - (existing.workIds?.length ?? 1) : 0;
-      if (pendingStartId && i === 0 && chunk.length <= room) {
-        await ctx.db.patch("pendingStart", pendingStartId, {
-          workIds: [...(existing!.workIds ?? []), ...chunk],
+    let remaining = workIds;
+    if (existing) {
+      const members = existing.workIds ?? [];
+      const filling = remaining.slice(0, MAX_PACKED - members.length);
+      if (filling.length > 0) {
+        await ctx.db.patch("pendingStart", existing._id, {
+          workIds: [...members, ...filling],
         });
-      } else {
-        pendingStartId = await ctx.db.insert("pendingStart", {
-          workIds: chunk,
-          segment: key === "now" ? ctx.db.vars.commitTs : key,
-          ...(key === "now" ? {} : { scheduled: true }),
-          ...(key !== "now" && key <= scanCutoff
-            ? { scanTs: ctx.db.vars.commitTs }
-            : {}),
-        });
+        await Promise.all(
+          filling.map((workId) =>
+            ctx.db.patch("work", workId, { pendingStartId: existing._id }),
+          ),
+        );
+        remaining = remaining.slice(filling.length);
       }
+    }
+    for (let i = 0; i < remaining.length; i += MAX_PACKED) {
+      const chunk = remaining.slice(i, i + MAX_PACKED);
+      const pendingStartId = await ctx.db.insert("pendingStart", {
+        workIds: chunk,
+        segment: key === "now" ? ctx.db.vars.commitTs : key,
+        ...(key === "now" ? {} : { scheduled: true }),
+        ...(key !== "now" && key <= scanCutoff
+          ? { scanTs: ctx.db.vars.commitTs }
+          : {}),
+      });
       await Promise.all(
         chunk.map((workId) => ctx.db.patch("work", workId, { pendingStartId })),
       );

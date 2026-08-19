@@ -99,9 +99,8 @@ const vStart = v.object({
   _id: v.id("pendingStart"),
   workId: v.id("work"),
   segment: v.int64(),
-  // Not a stored field: the start time recovered from an entry an older
-  // version wrote (its `segment` is a 100ms bucket, not a timestamp). Absent
-  // on anything written by this version — such entries are due when visible.
+  // The start time recovered from an entry a version ≤ 0.4.9 wrote (see
+  // `legacyRunAt`). Not a stored field.
   legacyStartTime: v.optional(v.number()),
 });
 type Start = Infer<typeof vStart>;
@@ -370,7 +369,7 @@ export const run = internalMutation({
     }
     // Never backwards: a batch can carry a ceiling below the cursor when it
     // observed no commit stamps at all (e.g. a recovery-only iteration).
-    state.segmentCursors.incoming = maxTimestamp(
+    state.segmentCursors.incoming = maxBigint(
       state.segmentCursors.incoming,
       incoming < batch.cursorCeiling ? incoming : batch.cursorCeiling,
     );
@@ -384,7 +383,7 @@ export const run = internalMutation({
       batch.sweepStop !== undefined &&
       batch.sweepStarts.every((s) => handled.has(s._id))
     ) {
-      state.segmentCursors.sweep = maxTimestamp(
+      state.segmentCursors.sweep = maxBigint(
         state.segmentCursors.sweep ?? 0n,
         batch.sweepStop,
       );
@@ -546,7 +545,7 @@ async function queryPending(
     ...cancelations.map((c) => c.segment as bigint),
     ...readyStamps,
     ...(sweepStop === undefined ? [] : [sweepStop]),
-  ].reduce(maxTimestamp);
+  ].reduce(maxBigint);
 
   return {
     completions,
@@ -754,7 +753,7 @@ async function handleRecovery(
   }
 }
 
-function maxTimestamp(a: bigint, b: bigint) {
+function maxBigint(a: bigint, b: bigint) {
   return a > b ? a : b;
 }
 

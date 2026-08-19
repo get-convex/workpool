@@ -8,22 +8,12 @@ import {
   vResult,
 } from "./shared.js";
 
-// When a queue entry becomes eligible to process, in nanoseconds since the
-// epoch — the scale a commit timestamp uses.
-//
-// Entries that are ready as soon as they land store `db.vars.commitTs`, which
-// resolves at commit time. That's what makes an index on this field scannable
-// with a cursor that never has to be rewound: an entry can't appear behind a
-// commit timestamp we've already read past. (`_creationTime` can't do this — it
-// is assigned when the mutation *starts*, so a slow mutation's row can land
-// behind rows that already committed and were read.)
-//
-// Entries that shouldn't be processed until later store that time directly.
-// `v.commitTs()` accepts any int64, so both clocks live in one field and one
-// index, and scheduled work sorts above the loop's read bound until it's due.
+// When a queue entry becomes eligible, in nanoseconds since the epoch: the
+// commit timestamp of the enqueue for ready work, or the start time for
+// scheduled work. See cursor-strategy.md.
 const segment = v.commitTs();
-// A cursor into an index on a commit-timestamp field. Reads of such a field
-// come back as a plain int64.
+// A time on the same nanosecond scale (commit-timestamp fields read back as
+// plain int64s).
 const timestamp = v.int64();
 
 export default defineSchema({
@@ -42,24 +32,13 @@ export default defineSchema({
       incoming: timestamp,
       completion: timestamp,
       cancelation: timestamp,
-      // Cursor into pendingStart's `scanTs` index — the out-of-order sweep.
-      // Inclusive: a transaction can write several documents with one stamp,
-      // so the boundary stamp's few documents are re-read until they retire.
-      // Optional because it didn't always exist; absent means "from the
+      // Cursor into pendingStart's `scanTs` index; absent means "from the
       // beginning".
       sweep: v.optional(timestamp),
     }),
-    // The commit timestamp of the previous `run`. It says nothing about what
-    // that run had read (commits can land between its snapshot and its
-    // commit) — but the *next* run reads this document, so its snapshot
-    // includes every transaction stamped at or below this value, making it a
-    // safe addition to that run's cursor ceiling (see `run`). It only bounds
-    // cursor advancement. Without it the ceiling would come only from commit
-    // stamps observed in the batch itself, which still converges — every
-    // start eventually produces a commit-stamped completion — but a pool
-    // running only scheduled (wall-clock-keyed) work would leave its cursor
-    // behind each entry it starts, re-reading those tombstones until the
-    // completion arrives. This closes that gap by the very next iteration.
+    // The commit timestamp of the previous `run`. Every transaction stamped
+    // at or below it is visible to any reader of this document, so it is a
+    // safe lower bound on the next run's snapshot.
     lastCommitTs: v.optional(v.commitTs()),
     // Unlike the cursors, this stays a 100ms "segment": it only paces how often
     // the loop checks for stuck jobs.
@@ -103,11 +82,8 @@ export default defineSchema({
     pendingStartId: v.optional(v.id("pendingStart")),
   }),
 
-  // Written on enqueue & rescheduled for retry, read, shrunk & deleted by
-  // `main`. One document carries every entry of a single transaction that
-  // shares a `segment` (up to a cap), so a batch enqueue writes a few
-  // documents rather than hundreds, and starting or canceling one entry
-  // patches it out of `workIds` (found via the work doc's `pendingStartId`).
+  // Work waiting to start: one document per transaction and `segment` value,
+  // holding up to a cap of entries.
   pendingStart: defineTable({
     // The work waiting to start at `segment`. Entries leave as they start or
     // cancel; the document is deleted when none remain.
@@ -116,16 +92,10 @@ export default defineSchema({
     workId: v.optional(v.id("work")),
     segment,
     // Present iff `segment` is a wall-clock start time rather than a commit
-    // timestamp — so the cursor ceiling knows not to count it as an observed
-    // commit stamp. See `run`.
+    // timestamp.
     scheduled: v.optional(v.boolean()),
-    // The enqueue's commit timestamp, present only on documents that could
-    // commit out of order — scheduled enqueues, where commit latency can
-    // exceed the delay and land the document behind the loop's `segment`
-    // cursor. The sweep walks this index in commit order — which nothing can
-    // land behind — and starts anything the cursor passed over. Loop-written
-    // documents (retries, re-keyed legacy entries) can't be out of order and
-    // omit it. See `queryPending`.
+    // The enqueue's commit timestamp, present iff the document could have
+    // committed out of order (a scheduled start within five minutes).
     scanTs: v.optional(v.commitTs()),
   })
     .index("segment", ["segment"])
