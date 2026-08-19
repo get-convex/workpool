@@ -66,6 +66,16 @@ drift decays rather than being linear, so it doesn't cancel.
 of the throughput benchmark had both arms 15% slow while the ratio between them
 held to within a point. Trust the ratio over the absolute.
 
+**Establish the noise floor before believing an effect.** Run the same
+configuration several times and look at the spread; that's the smallest
+difference the rig can see. One session had identical 2000-task runs land
+anywhere between 18.4s and 34.5s — a factor of 1.9 — which makes any
+single-digit percentage difference unmeasurable. Two tells that a deployment is
+in that state: `npx convex run` failing with `TypeError: fetch failed`, and a
+three-way comparison coming out non-monotonic (the middle variant fastest or
+slowest), which no real effect can produce. Stop and come back later rather than
+reporting the number.
+
 **A transaction is one sample.** Every entry enqueued in a single transaction
 shares a commit stamp and a start time. Measuring 200 entries at once gives one
 Bernoulli trial, not 200 — the first pass at the out-of-order experiment
