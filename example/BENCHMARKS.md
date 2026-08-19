@@ -66,15 +66,31 @@ drift decays rather than being linear, so it doesn't cancel.
 of the throughput benchmark had both arms 15% slow while the ratio between them
 held to within a point. Trust the ratio over the absolute.
 
+**Clear the bookkeeping between runs.** This one matters more than everything
+else here:
+
+```sh
+npx convex run test/cleanup:start     # then poll test/cleanup:counts
+```
+
+`tasks` and `latencyTasks` gain a row per measured task, written from _inside_
+the measured path, and nothing reads them across runs. Left alone they reached
+659,075 and 87,680 rows in one session — so every run paid a different, growing
+index-maintenance cost on a table incidental to the thing being measured.
+Clearing between runs cut within-variant spread from 59% of the mean to 20%, and
+to 3–5% once warm. That is the difference between seeing a 6% effect and
+concluding there wasn't one.
+
 **Establish the noise floor before believing an effect.** Run the same
 configuration several times and look at the spread; that's the smallest
-difference the rig can see. One session had identical 2000-task runs land
-anywhere between 18.4s and 34.5s — a factor of 1.9 — which makes any
-single-digit percentage difference unmeasurable. Two tells that a deployment is
-in that state: `npx convex run` failing with `TypeError: fetch failed`, and a
-three-way comparison coming out non-monotonic (the middle variant fastest or
-slowest), which no real effect can produce. Stop and come back later rather than
-reporting the number.
+difference the rig can see. A three-way comparison coming out non-monotonic (the
+middle variant fastest or slowest) is a reliable tell that you're reading noise,
+since no real effect can produce it.
+
+Resist "the infrastructure is flaky" as an explanation. It was reached once here
+and it was wrong — requests genuinely were being dropped, but the spread was
+accumulated state, and the conclusion was unfalsifiable as stated. Look for
+something growing between runs first.
 
 **A transaction is one sample.** Every entry enqueued in a single transaction
 shares a commit stamp and a start time. Measuring 200 entries at once gives one
