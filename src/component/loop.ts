@@ -1011,10 +1011,6 @@ async function getGlobals(ctx: QueryCtx) {
 }
 
 async function getOrCreateState(ctx: MutationCtx) {
-  // Newest-first rather than `.unique()`: this is a singleton, so the two read
-  // the same document, but `.unique()` throws if a duplicate ever appears
-  // where this carries on with the newest. Benchmarked as a wash to slightly
-  // faster; taken for the robustness, not the speed.
   const state = await ctx.db.query("internalState").order("desc").first();
   if (state) return state;
   const globals = await getGlobals(ctx);
