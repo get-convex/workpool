@@ -5,6 +5,9 @@ also doubles as a benchmark dashboard for the workpool component itself — it
 exercises the API and surfaces throughput and latency metrics for the scenarios
 in `convex/test/scenarios/`.
 
+To run the benchmarks from the command line, and for what it takes to get
+numbers worth trusting, see [BENCHMARKS.md](./BENCHMARKS.md).
+
 ## Running the dashboard
 
 From the repo root, in two terminals:
