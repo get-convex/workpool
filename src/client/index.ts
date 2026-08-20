@@ -454,7 +454,7 @@ export type WorkpoolRetryOptions = {
   retryActionsByDefault?: boolean;
 };
 
-export type EnqueueOptions<Context, ReturnValue> = {
+export type EnqueueOptions<Context = unknown, ReturnValue = unknown> = {
   /**
    * The name of the function. By default, if you pass in api.foo.bar.baz,
    * it will use "foo/bar:baz" as the name. If you pass in a function handle,
