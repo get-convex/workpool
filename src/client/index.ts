@@ -30,6 +30,7 @@ import {
   type OnCompleteArgs as SharedOnCompleteArgs,
   type Status,
   vResult,
+  vRunResult,
 } from "../component/shared.js";
 import {
   type ActionCtx,
@@ -45,6 +46,7 @@ export type WorkId = string & { __isWorkId: true };
 export const vWorkId = v.string() as VString<WorkId>;
 export {
   vResult,
+  vRunResult,
   DEFAULT_RETRY_BEHAVIOR,
   /** @deprecated Use `vResult` instead. */
   vResult as resultValidator,
@@ -313,9 +315,11 @@ export class Workpool {
   defineOnComplete<
     DataModel extends GenericDataModel,
     V extends Validator<any, any, any> = VAny<any, "optional">,
+    RV extends Validator<any, any, any> = VAny<any, "optional">,
   >({
     context,
     handler,
+    returnValue,
   }: {
     context?: V;
     handler: (
@@ -323,12 +327,17 @@ export class Workpool {
       args: {
         workId: WorkId;
         context: Infer<V>;
-        result: RunResult;
+        result: RunResult<Infer<RV>>;
       },
     ) => Promise<void>;
-  }): RegisteredMutation<"internal", OnCompleteArgs, null> {
+    returnValue?: RV;
+  }): RegisteredMutation<
+    "internal",
+    OnCompleteArgs<Infer<V>, Infer<RV>>,
+    null
+  > {
     return internalMutationGeneric({
-      args: vOnCompleteArgs(context),
+      args: vOnCompleteArgs(context, returnValue),
       handler,
     });
   }
@@ -350,11 +359,12 @@ export class Workpool {
  */
 export function vOnCompleteArgs<
   V extends Validator<any, "required", any> = VAny,
->(context?: V) {
+  RV extends Validator<any, "required", any> = VAny,
+>(context?: V, runResult?: RV) {
   return v.object({
     workId: vWorkId,
     context: (context ?? v.optional(v.any())) as V,
-    result: vResult,
+    result: vRunResult(runResult ?? v.optional(v.any())),
   });
 }
 
@@ -464,7 +474,7 @@ export type EnqueueOptions = {
     }
 );
 
-export type OnCompleteArgs = {
+export type OnCompleteArgs<Context = unknown, Returns = unknown> = {
   /**
    * The ID of the work that completed.
    */
@@ -473,11 +483,11 @@ export type OnCompleteArgs = {
    * The context object passed when enqueuing the work.
    * Useful for passing data from the enqueue site to the onComplete site.
    */
-  context: unknown;
+  context: Context;
   /**
    * The result of the run that completed.
    */
-  result: RunResult;
+  result: RunResult<Returns>;
 };
 
 // ensure OnCompleteArgs satisfies SharedOnCompleteArgs
