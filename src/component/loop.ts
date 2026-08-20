@@ -799,10 +799,26 @@ async function handleStart(
     if (entries) entries.push(entry);
     else byDoc.set(entry._id, [entry]);
   }
+  // Point reads issued together cost one round trip rather than one per
+  // entry; a batch of them awaited one at a time dominates the iteration.
+  const [docs, works] = await Promise.all([
+    Promise.all(
+      [...byDoc.keys()].map(
+        async (docId) =>
+          [docId, await ctx.db.get("pendingStart", docId)] as const,
+      ),
+    ).then((pairs) => new Map(pairs)),
+    Promise.all(
+      pending.map(
+        async ({ workId }) =>
+          [workId, await ctx.db.get("work", workId)] as const,
+      ),
+    ).then((pairs) => new Map(pairs)),
+  ]);
   const starts: { work: Doc<"work">; lagMs: number }[] = [];
   for (const [docId, entries] of byDoc) {
     // Guard against a document a concurrent cancelation emptied.
-    const doc = await ctx.db.get("pendingStart", docId);
+    const doc = docs.get(docId);
     if (!doc) continue;
     const members = memberIds(doc);
     const removed: Id<"work">[] = [];
@@ -816,7 +832,7 @@ async function handleStart(
         console.error(`[main] ${workId} already running (skipping start)`);
         continue;
       }
-      const work = await ctx.db.get("work", workId);
+      const work = works.get(workId);
       if (!work) {
         console.error(`Trying to start, but work not found: ${workId}`);
         continue;
