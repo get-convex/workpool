@@ -1,11 +1,15 @@
 # Benchmarking the workpool
 
-Two harnesses live in `example/convex/test/`, both driving a real deployment:
+Harnesses in `example/convex/test/`, all driving a real deployment:
 
-| harness                     | measures                                     |
-| --------------------------- | -------------------------------------------- |
-| `test/scenarios/throughput` | end-to-end throughput and completion latency |
-| `test/latency`              | when tasks _start_, vs. when they were due   |
+| entry point                      | measures                                               |
+| -------------------------------- | ------------------------------------------------------ |
+| `test/scenarios/throughput`      | end-to-end throughput and completion latency           |
+| `test/latency:default`           | when tasks _start_, vs. when they were due             |
+| `test/latency:pairs`             | a scheduled task against a `commitTs` sibling          |
+| `test/latency:backlog`           | a late scheduled entry behind a bulk sharing one stamp |
+| `test/scheduling:default`        | delayed + retried work, end to end                     |
+| `test/cleanup:start` / `:counts` | empty the bookkeeping tables (see below)               |
 
 Both can run against either component: `"pool": "new"` is this branch's
 `testWorkpool`, `"pool": "old"` is the published baseline mounted as
@@ -47,9 +51,44 @@ lateness (`startedAt - runAt`), start ordering, and per-delay-class breakdowns.
 Options beyond the above: `holdOps` and `nestedCalls` stretch the enqueuing
 transaction, `interChunkMs` spreads enqueues out, `settleMs` bounds the wait.
 
-Analysis drivers for the experiments already run live in `.context/`:
-`exp1.py`/`exp1b.py`/`exp1c.py` (out-of-order landing), `exp234.py` (ordering,
-lateness, new-vs-old), `exp-consts.py` (A/B a constant in the run loop).
+To ask whether the _ordering path_ costs anything, use `pairs` instead. It
+enqueues, in one transaction, a control task ordered by `db.vars.commitTs`
+alongside scheduled ones. The control shares the commit, so both become visible
+at the same instant, and when the transaction takes longer to commit than a
+delay that task is already overdue on landing — leaving any difference in start
+time attributable to the path rather than the wait.
+
+```sh
+npx convex run test/latency:pairs '{
+  "cell": "demo", "pool": "new", "count": 40,
+  "soonDelays": [200], "nestedCalls": 800, "maxParallelism": 200
+}'
+```
+
+`backlog` puts a bulk of scheduled work sharing one commit stamp ahead of such a
+pair — the shape that once stalled the sweep:
+
+```sh
+npx convex run test/latency:backlog '{
+  "cell": "demo", "pool": "new", "bulkCount": 2000, "bulkDelayMs": 60000,
+  "soonDelayMs": 100, "nestedCalls": 800, "maxParallelism": 200
+}'
+```
+
+Both need concurrent ready-now work to be meaningful — see the pool note below.
+
+## Comparing a code change against itself
+
+`.context/exp-consts.py` edits a constant in `loop.ts`, deploys, measures, and
+repeats — on the same component, in mirrored order, with cleanup between runs:
+
+```sh
+python3 .context/exp-consts.py mainbatch    # MAIN_BATCH_SIZE 64/128/256
+```
+
+It refuses to run on a dirty `src/component` and restores via `git checkout`, so
+its own edits can't clobber work in flight. Findings from the runs already done
+are in `.context/README.md`.
 
 ## Getting numbers you can trust
 
@@ -113,3 +152,20 @@ terminates; it burns the read limit and fails. To stretch a transaction, count
 operations instead (`holdOps`) or nest mutation calls (`nestedCalls`, which
 doesn't consume the read/write budget), and time it from an action, where the
 clock is real.
+
+**A saturated or idle pool hides anything cursor-related.** With a backlog the
+loop's cursor lags wall-clock; with an idle pool it doesn't move at all. Either
+way a scheduled entry is never behind it, so out-of-order landing simply cannot
+happen and the measurement comes back clean for the wrong reason. Those cells
+need light concurrent ready-now work at high `maxParallelism`.
+
+## Reading a slow loop
+
+`npx convex logs --jsonl --success` is the fastest way to see where loop time
+goes; each entry carries execution time alongside documents read and written.
+
+The signature worth recognising: **execution time up while read and write volume
+is down means round trips, not work.** That is how the packing regression was
+found — a sequential `await ctx.db.get()` inside a per-entry loop cost one round
+trip per entry, 64 per iteration, for a flat ~150ms. Batch point reads with
+`Promise.all`.
