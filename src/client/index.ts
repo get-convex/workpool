@@ -94,9 +94,14 @@ export class Workpool {
    */
   async enqueueAction<Args extends DefaultFunctionArgs, ReturnType, Context>(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<"action", FunctionVisibility, Args, ReturnType>,
+    fn: FunctionReference<
+      "action",
+      FunctionVisibility,
+      Args,
+      NoInfer<ReturnType>
+    >,
     fnArgs: Args,
-    options?: RetryOption & EnqueueOptions<Context, NoInfer<ReturnType>>,
+    options?: RetryOption & EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId> {
     const retryBehavior = getRetryBehavior(
       this.options.defaultRetryBehavior,
@@ -128,9 +133,14 @@ export class Workpool {
     Context,
   >(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<"action", FunctionVisibility, Args, ReturnType>,
+    fn: FunctionReference<
+      "action",
+      FunctionVisibility,
+      Args,
+      NoInfer<ReturnType>
+    >,
     argsArray: Array<Args>,
-    options?: RetryOption & EnqueueOptions<Context, NoInfer<ReturnType>>,
+    options?: RetryOption & EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId[]> {
     const retryBehavior = getRetryBehavior(
       this.options.defaultRetryBehavior,
@@ -159,9 +169,14 @@ export class Workpool {
    */
   async enqueueMutation<Args extends DefaultFunctionArgs, ReturnType, Context>(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<"mutation", FunctionVisibility, Args, ReturnType>,
+    fn: FunctionReference<
+      "mutation",
+      FunctionVisibility,
+      Args,
+      NoInfer<ReturnType>
+    >,
     fnArgs: Args,
-    options?: EnqueueOptions<Context, NoInfer<ReturnType>>,
+    options?: EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId> {
     return enqueue(this.component, ctx, "mutation", fn, fnArgs, {
       ...this.options,
@@ -185,9 +200,14 @@ export class Workpool {
     Context,
   >(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<"mutation", FunctionVisibility, Args, ReturnType>,
+    fn: FunctionReference<
+      "mutation",
+      FunctionVisibility,
+      Args,
+      NoInfer<ReturnType>
+    >,
     argsArray: Array<Args>,
-    options?: EnqueueOptions<Context, NoInfer<ReturnType>>,
+    options?: EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId[]> {
     return enqueueBatch(this.component, ctx, "mutation", fn, argsArray, {
       ...this.options,
@@ -209,9 +229,14 @@ export class Workpool {
    */
   async enqueueQuery<Args extends DefaultFunctionArgs, ReturnType, Context>(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<"query", FunctionVisibility, Args, ReturnType>,
+    fn: FunctionReference<
+      "query",
+      FunctionVisibility,
+      Args,
+      NoInfer<ReturnType>
+    >,
     fnArgs: Args,
-    options?: EnqueueOptions<Context, NoInfer<ReturnType>>,
+    options?: EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId> {
     return enqueue(this.component, ctx, "query", fn, fnArgs, {
       ...this.options,
@@ -236,9 +261,14 @@ export class Workpool {
     Context,
   >(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<"query", FunctionVisibility, Args, ReturnType>,
+    fn: FunctionReference<
+      "query",
+      FunctionVisibility,
+      Args,
+      NoInfer<ReturnType>
+    >,
     argsArray: Array<Args>,
-    options?: EnqueueOptions<Context, NoInfer<ReturnType>>,
+    options?: EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId[]> {
     return enqueueBatch(this.component, ctx, "query", fn, argsArray, {
       ...this.options,
@@ -588,9 +618,9 @@ export async function enqueueBatch<
   component: WorkpoolComponent,
   ctx: MutationCtx | ActionCtx,
   fnType: FnType,
-  fn: FunctionReference<FnType, FunctionVisibility, Args, ReturnType>,
+  fn: FunctionReference<FnType, FunctionVisibility, Args, NoInfer<ReturnType>>,
   fnArgsArray: Array<Args>,
-  options: EnqueueOptions<Context, NoInfer<ReturnType>> & {
+  options: EnqueueOptions<Context, ReturnType> & {
     retryBehavior?: RetryBehavior;
     maxParallelism?: number;
     logLevel?: LogLevel;
@@ -651,9 +681,9 @@ export async function enqueue<
   component: WorkpoolComponent,
   ctx: MutationCtx | ActionCtx,
   fnType: FnType,
-  fn: FunctionReference<FnType, FunctionVisibility, Args, ReturnType>,
+  fn: FunctionReference<FnType, FunctionVisibility, Args, NoInfer<ReturnType>>,
   fnArgs: Args,
-  options: EnqueueOptions<Context, NoInfer<ReturnType>> & {
+  options: EnqueueOptions<Context, ReturnType> & {
     retryBehavior?: RetryBehavior;
     maxParallelism?: number;
     logLevel?: LogLevel;
