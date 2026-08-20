@@ -96,7 +96,7 @@ export class Workpool {
     ctx: MutationCtx | ActionCtx,
     fn: FunctionReference<"action", FunctionVisibility, Args, ReturnType>,
     fnArgs: Args,
-    options?: RetryOption & EnqueueOptions,
+    options?: RetryOption & EnqueueOptions<ReturnType>,
   ): Promise<WorkId> {
     const retryBehavior = getRetryBehavior(
       this.options.defaultRetryBehavior,
@@ -126,7 +126,7 @@ export class Workpool {
     ctx: MutationCtx | ActionCtx,
     fn: FunctionReference<"action", FunctionVisibility, Args, ReturnType>,
     argsArray: Array<Args>,
-    options?: RetryOption & EnqueueOptions,
+    options?: RetryOption & EnqueueOptions<ReturnType>,
   ): Promise<WorkId[]> {
     const retryBehavior = getRetryBehavior(
       this.options.defaultRetryBehavior,
@@ -157,7 +157,7 @@ export class Workpool {
     ctx: MutationCtx | ActionCtx,
     fn: FunctionReference<"mutation", FunctionVisibility, Args, ReturnType>,
     fnArgs: Args,
-    options?: EnqueueOptions,
+    options?: EnqueueOptions<ReturnType>,
   ): Promise<WorkId> {
     return enqueue(this.component, ctx, "mutation", fn, fnArgs, {
       ...this.options,
@@ -179,7 +179,7 @@ export class Workpool {
     ctx: MutationCtx | ActionCtx,
     fn: FunctionReference<"mutation", FunctionVisibility, Args, ReturnType>,
     argsArray: Array<Args>,
-    options?: EnqueueOptions,
+    options?: EnqueueOptions<ReturnType>,
   ): Promise<WorkId[]> {
     return enqueueBatch(this.component, ctx, "mutation", fn, argsArray, {
       ...this.options,
@@ -203,7 +203,7 @@ export class Workpool {
     ctx: MutationCtx | ActionCtx,
     fn: FunctionReference<"query", FunctionVisibility, Args, ReturnType>,
     fnArgs: Args,
-    options?: EnqueueOptions,
+    options?: EnqueueOptions<ReturnType>,
   ): Promise<WorkId> {
     return enqueue(this.component, ctx, "query", fn, fnArgs, {
       ...this.options,
@@ -226,7 +226,7 @@ export class Workpool {
     ctx: MutationCtx | ActionCtx,
     fn: FunctionReference<"query", FunctionVisibility, Args, ReturnType>,
     argsArray: Array<Args>,
-    options?: EnqueueOptions,
+    options?: EnqueueOptions<ReturnType>,
   ): Promise<WorkId[]> {
     return enqueueBatch(this.component, ctx, "query", fn, argsArray, {
       ...this.options,
@@ -364,7 +364,7 @@ export function vOnCompleteArgs<
   return v.object({
     workId: vWorkId,
     context: (context ?? v.optional(v.any())) as V,
-    result: vRunResult(runResult ?? v.optional(v.any())),
+    result: vRunResult<RV>(runResult ?? (v.optional(v.any()) as unknown as RV)),
   });
 }
 
@@ -410,7 +410,7 @@ export type WorkpoolRetryOptions = {
   retryActionsByDefault?: boolean;
 };
 
-export type EnqueueOptions = {
+export type EnqueueOptions<ReturnValue, Context = unknown> = {
   /**
    * The name of the function. By default, if you pass in api.foo.bar.baz,
    * it will use "foo/bar:baz" as the name. If you pass in a function handle,
@@ -443,14 +443,14 @@ export type EnqueueOptions = {
   onComplete?: FunctionReference<
     "mutation",
     FunctionVisibility,
-    OnCompleteArgs
+    OnCompleteArgs<Context, ReturnValue>
   > | null;
 
   /**
    * A context object to pass to the `onComplete` mutation.
    * Useful for passing data from the enqueue site to the onComplete site.
    */
-  context?: unknown;
+  context?: Context;
 } & (
   | {
       /**
@@ -513,12 +513,13 @@ function getRetryBehavior(
   return retryOverride ?? (retryByDefault ? defaultRetry : undefined);
 }
 
-async function enqueueArgs(
+async function enqueueArgs<ReturnType>(
   fn:
     | FunctionReference<FunctionType, FunctionVisibility>
     | FunctionHandle<FunctionType, DefaultFunctionArgs>,
   opts:
-    | (EnqueueOptions & Partial<Config> & { retryBehavior?: RetryBehavior })
+    | (EnqueueOptions<ReturnType> &
+        Partial<Config> & { retryBehavior?: RetryBehavior })
     | undefined,
 ) {
   const [fnHandle, fnName] =
@@ -576,7 +577,7 @@ export async function enqueueBatch<
   fnType: FnType,
   fn: FunctionReference<FnType, FunctionVisibility, Args, ReturnType>,
   fnArgsArray: Array<Args>,
-  options: EnqueueOptions & {
+  options: EnqueueOptions<ReturnType> & {
     retryBehavior?: RetryBehavior;
     maxParallelism?: number;
     logLevel?: LogLevel;
@@ -638,7 +639,7 @@ export async function enqueue<
   fnType: FnType,
   fn: FunctionReference<FnType, FunctionVisibility, Args, ReturnType>,
   fnArgs: Args,
-  options: EnqueueOptions & {
+  options: EnqueueOptions<ReturnType> & {
     retryBehavior?: RetryBehavior;
     maxParallelism?: number;
     logLevel?: LogLevel;
