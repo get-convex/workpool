@@ -92,7 +92,7 @@ export class Workpool {
    *   onComplete handling, and scheduling via `runAt` or `runAfter`.
    * @returns The ID of the work that was enqueued.
    */
-  async enqueueAction<Args extends DefaultFunctionArgs, ReturnType, Context>(
+  async enqueueAction<Args extends DefaultFunctionArgs, Context, ReturnType>(
     ctx: MutationCtx | ActionCtx,
     fn: FunctionReference<
       "action",
@@ -129,8 +129,8 @@ export class Workpool {
    */
   async enqueueActionBatch<
     Args extends DefaultFunctionArgs,
-    ReturnType,
     Context,
+    ReturnType,
   >(
     ctx: MutationCtx | ActionCtx,
     fn: FunctionReference<
@@ -167,7 +167,7 @@ export class Workpool {
    * @param options - The options for the mutation to specify onComplete handling
    *   and scheduling via `runAt` or `runAfter`.
    */
-  async enqueueMutation<Args extends DefaultFunctionArgs, ReturnType, Context>(
+  async enqueueMutation<Args extends DefaultFunctionArgs, Context, ReturnType>(
     ctx: MutationCtx | ActionCtx,
     fn: FunctionReference<
       "mutation",
@@ -196,8 +196,8 @@ export class Workpool {
    */
   async enqueueMutationBatch<
     Args extends DefaultFunctionArgs,
-    ReturnType,
     Context,
+    ReturnType,
   >(
     ctx: MutationCtx | ActionCtx,
     fn: FunctionReference<
@@ -227,7 +227,7 @@ export class Workpool {
    * @param options - The options for the query to specify onComplete handling
    *   and scheduling via `runAt` or `runAfter`.
    */
-  async enqueueQuery<Args extends DefaultFunctionArgs, ReturnType, Context>(
+  async enqueueQuery<Args extends DefaultFunctionArgs, Context, ReturnType>(
     ctx: MutationCtx | ActionCtx,
     fn: FunctionReference<
       "query",
@@ -257,8 +257,8 @@ export class Workpool {
    */
   async enqueueQueryBatch<
     Args extends DefaultFunctionArgs,
-    ReturnType,
     Context,
+    ReturnType,
   >(
     ctx: MutationCtx | ActionCtx,
     fn: FunctionReference<
@@ -356,26 +356,26 @@ export class Workpool {
    */
   defineOnComplete<
     DataModel extends GenericDataModel,
-    V extends Validator<any, any, any> = VAny<any, "optional">,
-    RV extends Validator<any, any, any> = VAny<any, "optional">,
+    VContext extends Validator<any, any, any> = VAny<any, "optional">,
+    VReturnValue extends Validator<any, any, any> = VAny<any, "optional">,
   >({
     context,
     handler,
     returnValue,
   }: {
-    context?: V;
+    context?: VContext;
     handler: (
       ctx: GenericMutationCtx<DataModel>,
       args: {
         workId: WorkId;
-        context: Infer<V>;
-        result: RunResult<Infer<RV>>;
+        context: Infer<VContext>;
+        result: RunResult<Infer<VReturnValue>>;
       },
     ) => Promise<void>;
-    returnValue?: RV;
+    returnValue?: VReturnValue;
   }): RegisteredMutation<
     "internal",
-    OnCompleteArgs<Infer<V>, Infer<RV>>,
+    OnCompleteArgs<Infer<VContext>, Infer<VReturnValue>>,
     null
   > {
     return internalMutationGeneric({
@@ -400,13 +400,15 @@ export class Workpool {
  * @returns The validator for the onComplete mutation.
  */
 export function vOnCompleteArgs<
-  V extends Validator<any, "required", any> = VAny,
-  RV extends Validator<any, "required", any> = VAny,
->(context?: V, runResult?: RV) {
+  VContext extends Validator<any, "required", any> = VAny,
+  VReturn extends Validator<any, "required", any> = VAny,
+>(context?: VContext, runResult?: VReturn) {
   return v.object({
     workId: vWorkId,
-    context: (context ?? v.optional(v.any())) as V,
-    result: vRunResult<RV>(runResult ?? (v.optional(v.any()) as unknown as RV)),
+    context: (context ?? v.optional(v.any())) as VContext,
+    result: vRunResult(
+      runResult ?? (v.optional(v.any()) as unknown as VReturn),
+    ),
   });
 }
 
