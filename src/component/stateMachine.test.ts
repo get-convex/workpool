@@ -795,9 +795,7 @@ describe("state machine", () => {
 
       // Exercise the real (unmocked) system.get -> null path.
       await t.mutation(internal.recovery.recover, {
-        jobs: [
-          { scheduledId, workId, attempt: 0, started: Date.now() },
-        ],
+        jobs: [{ scheduledId, workId, attempt: 0, started: Date.now() }],
       });
 
       // completeHandler marks it failed with retry (attempts 1 < maxAttempts).
