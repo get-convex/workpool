@@ -56,5 +56,9 @@ export default defineSchema({
     enqueuedAt: v.number(), // clock at the enqueuing mutation
     runAt: v.number(), // when it was asked to run
     startedAt: v.optional(v.number()), // clock inside the task itself
+    // Which enqueuing transaction produced it. Tasks sharing a pairId share a
+    // commit, so an immediate one is the control for a scheduled one.
+    pairId: v.optional(v.number()),
+    committedAt: v.optional(v.number()), // when its enqueue returned
   }).index("cell", ["cell"]),
 });
