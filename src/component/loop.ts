@@ -405,7 +405,10 @@ export const run = internalMutation({
 // entries wait to come due — unbounded for far-future work.) A stamp group
 // larger than one page is paged through in the same iteration, so this needn't
 // exceed the largest batch enqueue.
-const SWEEP_BATCH = 1024;
+// Documents one sweep may pass over. Bounds bytes read per iteration; it is
+// no longer load-bearing for progress, since the boundary stamp is entered by
+// index range rather than traversed.
+const SWEEP_DOC_BATCH = 256;
 
 /** Read the three pending tables the loop processes. */
 async function queryPending(
@@ -453,49 +456,80 @@ async function queryPending(
   ]);
 
   // ── The out-of-order sweep ──
-  // A scheduled enqueue writes its start time as its `segment`, but commits
-  // later — so if the commit took longer than the delay, the document can
-  // land behind the incoming cursor, where the segment scan will never see
-  // it. Every scheduled enqueue also records its commit stamp in `scanTs`,
-  // and commit order is the one order nothing can land behind: walking it
-  // from a cursor inspects every document once (plus re-verifying the few
-  // live documents sharing the boundary stamp — the cursor is inclusive
-  // because a transaction can write several documents with one stamp). A
-  // document whose `segment` is at or above the incoming cursor can be passed
-  // forever: the scan can only get past it by reading it. One behind the
-  // cursor is due (the cursor never passes the current time), and all its
-  // entries must start from here, claiming start slots first. Iteration
-  // stops at the read budget, or when a behind document's entries exceed the
-  // remaining slots, leaving it uninspected rather than reading work that
-  // couldn't start.
+  // A scheduled enqueue writes its start time as its `segment` but commits
+  // later, so if the commit took longer than the delay the document lands
+  // behind the incoming cursor, where the segment scan will never see it.
+  // Every such enqueue also records its commit stamp in `scanTs`, and commit
+  // order is the one order nothing can land behind.
+  //
+  // Only documents *behind* the incoming cursor need rescuing. One at or above
+  // it can be left alone forever: the segment scan can only get past it by
+  // reading it. So this reads exactly those, in two ranges:
+  //
+  //   1. the boundary stamp, restricted to `segment` below the cursor — the
+  //      out-of-order entries the last pass may have left there;
+  //   2. everything stamped after it.
+  //
+  // Restricting (1) by index range rather than by reading and discarding is
+  // what keeps a large scheduled enqueue cheap. Such an enqueue writes one
+  // document per distinct start time, all under one commit stamp — thousands
+  // of them, none behind the cursor. Traversing those to get past the stamp
+  // would cost megabytes on every iteration for as long as they stayed
+  // pending; the range never touches them. It also means a break part-way
+  // through a new stamp costs nothing: the next pass revisits only the behind
+  // subset of it, not the whole thing.
+  //
+  // Within a stamp, entries behind the cursor sort first (their `segment` is
+  // lower), so (2) meets them before any bulk and a break can't skip one.
   const sweepStarts: Start[] = [];
   let sweepStop: bigint | undefined;
   {
-    let inspected = 0;
-    const stream = ctx.db
-      .query("pendingStart")
-      .withIndex("scanTs", (q) => q.gte("scanTs", sweepCursor));
-    for await (const doc of stream) {
+    let docs = 0;
+    const take = (doc: Doc<"pendingStart">): "more" | "stop" => {
       const segment = doc.segment as bigint;
       const ids = memberIds(doc).filter((id) => !excluded.has(id));
-      const behind = segment < incomingCursor;
-      if (behind) {
-        // Take what fits in the start slots. A partially-taken document keeps
-        // the cursor at bay: its started entries patch out, and the next
-        // sweep re-finds the remainder.
-        const room = startLimit - sweepStarts.length;
-        if (room <= 0) break;
-        const taken = ids.slice(0, room);
-        inspected += taken.length;
-        for (const workId of taken) {
-          sweepStarts.push({ _id: doc._id, workId, segment });
-        }
-        if (taken.length < ids.length) break;
-      } else {
-        if (inspected > 0 && inspected + ids.length > SWEEP_BATCH) break;
-        inspected += ids.length;
+      // Behind the cursor, so due: the cursor never passes the current time.
+      // Take what fits in the start slots. A partially-taken document keeps
+      // the cursor at bay — its started entries patch out and the next pass
+      // re-finds the rest.
+      const room = startLimit - sweepStarts.length;
+      if (room <= 0) return "stop";
+      const taken = ids.slice(0, room);
+      for (const workId of taken) {
+        sweepStarts.push({ _id: doc._id, workId, segment });
       }
-      sweepStop = doc.scanTs as bigint;
+      if (taken.length < ids.length) return "stop";
+      return ++docs >= SWEEP_DOC_BATCH ? "stop" : "more";
+    };
+
+    // (1) Out-of-order entries left at the boundary stamp. Nothing at or above
+    // the cursor is read, so a bulk enqueue sharing this stamp costs nothing.
+    let boundaryDone = true;
+    for await (const doc of ctx.db
+      .query("pendingStart")
+      .withIndex("scanTs", (q) =>
+        q.eq("scanTs", sweepCursor).lt("segment", incomingCursor),
+      )) {
+      if (take(doc) === "stop") {
+        boundaryDone = false;
+        break;
+      }
+    }
+
+    // (2) Later stamps. Reaching one is what lets the cursor move off the
+    // boundary; until then it stays put and (1) repeats, which is cheap.
+    if (boundaryDone) {
+      for await (const doc of ctx.db
+        .query("pendingStart")
+        .withIndex("scanTs", (q) => q.gt("scanTs", sweepCursor))) {
+        const scanTs = doc.scanTs as bigint;
+        const behind = (doc.segment as bigint) < incomingCursor;
+        // Not behind: the segment scan owns it. Pass over it so the cursor can
+        // advance, without reading its entries.
+        if (behind && take(doc) === "stop") break;
+        sweepStop = scanTs;
+        if (!behind && ++docs >= SWEEP_DOC_BATCH) break;
+      }
     }
   }
 
@@ -505,6 +539,7 @@ async function queryPending(
   // cursor. Documents are read whole, but a partially-taken document is safe:
   // the cursor stops at its `segment`, and the inclusive re-read picks up the
   // entries left behind.
+  //
   const readyLimit = Math.max(0, startLimit - sweepStarts.length);
   const starts: Start[] = [];
   const readyStamps: bigint[] = [];
