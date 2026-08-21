@@ -71,7 +71,7 @@
     "convex-helpers": "^0.1.94"
   },
   "devDependencies": {
-    "@convex-dev/eslint-plugin": "^2.0.0",
+    "@convex-dev/eslint-plugin": "^4.0.0",
     "@convex-dev/static-hosting": "^0.2.0",
     "@convex-dev/workpool-old": "npm:@convex-dev/workpool@0.4.7",
     "@edge-runtime/vm": "5.0.0",
