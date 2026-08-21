@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.10
+
+- Adds `vRunResult` and type-safety for passing onComplete handlers with return
+  values and context validator.
+- Expands `vOnCompleteArgs` to take an optional second parameter for the
+  validator for the return value to expect.
+- Adds a `returnValue` named parameter to `workpool.defineOnComplete` that does
+  the same.
+
 ## 0.4.9
 
 - Runs actions and queries in batches of up to 32 from a single scheduled
