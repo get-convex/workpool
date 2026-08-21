@@ -286,17 +286,19 @@ export const noopAction = internalAction({
 
 // Another way to define the onComplete mutation.
 export const complete = internalMutation({
-  args: vOnCompleteArgs(v.number()),
+  args: vOnCompleteArgs(v.number(), v.union(v.number(), v.array(v.number()))),
   handler: async (ctx, args) => {
     if (args.result.kind === "success") {
-      console.warn("onComplete delay", Date.now() - args.result.returnValue);
+      if (typeof args.result.returnValue === "number") {
+        console.warn("onComplete delay", Date.now() - args.result.returnValue);
+      }
     }
     console.warn("total", (Date.now() - args.context) / 1000);
   },
 });
 
 export const completeFail = internalMutation({
-  args: vOnCompleteArgs(v.number()),
+  args: vOnCompleteArgs(v.number(), v.number()),
   handler: async (ctx) => {
     console.info("completeFail");
     for (let i = 0; i < 16000; i++) {

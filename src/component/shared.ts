@@ -1,4 +1,4 @@
-import type { Infer } from "convex/values";
+import type { Infer, Validator, VAny } from "convex/values";
 
 import { v } from "convex/values";
 import { type Logger, logLevel } from "./logging.js";
@@ -72,20 +72,42 @@ export const DEFAULT_RETRY_BEHAVIOR: RetryBehavior = {
 // This ensures that the type satisfies the schema.
 const _ = {} as RetryBehavior satisfies Infer<typeof retryBehavior>;
 
-export const vResult = v.union(
-  v.object({
-    kind: v.literal("success"),
-    returnValue: v.any(),
-  }),
-  v.object({
-    kind: v.literal("failed"),
-    error: v.string(),
-  }),
-  v.object({
-    kind: v.literal("canceled"),
-  }),
-);
-export type RunResult = Infer<typeof vResult>;
+export const vResult = vRunResult(v.any());
+export function vRunResult<RV extends Validator<any, any, any> = VAny>(
+  returnValue: RV,
+) {
+  return v.union(
+    v.object({
+      kind: v.literal("success"),
+      returnValue,
+    }),
+    v.object({
+      kind: v.literal("failed"),
+      error: v.string(),
+    }),
+    v.object({
+      kind: v.literal("canceled"),
+    }),
+  );
+}
+export type RunResult<Returns = unknown> =
+  | {
+      kind: "success";
+      /**
+       * The return value of the run, if it succeeded.
+       */
+      returnValue?: Returns;
+    }
+  | {
+      kind: "failed";
+      /**
+       * The error message of the run, if it failed.
+       */
+      error: string;
+    }
+  | {
+      kind: "canceled";
+    };
 
 export const vOnCompleteFnContext = v.object({
   fnHandle: v.string(), // mutation

@@ -30,6 +30,7 @@ import {
   type OnCompleteArgs as SharedOnCompleteArgs,
   type Status,
   vResult,
+  vRunResult,
 } from "../component/shared.js";
 import {
   type ActionCtx,
@@ -45,6 +46,7 @@ export type WorkId = string & { __isWorkId: true };
 export const vWorkId = v.string() as VString<WorkId>;
 export {
   vResult,
+  vRunResult,
   DEFAULT_RETRY_BEHAVIOR,
   /** @deprecated Use `vResult` instead. */
   vResult as resultValidator,
@@ -90,11 +92,16 @@ export class Workpool {
    *   onComplete handling, and scheduling via `runAt` or `runAfter`.
    * @returns The ID of the work that was enqueued.
    */
-  async enqueueAction<Args extends DefaultFunctionArgs, ReturnType>(
+  async enqueueAction<Args extends DefaultFunctionArgs, Context, ReturnType>(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<"action", FunctionVisibility, Args, ReturnType>,
+    fn: FunctionReference<
+      "action",
+      FunctionVisibility,
+      Args,
+      NoInfer<ReturnType>
+    >,
     fnArgs: Args,
-    options?: RetryOption & EnqueueOptions,
+    options?: RetryOption & EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId> {
     const retryBehavior = getRetryBehavior(
       this.options.defaultRetryBehavior,
@@ -120,11 +127,20 @@ export class Workpool {
    *   onComplete handling, and scheduling via `runAt` or `runAfter`.
    * @returns The IDs of the work that was enqueued.
    */
-  async enqueueActionBatch<Args extends DefaultFunctionArgs, ReturnType>(
+  async enqueueActionBatch<
+    Args extends DefaultFunctionArgs,
+    Context,
+    ReturnType,
+  >(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<"action", FunctionVisibility, Args, ReturnType>,
+    fn: FunctionReference<
+      "action",
+      FunctionVisibility,
+      Args,
+      NoInfer<ReturnType>
+    >,
     argsArray: Array<Args>,
-    options?: RetryOption & EnqueueOptions,
+    options?: RetryOption & EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId[]> {
     const retryBehavior = getRetryBehavior(
       this.options.defaultRetryBehavior,
@@ -151,11 +167,16 @@ export class Workpool {
    * @param options - The options for the mutation to specify onComplete handling
    *   and scheduling via `runAt` or `runAfter`.
    */
-  async enqueueMutation<Args extends DefaultFunctionArgs, ReturnType>(
+  async enqueueMutation<Args extends DefaultFunctionArgs, Context, ReturnType>(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<"mutation", FunctionVisibility, Args, ReturnType>,
+    fn: FunctionReference<
+      "mutation",
+      FunctionVisibility,
+      Args,
+      NoInfer<ReturnType>
+    >,
     fnArgs: Args,
-    options?: EnqueueOptions,
+    options?: EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId> {
     return enqueue(this.component, ctx, "mutation", fn, fnArgs, {
       ...this.options,
@@ -173,11 +194,20 @@ export class Workpool {
    * @param options - The options for the mutations to specify onComplete handling
    *   and scheduling via `runAt` or `runAfter`.
    */
-  async enqueueMutationBatch<Args extends DefaultFunctionArgs, ReturnType>(
+  async enqueueMutationBatch<
+    Args extends DefaultFunctionArgs,
+    Context,
+    ReturnType,
+  >(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<"mutation", FunctionVisibility, Args, ReturnType>,
+    fn: FunctionReference<
+      "mutation",
+      FunctionVisibility,
+      Args,
+      NoInfer<ReturnType>
+    >,
     argsArray: Array<Args>,
-    options?: EnqueueOptions,
+    options?: EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId[]> {
     return enqueueBatch(this.component, ctx, "mutation", fn, argsArray, {
       ...this.options,
@@ -197,11 +227,16 @@ export class Workpool {
    * @param options - The options for the query to specify onComplete handling
    *   and scheduling via `runAt` or `runAfter`.
    */
-  async enqueueQuery<Args extends DefaultFunctionArgs, ReturnType>(
+  async enqueueQuery<Args extends DefaultFunctionArgs, Context, ReturnType>(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<"query", FunctionVisibility, Args, ReturnType>,
+    fn: FunctionReference<
+      "query",
+      FunctionVisibility,
+      Args,
+      NoInfer<ReturnType>
+    >,
     fnArgs: Args,
-    options?: EnqueueOptions,
+    options?: EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId> {
     return enqueue(this.component, ctx, "query", fn, fnArgs, {
       ...this.options,
@@ -220,11 +255,20 @@ export class Workpool {
    * @param options - The options for the queries to specify onComplete handling
    *   and scheduling via `runAt` or `runAfter`.
    */
-  async enqueueQueryBatch<Args extends DefaultFunctionArgs, ReturnType>(
+  async enqueueQueryBatch<
+    Args extends DefaultFunctionArgs,
+    Context,
+    ReturnType,
+  >(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<"query", FunctionVisibility, Args, ReturnType>,
+    fn: FunctionReference<
+      "query",
+      FunctionVisibility,
+      Args,
+      NoInfer<ReturnType>
+    >,
     argsArray: Array<Args>,
-    options?: EnqueueOptions,
+    options?: EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId[]> {
     return enqueueBatch(this.component, ctx, "query", fn, argsArray, {
       ...this.options,
@@ -312,23 +356,30 @@ export class Workpool {
    */
   defineOnComplete<
     DataModel extends GenericDataModel,
-    V extends Validator<any, any, any> = VAny<any, "optional">,
+    VContext extends Validator<any, any, any> = VAny<any, "optional">,
+    VReturnValue extends Validator<any, any, any> = VAny<any, "optional">,
   >({
     context,
     handler,
+    returnValue,
   }: {
-    context?: V;
+    context?: VContext;
     handler: (
       ctx: GenericMutationCtx<DataModel>,
       args: {
         workId: WorkId;
-        context: Infer<V>;
-        result: RunResult;
+        context: Infer<VContext>;
+        result: RunResult<Infer<VReturnValue>>;
       },
     ) => Promise<void>;
-  }): RegisteredMutation<"internal", OnCompleteArgs, null> {
+    returnValue?: VReturnValue;
+  }): RegisteredMutation<
+    "internal",
+    OnCompleteArgs<Infer<VContext>, Infer<VReturnValue>>,
+    null
+  > {
     return internalMutationGeneric({
-      args: vOnCompleteArgs(context),
+      args: vOnCompleteArgs(context, returnValue),
       handler,
     });
   }
@@ -349,12 +400,15 @@ export class Workpool {
  * @returns The validator for the onComplete mutation.
  */
 export function vOnCompleteArgs<
-  V extends Validator<any, "required", any> = VAny,
->(context?: V) {
+  VContext extends Validator<any, "required", any> = VAny,
+  VReturn extends Validator<any, "required", any> = VAny,
+>(context?: VContext, runResult?: VReturn) {
   return v.object({
     workId: vWorkId,
-    context: (context ?? v.optional(v.any())) as V,
-    result: vResult,
+    context: (context ?? v.optional(v.any())) as VContext,
+    result: vRunResult(
+      runResult ?? (v.optional(v.any()) as unknown as VReturn),
+    ),
   });
 }
 
@@ -400,7 +454,7 @@ export type WorkpoolRetryOptions = {
   retryActionsByDefault?: boolean;
 };
 
-export type EnqueueOptions = {
+export type EnqueueOptions<Context = unknown, ReturnValue = unknown> = {
   /**
    * The name of the function. By default, if you pass in api.foo.bar.baz,
    * it will use "foo/bar:baz" as the name. If you pass in a function handle,
@@ -433,14 +487,14 @@ export type EnqueueOptions = {
   onComplete?: FunctionReference<
     "mutation",
     FunctionVisibility,
-    OnCompleteArgs
+    OnCompleteArgs<Context, ReturnValue>
   > | null;
 
   /**
    * A context object to pass to the `onComplete` mutation.
    * Useful for passing data from the enqueue site to the onComplete site.
    */
-  context?: unknown;
+  context?: Context;
 } & (
   | {
       /**
@@ -464,7 +518,7 @@ export type EnqueueOptions = {
     }
 );
 
-export type OnCompleteArgs = {
+export type OnCompleteArgs<Context = unknown, Returns = unknown> = {
   /**
    * The ID of the work that completed.
    */
@@ -473,11 +527,11 @@ export type OnCompleteArgs = {
    * The context object passed when enqueuing the work.
    * Useful for passing data from the enqueue site to the onComplete site.
    */
-  context: unknown;
+  context: Context;
   /**
    * The result of the run that completed.
    */
-  result: RunResult;
+  result: RunResult<Returns>;
 };
 
 // ensure OnCompleteArgs satisfies SharedOnCompleteArgs
@@ -503,12 +557,13 @@ function getRetryBehavior(
   return retryOverride ?? (retryByDefault ? defaultRetry : undefined);
 }
 
-async function enqueueArgs(
+async function enqueueArgs<Context, ReturnType>(
   fn:
     | FunctionReference<FunctionType, FunctionVisibility>
     | FunctionHandle<FunctionType, DefaultFunctionArgs>,
   opts:
-    | (EnqueueOptions & Partial<Config> & { retryBehavior?: RetryBehavior })
+    | (EnqueueOptions<Context, ReturnType> &
+        Partial<Config> & { retryBehavior?: RetryBehavior })
     | undefined,
 ) {
   const [fnHandle, fnName] =
@@ -560,13 +615,14 @@ export async function enqueueBatch<
   FnType extends FunctionType,
   Args extends DefaultFunctionArgs,
   ReturnType,
+  Context,
 >(
   component: WorkpoolComponent,
   ctx: MutationCtx | ActionCtx,
   fnType: FnType,
-  fn: FunctionReference<FnType, FunctionVisibility, Args, ReturnType>,
+  fn: FunctionReference<FnType, FunctionVisibility, Args, NoInfer<ReturnType>>,
   fnArgsArray: Array<Args>,
-  options: EnqueueOptions & {
+  options: EnqueueOptions<Context, ReturnType> & {
     retryBehavior?: RetryBehavior;
     maxParallelism?: number;
     logLevel?: LogLevel;
@@ -622,13 +678,14 @@ export async function enqueue<
   FnType extends FunctionType,
   Args extends DefaultFunctionArgs,
   ReturnType,
+  Context,
 >(
   component: WorkpoolComponent,
   ctx: MutationCtx | ActionCtx,
   fnType: FnType,
-  fn: FunctionReference<FnType, FunctionVisibility, Args, ReturnType>,
+  fn: FunctionReference<FnType, FunctionVisibility, Args, NoInfer<ReturnType>>,
   fnArgs: Args,
-  options: EnqueueOptions & {
+  options: EnqueueOptions<Context, ReturnType> & {
     retryBehavior?: RetryBehavior;
     maxParallelism?: number;
     logLevel?: LogLevel;

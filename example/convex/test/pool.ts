@@ -33,9 +33,9 @@ export async function configurePool(
 export function makePool(
   kind: PoolKind,
   opts: { maxParallelism: number },
-): Workpool | OldWorkpool {
+): Workpool {
   if (kind === "new") return new Workpool(components.testWorkpool, opts);
-  return new OldWorkpool(components.oldWorkpool, opts);
+  return new OldWorkpool(components.oldWorkpool, opts) as Workpool;
 }
 
 export function getComponent(kind: PoolKind) {
@@ -56,7 +56,7 @@ export function enqueueFor(kind: PoolKind): {
   }
   return {
     component: components.oldWorkpool,
-    enqueueOne: enqueueOld,
-    enqueueMany: enqueueBatchOld,
+    enqueueOne: enqueueOld as typeof enqueue,
+    enqueueMany: enqueueBatchOld as typeof enqueueBatch,
   };
 }
