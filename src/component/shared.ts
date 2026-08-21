@@ -72,7 +72,7 @@ export const DEFAULT_RETRY_BEHAVIOR: RetryBehavior = {
 // This ensures that the type satisfies the schema.
 const _ = {} as RetryBehavior satisfies Infer<typeof retryBehavior>;
 
-export const vResult = vRunResult(v.optional(v.any()));
+export const vResult = vRunResult(v.any());
 export function vRunResult<RV extends Validator<any, any, any> = VAny>(
   returnValue: RV,
 ) {
