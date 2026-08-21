@@ -96,7 +96,7 @@ export type RunResult<Returns = unknown> =
       /**
        * The return value of the run, if it succeeded.
        */
-      returnValue?: Returns;
+      returnValue: Returns;
     }
   | {
       kind: "failed";
