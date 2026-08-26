@@ -19,12 +19,11 @@ import {
   boundScheduledTime,
   vConfig,
   fnType,
-  getCurrentSegment,
-  max,
   vOnCompleteFnContext,
   retryBehavior,
   status as statusValidator,
-  toSegment,
+  dueTimestamp,
+  MINUTE,
 } from "./shared.js";
 import { recordEnqueued } from "./stats.js";
 import { getOrUpdateGlobals } from "./config.js";
@@ -57,7 +56,19 @@ export const enqueue = mutation({
     return await enqueueHandler(ctx, console, itemArgs);
   },
 });
-async function enqueueHandler(
+/** Exported for tests, so they enqueue exactly what the public API writes. */
+export async function enqueueHandler(
+  ctx: MutationCtx,
+  console: Logger,
+  item: ObjectType<typeof itemArgs>,
+) {
+  const created = await createWork(ctx, console, item);
+  await insertPendingStarts(ctx, [created]);
+  return created.workId;
+}
+
+/** Create the work document (and any payload), but not its queue entry. */
+async function createWork(
   ctx: MutationCtx,
   console: Logger,
   { runAt, ...workArgs }: ObjectType<typeof itemArgs>,
@@ -111,13 +122,90 @@ async function enqueueHandler(
 
   // Store the work item
   const workId = await ctx.db.insert("work", workItem);
-
-  await ctx.db.insert("pendingStart", {
-    workId,
-    segment: max(toSegment(runAt), getCurrentSegment()),
-  });
   recordEnqueued(console, { workId, fnName: workArgs.fnName, runAt });
-  return workId;
+  return { workId, runAt };
+}
+
+// How many entries one pendingStart document carries at most. Entries are
+// ids (~34 bytes), so a full document is well under the size limits while a
+// maximal batch enqueue still collapses into a handful of documents.
+const MAX_PACKED = 256;
+
+/**
+ * Queue freshly created work, packing entries that share an ordering value
+ * into one pendingStart document and pointing each work doc at its document.
+ *
+ * Ready-now entries are ordered by this transaction's commit timestamp, which
+ * can't land behind the loop's cursor. Scheduled entries are ordered by their
+ * start time, invisible to the loop until due — but such a document could
+ * commit *behind* the cursor (if the enqueue takes longer to commit than the
+ * delay), so it's marked `scheduled` and records its commit stamp in
+ * `scanTs`; the loop sweeps that index in commit order and starts anything
+ * the cursor passed over.
+ */
+async function insertPendingStarts(
+  ctx: MutationCtx,
+  entries: { workId: Id<"work">; runAt: number }[],
+) {
+  const now = Date.now();
+  const groups = new Map<bigint | "now", Id<"work">[]>();
+  for (const { workId, runAt } of entries) {
+    const key = runAt > now ? dueTimestamp(runAt) : "now";
+    const group = groups.get(key);
+    if (group) group.push(workId);
+    else groups.set(key, [workId]);
+  }
+  // Beyond this, a start time provably can't commit behind the loop's cursor
+  // (no commit takes five minutes), so the sweep needn't watch it.
+  const scanCutoff = dueTimestamp(now + 5 * MINUTE);
+  for (const [key, workIds] of groups) {
+    // Separate calls within one transaction share a commit stamp; append to
+    // the document this transaction already wrote for this key, if any.
+    const existing =
+      key === "now"
+        ? await ctx.db
+            .query("pendingStart")
+            .withIndex("segment", (q) => q.eq("segment", ctx.db.vars.commitTs))
+            .order("desc")
+            .first()
+        : await ctx.db
+            .query("pendingStart")
+            .withIndex("scanTs", (q) =>
+              q.eq("scanTs", ctx.db.vars.commitTs).eq("segment", key),
+            )
+            .order("desc")
+            .first();
+    let remaining = workIds;
+    if (existing) {
+      const members = existing.workIds ?? [];
+      const filling = remaining.slice(0, MAX_PACKED - members.length);
+      if (filling.length > 0) {
+        await ctx.db.patch("pendingStart", existing._id, {
+          workIds: [...members, ...filling],
+        });
+        await Promise.all(
+          filling.map((workId) =>
+            ctx.db.patch("work", workId, { pendingStartId: existing._id }),
+          ),
+        );
+        remaining = remaining.slice(filling.length);
+      }
+    }
+    for (let i = 0; i < remaining.length; i += MAX_PACKED) {
+      const chunk = remaining.slice(i, i + MAX_PACKED);
+      const pendingStartId = await ctx.db.insert("pendingStart", {
+        workIds: chunk,
+        segment: key === "now" ? ctx.db.vars.commitTs : key,
+        ...(key === "now" ? {} : { scheduled: true }),
+        ...(key !== "now" && key <= scanCutoff
+          ? { scanTs: ctx.db.vars.commitTs }
+          : {}),
+      });
+      await Promise.all(
+        chunk.map((workId) => ctx.db.patch("work", workId, { pendingStartId })),
+      );
+    }
+  }
 }
 
 export const enqueueBatch = mutation({
@@ -130,7 +218,12 @@ export const enqueueBatch = mutation({
     const globals = await getOrUpdateGlobals(ctx, config);
     const console = createLogger(globals.logLevel);
     await kickMainLoop(ctx, "enqueue");
-    return Promise.all(items.map((item) => enqueueHandler(ctx, console, item)));
+    const created = [];
+    for (const item of items) {
+      created.push(await createWork(ctx, console, item));
+    }
+    await insertPendingStarts(ctx, created);
+    return created.map((c) => c.workId);
   },
 });
 
@@ -146,7 +239,7 @@ export const cancel = mutation({
       await kickMainLoop(ctx, "cancel");
       await ctx.db.insert("pendingCancelation", {
         workId: id,
-        segment: getCurrentSegment(),
+        segment: ctx.db.vars.commitTs,
       });
     }
   },
@@ -176,13 +269,12 @@ export const cancelAll = mutation({
     if (shouldCancel.some((c) => c)) {
       await kickMainLoop(ctx, "cancel");
     }
-    const segment = getCurrentSegment();
     await Promise.all(
       pageOfWork.map(({ _id }, index) => {
         if (shouldCancel[index]) {
           return ctx.db.insert("pendingCancelation", {
             workId: _id,
-            segment,
+            segment: ctx.db.vars.commitTs,
           });
         }
       }),
@@ -207,10 +299,15 @@ async function statusHandler(ctx: QueryCtx, { id }: { id: Id<"work"> }) {
   if (!work) {
     return { state: "finished" } as const;
   }
-  const pendingStart = await ctx.db
-    .query("pendingStart")
-    .withIndex("workId", (q) => q.eq("workId", id))
-    .unique();
+  if (work.pendingStartId === undefined) {
+    // Written before the pointer existed (every enqueue sets it now), so this
+    // could be queued or mid-attempt. Report the longer-lived state: queued
+    // can last until a far-future start time, mid-attempt lasts one attempt —
+    // after which the work finishes (correct) or retries (sets the pointer).
+    return { state: "pending", previousAttempts: work.attempts } as const;
+  }
+  // The pointer goes stale when the work starts; check the entry exists.
+  const pendingStart = await ctx.db.get("pendingStart", work.pendingStartId);
   if (pendingStart) {
     return { state: "pending", previousAttempts: work.attempts } as const;
   }

@@ -20,12 +20,14 @@ import {
 import {
   type Config,
   DEFAULT_MAX_PARALLELISM,
-  fromSegment,
-  getCurrentSegment,
+  endOfMs,
+  fromTimestamp,
+  legacyRunAt,
   MINUTE,
   SECOND,
   type RunResult,
-  toSegment,
+  toTimestamp,
+  dueTimestamp,
   vResult,
 } from "./shared.js";
 import { generateReport, recordCompleted, recordStarted } from "./stats.js";
@@ -38,25 +40,22 @@ const START_BATCH_SIZE = 32;
 // it's draining, so smaller cheaper iterations carry the same work in aggregate.
 const MAIN_BATCH_SIZE = 64;
 const RECOVERY_THRESHOLD_MS = 5 * MINUTE; // attempt to recover jobs this old.
-export const RECOVERY_PERIOD_SEGMENTS = toSegment(1 * MINUTE); // how often to check.
+export const RECOVERY_PERIOD_NS = toTimestamp(MINUTE); // how often to check.
 // While the queue is idle we keep the loop warm for this long (measured from
 // when it last saw work) so a trickle of new work doesn't thrash the run
 // status, re-polling this often during that window — preserving the old loop's
 // cooldown behavior, now expressed via batch-worker's idle hints.
 export const STATUS_COOLDOWN = 2 * SECOND;
 export const COOLDOWN_CHECK_INTERVAL = 200;
-// Buffer applied when querying with cursors. Transactions that started
-// before ours may still be running and commit inserts at segments behind
-// a previously advanced cursor — the buffer lets us pick those up. Most
-// commits land within milliseconds, so a small buffer covers nearly all
-// of them. The minute-cadence recovery iteration scans from segment 0
-// (the start of each pending table) to catch any very-late commit that
-// fell behind even this buffer.
-const CURSOR_BUFFER_SEGMENTS = toSegment(15 * SECOND);
 
 export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
   generation: 0n,
-  segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
+  segmentCursors: {
+    incoming: 0n,
+    completion: 0n,
+    cancelation: 0n,
+    sweep: 0n,
+  },
   lastRecovery: 0n,
   report: {
     completed: 0,
@@ -98,18 +97,33 @@ const vStart = v.object({
   _id: v.id("pendingStart"),
   workId: v.id("work"),
   segment: v.int64(),
+  // The start time recovered from an entry a version ≤ 0.4.9 wrote (see
+  // `legacyRunAt`). Not a stored field.
+  legacyStartTime: v.optional(v.number()),
 });
 type Start = Infer<typeof vStart>;
 
+// batch-worker runs `getBatch` and `run` in the same transaction, so a batch
+// never crosses a deploy or a snapshot: `run` sees exactly the state the
+// batch was built from.
 /** The shape `getBatch` hands to `run`. */
 const batchFields = {
-  // The segment at query time — what "now" was when the batch was built.
-  segment: v.int64(),
+  // What "now" was (in nanoseconds) when the batch was built.
+  now: v.int64(),
   // Whether this iteration should run the periodic work-recovery scan.
   recovery: v.boolean(),
   completions: v.array(vCompletion),
   cancelations: v.array(vCancelation),
   starts: v.array(vStart),
+  // Entries the out-of-order sweep found behind the incoming cursor (their
+  // enqueues lost the race), and how far its inspection got — the position
+  // its cursor may advance to once every found entry is retired. `sweepStop`
+  // is absent when it inspected nothing.
+  sweepStarts: v.array(vStart),
+  sweepStop: v.optional(v.int64()),
+  // The highest commit timestamp observed while building the batch — the
+  // frontier the incoming cursor may advance to, but not beyond.
+  cursorCeiling: v.int64(),
 };
 type Batch = Infer<ReturnType<typeof v.object<typeof batchFields>>>;
 
@@ -127,82 +141,88 @@ export const getBatch = internalQuery({
   returns: vBatchResult(v.object(batchFields)),
   handler: async (ctx): Promise<BatchResult<Batch>> => {
     const globals = await getGlobals(ctx);
-    const state = await ctx.db.query("internalState").unique();
+    const state = await ctx.db.query("internalState").order("desc").first();
     const running = state?.running ?? INITIAL_STATE.running;
     const cursors = state?.segmentCursors ?? INITIAL_STATE.segmentCursors;
     const lastRecovery = state?.lastRecovery ?? INITIAL_STATE.lastRecovery;
-    const segment = getCurrentSegment();
+    const nowTs = toTimestamp(Date.now());
+    const eligibleBefore = endOfMs(Date.now());
 
-    // Once per recovery period (≈1min), scan from segment 0 to catch any
-    // very-late commit that fell behind the cursor buffer, and to recover any
-    // stuck running jobs. Otherwise scan from the cursors (minus a buffer for
-    // out-of-order inserts that landed behind the cursor since the last scan).
+    // Once per recovery period (≈1min), check for stuck running jobs. The
+    // pending queues need no periodic rescan: they're ordered by commit
+    // timestamp, so nothing can appear behind a cursor we've read past.
     const isRecoveryIter =
-      running.length > 0 && segment - lastRecovery >= RECOVERY_PERIOD_SEGMENTS;
-    const queryArgs = isRecoveryIter
-      ? {
-          completionCursor: 0n,
-          cancelationCursor: 0n,
-          incomingCursor: 0n,
-          maxParallelism: globals.maxParallelism,
-          runningCount: running.length,
-        }
-      : {
-          completionCursor: cursors.completion - CURSOR_BUFFER_SEGMENTS,
-          cancelationCursor: cursors.cancelation - CURSOR_BUFFER_SEGMENTS,
-          incomingCursor: cursors.incoming - CURSOR_BUFFER_SEGMENTS,
-          maxParallelism: globals.maxParallelism,
-          runningCount: running.length,
-        };
+      running.length > 0 && nowTs - lastRecovery >= RECOVERY_PERIOD_NS;
 
-    const { allStarts, cancelations, completions } = await queryPending(
-      ctx,
-      queryArgs,
-    );
-    const starts = allStarts.filter((s) => s.segment <= segment);
+    const {
+      starts,
+      sweepStarts,
+      sweepStop,
+      cancelations,
+      completions,
+      cursorCeiling,
+    } = await queryPending(ctx, {
+      completionCursor: cursors.completion,
+      cancelationCursor: cursors.cancelation,
+      incomingCursor: cursors.incoming,
+      sweepCursor: cursors.sweep ?? 0n,
+      lastCommitTs: (state?.lastCommitTs as bigint | undefined) ?? 0n,
+      maxParallelism: globals.maxParallelism,
+      runningCount: running.length,
+      eligibleBefore,
+    });
 
+    // The sweep counts as work when it found entries to start or moved past
+    // new documents; re-verifying the live documents at its inclusive
+    // boundary is not progress and must not keep the loop awake.
     const hasWork =
       completions.length > 0 ||
       cancelations.length > 0 ||
       starts.length > 0 ||
+      sweepStarts.length > 0 ||
+      (sweepStop !== undefined && sweepStop > (cursors.sweep ?? 0n)) ||
       isRecoveryIter;
 
     if (hasWork) {
       const batch: Batch = {
-        segment,
+        now: nowTs,
         recovery: isRecoveryIter,
         completions: completions.map((c) => ({
           _id: c._id,
           workId: c.workId,
           runResult: c.runResult,
           retry: c.retry,
-          segment: c.segment,
+          segment: c.segment as bigint,
         })),
         cancelations: cancelations.map((c) => ({
           _id: c._id,
           workId: c.workId,
-          segment: c.segment,
+          segment: c.segment as bigint,
         })),
-        starts: starts.map((s) => ({
-          _id: s._id,
-          workId: s.workId,
-          segment: s.segment,
-        })),
+        starts,
+        sweepStarts,
+        sweepStop,
+        cursorCeiling,
       };
       return { kind: "work" as const, batch };
     }
 
     // Nothing to do now. Figure out when to wake up next: the sooner of the
     // earliest future-scheduled start and (if jobs are running) the next
-    // recovery scan. A ping still wakes us sooner.
-    const futureStart = allStarts.find((s) => s.segment > segment);
+    // recovery scan. A ping still wakes us sooner. Work the sweep couldn't
+    // retire (a due entry with no capacity) is covered too: capacity implies
+    // jobs are running, so the recovery wait applies and completions ping us.
+    const futureStart = await ctx.db
+      .query("pendingStart")
+      .withIndex("segment", (q) => q.gte("segment", eligibleBefore))
+      .first();
     const waits: number[] = [];
     if (futureStart) {
-      waits.push(fromSegment(futureStart.segment) - Date.now());
+      waits.push(fromTimestamp(futureStart.segment as bigint) - Date.now());
     }
     if (running.length > 0) {
-      const nextRecovery = lastRecovery + RECOVERY_PERIOD_SEGMENTS;
-      waits.push(fromSegment(nextRecovery) - Date.now());
+      const nextRecovery = lastRecovery + RECOVERY_PERIOD_NS;
+      waits.push(fromTimestamp(nextRecovery) - Date.now());
     }
     const timeoutMs =
       waits.length > 0 ? Math.max(0, Math.min(...waits)) : undefined;
@@ -232,7 +252,7 @@ export const run = internalMutation({
     const state = await getOrCreateState(ctx);
     const globals = await getGlobals(ctx);
     const console = createLogger(globals.logLevel);
-    const segment = getCurrentSegment();
+    const nowTs = toTimestamp(Date.now());
 
     const compLabel = `[main] pendingCompletion(${batch.completions.length})`;
     console.time(compLabel);
@@ -251,22 +271,47 @@ export const run = internalMutation({
 
     if (state.running.length === 0) {
       // If there's nothing active, reset lastRecovery.
-      state.lastRecovery = segment;
+      state.lastRecovery = nowTs;
     } else if (batch.recovery) {
       // Otherwise schedule recovery for any old jobs.
       const recoveryLabel = `[main] recovery(${state.running.length})`;
       console.time(recoveryLabel);
       await handleRecovery(ctx, state, console);
       console.timeEnd(recoveryLabel);
-      state.lastRecovery = segment;
+      state.lastRecovery = nowTs;
     }
 
     // ── Start new work ──
+    // The segment scan's entries are all due (scheduled ones only become
+    // visible at their start time), except entries written by older versions,
+    // which the loop re-keys to their start time. The sweep's entries are the
+    // opposite — committed *behind* the cursor, so the scan will never reach
+    // them; they start from here.
+    const now = Date.now();
+    const isDue = (s: Start) =>
+      s.legacyStartTime === undefined || s.legacyStartTime <= now;
+    const all = [...batch.starts, ...batch.sweepStarts];
+    const notYet = all.filter((s) => !isDue(s));
+    // Oldest first: `segment` is when an entry became eligible, and a swept
+    // entry has been eligible since its (past) start time.
+    const eligible = all
+      .filter(isDue)
+      .sort(
+        (a, b) =>
+          (a.legacyStartTime ?? fromTimestamp(a.segment)) -
+          (b.legacyStartTime ?? fromTimestamp(b.segment)),
+      );
+    if (notYet.length > 0) {
+      const promoteLabel = `[main] promote(${notYet.length})`;
+      console.time(promoteLabel);
+      await promoteScheduled(ctx, notYet);
+      console.timeEnd(promoteLabel);
+    }
+
     // Slice to actual available capacity (completions may have freed slots).
     // Guard against negative numbers in case running.length > maxParallelism.
     const actualCapacity = globals.maxParallelism - state.running.length;
-    const pending =
-      actualCapacity > 0 ? batch.starts.slice(0, actualCapacity) : [];
+    const pending = actualCapacity > 0 ? eligible.slice(0, actualCapacity) : [];
     const startLabel = `[main] pendingStart(${pending.length})`;
     console.time(startLabel);
     await handleStart(ctx, state, pending, console, globals);
@@ -295,19 +340,55 @@ export const run = internalMutation({
     }
 
     // Advance cursors to skip tombstones on next scan, but only for the
-    // queues we actually drained this iteration.
+    // queues we actually drained this iteration. The batches came back in
+    // commit order, so the last entry is the furthest we read.
     if (batch.completions.length > 0) {
       state.segmentCursors.completion = batch.completions.at(-1)!.segment;
     }
     if (batch.cancelations.length > 0) {
       state.segmentCursors.cancelation = batch.cancelations.at(-1)!.segment;
     }
-    if (pending.length > 0) {
-      state.segmentCursors.incoming = pending.at(-1)!.segment;
-    } else if (actualCapacity > 0 && batch.starts.length === 0) {
-      // No more pending work to start and we had capacity — advance to now.
-      state.segmentCursors.incoming = segment;
+    // Capacity can cut the starts short, so only advance each cursor over the
+    // leading run we finished with — started or re-keyed. Stopping at the
+    // first entry we left alone is what keeps it from being skipped. The
+    // incoming cursor additionally never passes `cursorCeiling`, the highest
+    // commit timestamp observed while building the batch: a wall-clock key
+    // can exceed every commit stamp that exists, and a commit racing this run
+    // would land behind a cursor set there. (The keys this run itself writes
+    // need no accounting — they're all at or above the end of the current
+    // millisecond, which no cursor reaches: the scan's bound is exclusive and
+    // the ceiling only lowers.) Equality is fine throughout: the index is
+    // read with `gte`.
+    const handled = new Set([...pending, ...notYet].map((s) => s._id));
+    let incoming = state.segmentCursors.incoming;
+    for (const start of batch.starts) {
+      if (!handled.has(start._id)) break;
+      incoming = start.segment;
     }
+    // Never backwards: a batch can carry a ceiling below the cursor when it
+    // observed no commit stamps at all (e.g. a recovery-only iteration).
+    state.segmentCursors.incoming = maxBigint(
+      state.segmentCursors.incoming,
+      incoming < batch.cursorCeiling ? incoming : batch.cursorCeiling,
+    );
+    // The sweep cursor rests at the last inspected entry — (commit stamp,
+    // creation time), since a batch enqueue shares one stamp. Its components
+    // are read straight off inspected entries, so no ceiling is needed. If
+    // capacity cut one of the sweep's entries (rare: the estimate and the
+    // real capacity disagree only when a completion didn't free a slot), the
+    // cursor stays put and the next sweep re-inspects from the old position.
+    if (
+      batch.sweepStop !== undefined &&
+      batch.sweepStarts.every((s) => handled.has(s._id))
+    ) {
+      state.segmentCursors.sweep = maxBigint(
+        state.segmentCursors.sweep ?? 0n,
+        batch.sweepStop,
+      );
+    }
+    // Record this run's own commit stamp: the next run reads this document,
+    // so its snapshot is at least this recent, and the mark seeds its ceiling.
+    state.lastCommitTs = ctx.db.vars.commitTs;
 
     await ctx.db.replace("internalState", state._id, state);
     // Return null: batch-worker re-runs `getBatch` immediately to drain, and
@@ -316,6 +397,19 @@ export const run = internalMutation({
   },
 });
 
+// How many `scheduledAt` entries the sweep inspects per iteration — a read
+// budget, not a work bound: inspection is read-only and each entry is
+// inspected once ever, because the cursor advances a whole commit stamp at a
+// time and never revisits a cleared stamp. (Advancing inclusively instead
+// would re-read the boundary stamp's group every iteration for as long as its
+// entries wait to come due — unbounded for far-future work.) A stamp group
+// larger than one page is paged through in the same iteration, so this needn't
+// exceed the largest batch enqueue.
+// Documents one sweep may pass over. Bounds bytes read per iteration; it is
+// no longer load-bearing for progress, since the boundary stamp is entered by
+// index range rather than traversed.
+const SWEEP_DOC_BATCH = 256;
+
 /** Read the three pending tables the loop processes. */
 async function queryPending(
   ctx: QueryCtx,
@@ -323,14 +417,20 @@ async function queryPending(
     completionCursor,
     cancelationCursor,
     incomingCursor,
+    sweepCursor,
+    lastCommitTs,
     maxParallelism,
     runningCount,
+    eligibleBefore,
   }: {
     completionCursor: bigint;
     cancelationCursor: bigint;
     incomingCursor: bigint;
+    sweepCursor: bigint;
+    lastCommitTs: bigint;
     maxParallelism: number;
     runningCount: number;
+    eligibleBefore: bigint;
   },
 ) {
   const completions = await ctx.db
@@ -341,30 +441,181 @@ async function queryPending(
     .query("pendingCancelation")
     .withIndex("segment", (q) => q.gte("segment", cancelationCursor))
     .take(CANCELLATION_BATCH_SIZE);
-  // Available slots after we process this batch's completions, plus 1
-  // for the +1 trick (detect overflow vs. a future-scheduled retry).
-  // Cap at MAIN_BATCH_SIZE so a single iteration's per-item writes
-  // (delete pendingStart + scheduler.runAfter) don't grow unbounded.
+  // Available slots after we process this batch's completions. Cap at
+  // MAIN_BATCH_SIZE so a single iteration's per-item writes (delete
+  // pendingStart + scheduler.runAfter) don't grow unbounded.
   const startLimit = Math.min(
     MAIN_BATCH_SIZE,
     Math.max(0, maxParallelism - runningCount + completions.length),
   );
-  const excludedIds = [
+  // Work completing or canceling this iteration is skipped when reading; the
+  // same iteration removes those entries, so the cursors may pass them.
+  const excluded = new Set([
     ...completions.map((c) => c.workId),
     ...cancelations.map((c) => c.workId),
-  ];
-  const allStarts =
-    startLimit === 0
-      ? []
-      : await ctx.db
-          .query("pendingStart")
-          .withIndex("segment", (q) => q.gte("segment", incomingCursor))
-          // eslint-disable-next-line @convex-dev/no-filter-in-query
-          .filter((q) =>
-            q.and(...excludedIds.map((id) => q.neq(q.field("workId"), id))),
-          )
-          .take(startLimit + 1);
-  return { completions, cancelations, allStarts };
+  ]);
+
+  // ── The out-of-order sweep ──
+  // A scheduled enqueue writes its start time as its `segment` but commits
+  // later, so if the commit took longer than the delay the document lands
+  // behind the incoming cursor, where the segment scan will never see it.
+  // Every such enqueue also records its commit stamp in `scanTs`, and commit
+  // order is the one order nothing can land behind.
+  //
+  // Only documents *behind* the incoming cursor need rescuing. One at or above
+  // it can be left alone forever: the segment scan can only get past it by
+  // reading it. So this reads exactly those, in two ranges:
+  //
+  //   1. the boundary stamp, restricted to `segment` below the cursor — the
+  //      out-of-order entries the last pass may have left there;
+  //   2. everything stamped after it.
+  //
+  // Restricting (1) by index range rather than by reading and discarding is
+  // what keeps a large scheduled enqueue cheap. Such an enqueue writes one
+  // document per distinct start time, all under one commit stamp — thousands
+  // of them, none behind the cursor. Traversing those to get past the stamp
+  // would cost megabytes on every iteration for as long as they stayed
+  // pending; the range never touches them. It also means a break part-way
+  // through a new stamp costs nothing: the next pass revisits only the behind
+  // subset of it, not the whole thing.
+  //
+  // Within a stamp, entries behind the cursor sort first (their `segment` is
+  // lower), so (2) meets them before any bulk and a break can't skip one.
+  const sweepStarts: Start[] = [];
+  let sweepStop: bigint | undefined;
+  {
+    let docs = 0;
+    const take = (doc: Doc<"pendingStart">): "more" | "stop" => {
+      const segment = doc.segment as bigint;
+      const ids = memberIds(doc).filter((id) => !excluded.has(id));
+      // Behind the cursor, so due: the cursor never passes the current time.
+      // Take what fits in the start slots. A partially-taken document keeps
+      // the cursor at bay — its started entries patch out and the next pass
+      // re-finds the rest.
+      const room = startLimit - sweepStarts.length;
+      if (room <= 0) return "stop";
+      const taken = ids.slice(0, room);
+      for (const workId of taken) {
+        sweepStarts.push({ _id: doc._id, workId, segment });
+      }
+      if (taken.length < ids.length) return "stop";
+      return ++docs >= SWEEP_DOC_BATCH ? "stop" : "more";
+    };
+
+    // (1) Out-of-order entries left at the boundary stamp. Nothing at or above
+    // the cursor is read, so a bulk enqueue sharing this stamp costs nothing.
+    let boundaryDone = true;
+    for await (const doc of ctx.db
+      .query("pendingStart")
+      .withIndex("scanTs", (q) =>
+        q.eq("scanTs", sweepCursor).lt("segment", incomingCursor),
+      )) {
+      if (take(doc) === "stop") {
+        boundaryDone = false;
+        break;
+      }
+    }
+
+    // (2) Later stamps. Reaching one is what lets the cursor move off the
+    // boundary; until then it stays put and (1) repeats, which is cheap.
+    if (boundaryDone) {
+      for await (const doc of ctx.db
+        .query("pendingStart")
+        .withIndex("scanTs", (q) => q.gt("scanTs", sweepCursor))) {
+        const scanTs = doc.scanTs as bigint;
+        const behind = (doc.segment as bigint) < incomingCursor;
+        // Not behind: the segment scan owns it. Pass over it so the cursor can
+        // advance, without reading its entries.
+        if (behind && take(doc) === "stop") break;
+        sweepStop = scanTs;
+        if (!behind && ++docs >= SWEEP_DOC_BATCH) break;
+      }
+    }
+  }
+
+  // Entries the sweep starts take slots first; only fetch ready work for the
+  // slots left over. Everything eligible, oldest first; work scheduled for
+  // later sorts above the bound, so it's left alone without pinning the
+  // cursor. Documents are read whole, but a partially-taken document is safe:
+  // the cursor stops at its `segment`, and the inclusive re-read picks up the
+  // entries left behind.
+  //
+  const readyLimit = Math.max(0, startLimit - sweepStarts.length);
+  const starts: Start[] = [];
+  const readyStamps: bigint[] = [];
+  if (readyLimit > 0) {
+    const stream = ctx.db
+      .query("pendingStart")
+      .withIndex("segment", (q) =>
+        q.gte("segment", incomingCursor).lt("segment", eligibleBefore),
+      );
+    scan: for await (const doc of stream) {
+      const segment = doc.segment as bigint;
+      // A document from before commit-timestamp ordering keeps its start time
+      // in `segment`; recovering it here means `run` handles it like any
+      // other not-yet-due entry and re-keys it as a timestamp.
+      const legacyStartTime = legacyRunAt(segment);
+      if (doc.scheduled !== true && legacyStartTime === undefined) {
+        readyStamps.push(segment);
+      }
+      for (const workId of memberIds(doc)) {
+        if (excluded.has(workId)) continue;
+        if (starts.length >= readyLimit) break scan;
+        starts.push({ _id: doc._id, workId, segment, legacyStartTime });
+      }
+    }
+  }
+  // The highest commit timestamp observed while building this batch. Every
+  // source is the stamp of a transaction visible to this snapshot, so
+  // anything committing later is stamped above it — the frontier the cursor
+  // may advance to. `scheduled` documents are wall-clock-keyed and don't
+  // count (their stamps do, via the sweep); the rest carry an observed commit
+  // stamp in `segment` (an older version's tiny buckets are excluded with the
+  // same check that recovers their start time).
+  const cursorCeiling = [
+    lastCommitTs,
+    ...completions.map((c) => c.segment as bigint),
+    ...cancelations.map((c) => c.segment as bigint),
+    ...readyStamps,
+    ...(sweepStop === undefined ? [] : [sweepStop]),
+  ].reduce(maxBigint);
+
+  return {
+    completions,
+    cancelations,
+    starts,
+    sweepStarts,
+    sweepStop,
+    cursorCeiling,
+  };
+}
+
+/** The work queued in a pendingStart document. */
+function memberIds(doc: {
+  workIds?: Id<"work">[];
+  workId?: Id<"work">;
+}): Id<"work">[] {
+  return doc.workIds ?? (doc.workId ? [doc.workId] : []);
+}
+
+/**
+ * Remove entries from a queue document, deleting it once empty (also clearing
+ * the deprecated single-entry field a ≤ 0.4.9 version may have written).
+ */
+async function removeFromPendingStart(
+  ctx: MutationCtx,
+  doc: Doc<"pendingStart">,
+  workIds: Id<"work">[],
+) {
+  const remaining = memberIds(doc).filter((id) => !workIds.includes(id));
+  if (remaining.length === 0) {
+    await ctx.db.delete("pendingStart", doc._id);
+  } else {
+    await ctx.db.patch("pendingStart", doc._id, {
+      workIds: remaining,
+      workId: undefined,
+    });
+  }
 }
 
 /**
@@ -397,8 +648,7 @@ async function handleCompletions(
           console.warn(`[main] ${c.workId} is gone, but trying to complete`);
           return;
         }
-        const retried = await rescheduleJob(ctx, work, console);
-        if (retried) {
+        if (await rescheduleJob(ctx, work, console)) {
           state.report.retries++;
           recordCompleted(console, work, "retrying", undefined);
         } else {
@@ -460,19 +710,27 @@ async function handleCancelation(
           }
           const work = await ctx.db.get("work", workId);
           if (!work) {
+            // A pendingStart left pointing at it, if any, is dropped when the
+            // segment scan reads it and finds the work gone.
             console.warn(`[main] ${workId} is gone, but trying to cancel`);
             return null;
           }
-          // Ensure it doesn't retry.
+          // Ensure it doesn't retry — and doesn't start, if its pendingStart
+          // is only reachable through the scan (the pointer can be missing on
+          // entries older versions wrote; `handleStart` checks this flag).
           await ctx.db.patch("work", workId, { canceled: true });
-          // Ensure it doesn't start.
-          const pendingStart = await ctx.db
-            .query("pendingStart")
-            .withIndex("workId", (q) => q.eq("workId", workId))
-            .unique();
-          if (pendingStart && !canceledWork.has(workId)) {
+          // Ensure it doesn't start: remove it from its queue document. The
+          // pointer can be stale; check membership.
+          const pendingStart = work.pendingStartId
+            ? await ctx.db.get("pendingStart", work.pendingStartId)
+            : null;
+          if (
+            pendingStart &&
+            memberIds(pendingStart).includes(workId) &&
+            !canceledWork.has(workId)
+          ) {
             state.report.canceled++;
-            await ctx.db.delete("pendingStart", pendingStart._id);
+            await removeFromPendingStart(ctx, pendingStart, [workId]);
             canceledWork.add(workId);
             return { workId, runResult, attempt: work.attempts };
           }
@@ -528,8 +786,39 @@ async function handleRecovery(
   }
 }
 
+function maxBigint(a: bigint, b: bigint) {
+  return a > b ? a : b;
+}
+
 /**
- * Starts pending work.
+ * Re-keys entries that are visible but not due to sort at their start time,
+ * so the cursor can pass them and they don't come back until they're actually
+ * due. New-format entries are keyed at their start time and only become
+ * visible once due, so this only handles the 100ms buckets older versions
+ * wrote. The new key needs no clamping: a not-yet-due start time rounds up to
+ * at least the end of the current millisecond, which no cursor ever reaches
+ * (the scan's bound is exclusive, and the ceiling can only pull it lower).
+ */
+async function promoteScheduled(ctx: MutationCtx, notYet: Start[]) {
+  await Promise.all(
+    notYet.map(async ({ _id, legacyStartTime }) => {
+      // A concurrent cancelation may have removed it.
+      if (!(await ctx.db.get("pendingStart", _id))) return;
+      await ctx.db.patch("pendingStart", _id, {
+        segment: dueTimestamp(legacyStartTime!),
+        // The key is now a wall-clock time, and `scheduled` is what records
+        // that (so the cursor ceiling doesn't count it as a commit stamp).
+        // No `scanTs`: written by the loop, it can't be out of order.
+        scheduled: true,
+      });
+    }),
+  );
+}
+
+/**
+ * Starts pending work. Entries are removed from their queue documents as
+ * they're handled — started, found gone, or found canceled — one patch (or
+ * delete, when empty) per document.
  */
 async function handleStart(
   ctx: MutationCtx,
@@ -539,30 +828,79 @@ async function handleStart(
   { logLevel }: Config,
 ) {
   console.debug(`[main] scheduling ${pending.length} pending work`);
-  const starts = (
-    await Promise.all(
-      pending.map(async ({ _id, workId, segment }) => {
-        if (state.running.some((r) => r.workId === workId)) {
-          console.error(`[main] ${workId} already running (skipping start)`);
-          return null;
-        }
-        // Guard against a pendingStart a concurrent cancelation removed.
-        if (!(await ctx.db.get("pendingStart", _id))) {
-          return null;
-        }
-        const work = await ctx.db.get("work", workId);
-        await ctx.db.delete("pendingStart", _id);
-        if (!work) {
-          console.error(`Trying to start, but work not found: ${workId}`);
-          return null;
-        }
-        return {
-          work,
-          lagMs: Date.now() - fromSegment(segment),
-        };
-      }),
-    )
-  ).flatMap((r) => (r ? [r] : []));
+  const byDoc = new Map<Id<"pendingStart">, Start[]>();
+  for (const entry of pending) {
+    const entries = byDoc.get(entry._id);
+    if (entries) entries.push(entry);
+    else byDoc.set(entry._id, [entry]);
+  }
+  // Point reads issued together cost one round trip rather than one per
+  // entry; a batch of them awaited one at a time dominates the iteration.
+  const [docs, works] = await Promise.all([
+    Promise.all(
+      [...byDoc.keys()].map(
+        async (docId) =>
+          [docId, await ctx.db.get("pendingStart", docId)] as const,
+      ),
+    ).then((pairs) => new Map(pairs)),
+    Promise.all(
+      pending.map(
+        async ({ workId }) =>
+          [workId, await ctx.db.get("work", workId)] as const,
+      ),
+    ).then((pairs) => new Map(pairs)),
+  ]);
+  const starts: { work: Doc<"work">; lagMs: number }[] = [];
+  for (const [docId, entries] of byDoc) {
+    // Guard against a document a concurrent cancelation emptied.
+    const doc = docs.get(docId);
+    if (!doc) continue;
+    const members = memberIds(doc);
+    const removed: Id<"work">[] = [];
+    for (const { workId, segment, legacyStartTime } of entries) {
+      // A concurrent cancelation may have removed just this entry.
+      if (!members.includes(workId)) continue;
+      // Whatever happens below, the entry leaves the queue: nothing rescans
+      // behind the cursor, so it must not be left unreadable.
+      removed.push(workId);
+      if (state.running.some((r) => r.workId === workId)) {
+        console.error(`[main] ${workId} already running (skipping start)`);
+        continue;
+      }
+      const work = works.get(workId);
+      if (!work) {
+        console.error(`Trying to start, but work not found: ${workId}`);
+        continue;
+      }
+      if (work.canceled) {
+        // Canceled while its entry was only reachable through this scan
+        // (no `pendingStartId` pointer — written by an older version).
+        // Finish the cancelation that couldn't find the entry then.
+        console.debug(`[main] ${workId} was canceled (not starting)`);
+        state.report.canceled++;
+        await ctx.scheduler.runAfter(0, internal.complete.complete, {
+          jobs: [
+            {
+              workId,
+              runResult: { kind: "canceled" as const },
+              attempt: work.attempts,
+            },
+          ],
+        });
+        continue;
+      }
+      starts.push({
+        work,
+        // `segment` round-trips to when this became eligible: the
+        // scheduled start time, or the commit timestamp of the enqueue if
+        // it was ready then. `legacyStartTime` only exists for an entry an
+        // older version wrote, whose `segment` is a 100ms bucket rather
+        // than a timestamp.
+        lagMs: Date.now() - (legacyStartTime ?? fromTimestamp(segment)),
+      });
+    }
+    await removeFromPendingStart(ctx, doc, removed);
+  }
 
   state.running.push(...(await beginWorkBatch(ctx, starts, console, logLevel)));
 }
@@ -677,11 +1015,12 @@ async function rescheduleJob(
     console.warn(`[main] ${work._id} has no retryBehavior so not retrying`);
     return false;
   }
-  const existing = await ctx.db
-    .query("pendingStart")
-    .withIndex("workId", (q) => q.eq("workId", work._id))
-    .first();
-  if (existing) {
+  // The pointer can be stale (its entry started); check before declaring a
+  // duplicate.
+  const existing = work.pendingStartId
+    ? await ctx.db.get("pendingStart", work.pendingStartId)
+    : null;
+  if (existing && memberIds(existing).includes(work._id)) {
     // Not sure why this would ever happen, but ensure uniqueness explicitly.
     console.error(`[main] ${work._id} already in pendingStart so not retrying`);
     return false;
@@ -690,12 +1029,20 @@ async function rescheduleJob(
     work.retryBehavior.initialBackoffMs *
     Math.pow(work.retryBehavior.base, work.attempts - 1);
   const nextAttempt = withJitter(backoffMs);
-  const startTime = Date.now() + nextAttempt;
-  const segment = toSegment(startTime);
-  await ctx.db.insert("pendingStart", {
-    workId: work._id,
+  // The key needs no clamping against the cursor: it's strictly in the
+  // future, so it rounds up to at least the end of the current millisecond,
+  // which no cursor ever reaches — the scan's bound is exclusive and the
+  // ceiling can only pull it lower. So unlike an enqueue, this can't land
+  // behind the cursor and needs no `scanTs` for the sweep. `scheduled` still
+  // marks the key as a wall-clock time, so the cursor ceiling doesn't count
+  // it as an observed commit stamp.
+  const segment = dueTimestamp(Date.now() + Math.max(nextAttempt, 1));
+  const pendingStartId = await ctx.db.insert("pendingStart", {
+    workIds: [work._id],
     segment,
+    scheduled: true,
   });
+  await ctx.db.patch("work", work._id, { pendingStartId });
   return true;
 }
 
@@ -715,7 +1062,7 @@ async function getGlobals(ctx: QueryCtx) {
 }
 
 async function getOrCreateState(ctx: MutationCtx) {
-  const state = await ctx.db.query("internalState").unique();
+  const state = await ctx.db.query("internalState").order("desc").first();
   if (state) return state;
   const globals = await getGlobals(ctx);
   const console = createLogger(globals.logLevel);

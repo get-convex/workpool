@@ -24,22 +24,25 @@ export const clearPending = internalMutation({
       .withIndex("by_creation_time", (q) => q.lte("_creationTime", time))
       .order("desc")) {
       i++;
-      const work = await ctx.db.get("work", entry.workId);
-      totalBytes +=
-        getConvexSize(entry) + getConvexSize(work) + (work?.payloadSize ?? 0);
+      const workIds = entry.workIds ?? (entry.workId ? [entry.workId] : []);
+      totalBytes += getConvexSize(entry);
+      await ctx.db.delete("pendingStart", entry._id);
+      for (const workId of workIds) {
+        const work = await ctx.db.get("work", workId);
+        totalBytes += getConvexSize(work) + (work?.payloadSize ?? 0);
+        if (work) {
+          // Clean up any large data stored separately
+          if (work.payloadId) {
+            await ctx.db.delete("payload", work.payloadId);
+          }
+          await ctx.db.delete("work", work._id);
+        }
+      }
       if (i > MAX_ROWS_READ || totalBytes > MAX_BYTES_READ) {
         hasMore = true;
         nextTime = entry._creationTime;
         console.log(`Continuing after ${i} entries, ${totalBytes} bytes`);
         break;
-      }
-      await ctx.db.delete("pendingStart", entry._id);
-      if (work) {
-        // Clean up any large data stored separately
-        if (work.payloadId) {
-          await ctx.db.delete("payload", work.payloadId);
-        }
-        await ctx.db.delete("work", work._id);
       }
     }
     if (hasMore) {
@@ -70,10 +73,12 @@ export const clearOldWork = internalMutation({
       .withIndex("by_creation_time", (q) => q.lte("_creationTime", time))
       .order("desc")) {
       i++;
-      const pendingStart = await ctx.db
-        .query("pendingStart")
-        .withIndex("workId", (q) => q.eq("workId", entry._id))
-        .unique();
+      // The pointer can be stale or missing on entries older versions wrote;
+      // a pendingStart missed here is dropped when the loop reads it and
+      // finds the work gone.
+      const pendingStart = entry.pendingStartId
+        ? await ctx.db.get("pendingStart", entry.pendingStartId)
+        : null;
       const pendingCompletion = await ctx.db
         .query("pendingCompletion")
         .withIndex("workId", (q) => q.eq("workId", entry._id))
@@ -95,7 +100,19 @@ export const clearOldWork = internalMutation({
         break;
       }
       if (pendingStart) {
-        await ctx.db.delete("pendingStart", pendingStart._id);
+        // Other work may share the queue document; only remove this entry.
+        const remaining = (
+          pendingStart.workIds ??
+          (pendingStart.workId ? [pendingStart.workId] : [])
+        ).filter((id) => id !== entry._id);
+        if (remaining.length === 0) {
+          await ctx.db.delete("pendingStart", pendingStart._id);
+        } else {
+          await ctx.db.patch("pendingStart", pendingStart._id, {
+            workIds: remaining,
+            workId: undefined,
+          });
+        }
       }
       if (pendingCompletion) {
         await ctx.db.delete("pendingCompletion", pendingCompletion._id);

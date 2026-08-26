@@ -11,7 +11,9 @@
 import type * as crons from "../crons.js";
 import type * as example from "../example.js";
 import type * as staticHosting from "../staticHosting.js";
+import type * as test_cleanup from "../test/cleanup.js";
 import type * as test_dashboard from "../test/dashboard.js";
+import type * as test_latency from "../test/latency.js";
 import type * as test_noisy from "../test/noisy.js";
 import type * as test_nonRetryable from "../test/nonRetryable.js";
 import type * as test_pool from "../test/pool.js";
@@ -24,6 +26,7 @@ import type * as test_scenarios_noisyNeighbor from "../test/scenarios/noisyNeigh
 import type * as test_scenarios_overhead from "../test/scenarios/overhead.js";
 import type * as test_scenarios_sustained from "../test/scenarios/sustained.js";
 import type * as test_scenarios_throughput from "../test/scenarios/throughput.js";
+import type * as test_scheduling from "../test/scheduling.js";
 import type * as test_work from "../test/work.js";
 
 import type {
@@ -36,7 +39,9 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   example: typeof example;
   staticHosting: typeof staticHosting;
+  "test/cleanup": typeof test_cleanup;
   "test/dashboard": typeof test_dashboard;
+  "test/latency": typeof test_latency;
   "test/noisy": typeof test_noisy;
   "test/nonRetryable": typeof test_nonRetryable;
   "test/pool": typeof test_pool;
@@ -49,6 +54,7 @@ declare const fullApi: ApiFromModules<{
   "test/scenarios/overhead": typeof test_scenarios_overhead;
   "test/scenarios/sustained": typeof test_scenarios_sustained;
   "test/scenarios/throughput": typeof test_scenarios_throughput;
+  "test/scheduling": typeof test_scheduling;
   "test/work": typeof test_work;
 }>;
 

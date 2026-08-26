@@ -1,5 +1,51 @@
 # Changelog
 
+## Unreleased
+
+- Orders the pending-work queues by commit timestamp (`v.commitTs()`, Convex ≥
+  1.43). A commit timestamp is assigned when the transaction commits, so nothing
+  can appear behind a cursor the main loop has already read past. That removes
+  the 15-second cursor rewind buffer and the once-a-minute full rescan that
+  0.4.7 added to cope with out-of-order inserts — the loop now reads only rows
+  it hasn't seen, which improves throughput and tail latency for saturated
+  pools.
+- The `segment` fields keep their name, but now hold nanoseconds rather than
+  100ms buckets. Work scheduled to start later stores its start time there
+  directly, so ready and scheduled work share an ordering, scheduled work sorts
+  above the loop's read bound until it's due, and a bulk enqueue of scheduled
+  work never sits in front of ready work.
+- A scheduled start time can commit _behind_ the loop's cursor (when the enqueue
+  takes longer to commit than the delay), where the ordered scan would never see
+  it. Scheduled enqueues also record their commit timestamp in a `scanTs` field;
+  the loop sweeps that index in commit order — which nothing can land behind —
+  and directly starts the rare entries the cursor passed over. No entry is ever
+  rewritten.
+- A batch enqueue packs entries sharing a start time into one `pendingStart`
+  document (up to 256), so it writes a few documents rather than hundreds;
+  starting or canceling an entry patches it out of its document.
+- The loop's cursor never advances past the newest commit timestamp it has
+  observed, so a scheduled entry starting at its wall-clock time can't push the
+  cursor ahead of a racing enqueue's commit — the design makes no assumptions
+  about how wall clocks relate to the commit timestamp clock.
+- Upgrading in place is safe, including for work that hasn't come due yet. A
+  `pendingStart` an older version wrote holds a 100ms bucket — eight orders of
+  magnitude below a nanosecond timestamp — so the loop recognizes it, reads the
+  bucket back as the time the work should start, and either starts it or re-keys
+  it as a timestamp and leaves it alone until then. This is a one-time
+  re-ordering of every queued entry, 64 per loop iteration, so right after the
+  push a large backlog of scheduled work adds processing overhead and can
+  briefly delay work that's ready now. Queued completions and cancelations sort
+  first and drain immediately, which is what they want.
+- Work docs now carry a `pendingStartId` pointer to their queue entry, replacing
+  an index. Work enqueued by an older version has no pointer, so until it next
+  starts, `status` reports it as `"pending"` — even if it's mid-attempt (queued
+  is the longer-lived of the two states it could be in) — and canceling it takes
+  effect immediately but only clears its queue entry when that entry comes due.
+- This change is not backwards compatible. It requires `convex` 1.43 or later,
+  and downgrading a workpool that has run this version is not supported: an
+  older version would read a nanosecond timestamp as a 100ms bucket far in the
+  future and never start the work.
+
 ## 0.4.10
 
 - Adds `vRunResult` and type-safety for passing onComplete handlers with return

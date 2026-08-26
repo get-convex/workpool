@@ -309,7 +309,7 @@ describe("lib", () => {
         expect(work).toBeDefined();
         const pendingStarts = await ctx.db.query("pendingStart").collect();
         expect(pendingStarts).toHaveLength(1);
-        expect(pendingStarts[0].workId).toBe(id);
+        expect(pendingStarts[0].workIds).toEqual([id]);
       });
 
       const status = await t.query(api.lib.status, { id });

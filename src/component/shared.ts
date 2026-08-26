@@ -19,6 +19,10 @@ export const HOUR = 60 * MINUTE;
 export const DAY = 24 * HOUR;
 export const YEAR = 365 * DAY;
 
+// Versions ≤ 0.4.9 ordered the pending queues by SEGMENT_MS-sized buckets.
+// Kept for two purposes: the periodic stuck-job check (`lastRecovery`), and
+// decoding segments those versions left in `pendingStart` (see `legacyRunAt`).
+// Now segment is nanoseconds on the commit-timestamp scale (see `toTimestamp`).
 export function toSegment(ms: number): bigint {
   return BigInt(Math.floor(ms / SEGMENT_MS));
 }
@@ -27,12 +31,78 @@ export function getCurrentSegment(): bigint {
   return toSegment(Date.now());
 }
 
-export function getNextSegment(): bigint {
-  return toSegment(Date.now()) + 1n;
-}
-
 export function fromSegment(segment: bigint): number {
   return Number(segment) * SEGMENT_MS;
+}
+
+// A commit timestamp is nanoseconds since the epoch, so a wall-clock time
+// converts into the same ordering as one. This is what lets a single index hold
+// both "ready as soon as it commits" and "not before this time".
+const NS_PER_MS = 1_000_000n;
+
+/**
+ * A wall-clock time on the commit-timestamp scale, preserving any fractional
+ * milliseconds exactly: the whole and fractional parts convert separately, so
+ * no precision is lost multiplying a large float. Round-trips through
+ * `fromTimestamp`.
+ */
+export function toTimestamp(ms: number): bigint {
+  const whole = Math.floor(ms);
+  return (
+    BigInt(whole) * NS_PER_MS +
+    BigInt(Math.round((ms - whole) * Number(NS_PER_MS)))
+  );
+}
+
+/**
+ * Back to (possibly fractional) milliseconds, dividing the whole and
+ * remainder parts separately so large values don't lose precision.
+ */
+export function fromTimestamp(timestamp: bigint): number {
+  return (
+    Number(timestamp / NS_PER_MS) +
+    Number(timestamp % NS_PER_MS) / Number(NS_PER_MS)
+  );
+}
+
+/**
+ * A start time as an ordering value: rounded up to the next whole millisecond,
+ * the first one in which the work is due for the whole millisecond's duration.
+ * Rounding down would start a fractionally-scheduled entry before its time
+ * (due-ness is visibility, and the read bound moves in whole milliseconds).
+ * If sub-millisecond earliness stops mattering — e.g. once near-future starts
+ * are clamped to "now" — this could carry the fraction instead.
+ */
+export function dueTimestamp(runAt: number): bigint {
+  return toTimestamp(Math.ceil(runAt));
+}
+
+/**
+ * The exclusive upper bound on entries eligible at `ms` — the end of that
+ * millisecond, not the start of it.
+ */
+export function endOfMs(ms: number): bigint {
+  return toTimestamp(Math.floor(ms) + 1);
+}
+
+// Nanoseconds for the year 2000: far above any 100ms bucket an older version
+// could have written (~1.8e10 today, ~1.9e10 even four years out) and far below
+// any timestamp this one can produce, since `boundScheduledTime` keeps
+// scheduled times within a few years of now. Nothing real lands in between.
+const MIN_TIMESTAMP = toTimestamp(Date.UTC(2000, 0, 1));
+
+/**
+ * The start time a `pendingStart` written before commit-timestamp ordering
+ * represents, or undefined if its `segment` is already a timestamp.
+ *
+ * Those entries stored `max(toSegment(runAt), toSegment(now))` and had no
+ * `runAt` field, so the bucket is the only record of when the work should
+ * start — and it may still be in the future. Reading it back as a time lets the
+ * loop treat such an entry like any other scheduled one, rather than seeing a
+ * value far below the eligibility bound and starting it immediately.
+ */
+export function legacyRunAt(segment: bigint): number | undefined {
+  return segment < MIN_TIMESTAMP ? fromSegment(segment) : undefined;
 }
 
 export const vConfig = v.object({
@@ -160,18 +230,4 @@ export function boundScheduledTime(ms: number, console: Logger): number {
     return Date.now() + YEAR;
   }
   return ms;
-}
-
-/**
- * Returns the smaller of two bigint values.
- */
-export function min<T extends bigint>(a: T, b: T): T {
-  return a > b ? b : a;
-}
-
-/**
- * Returns the larger of two bigint values.
- */
-export function max<T extends bigint>(a: T, b: T): T {
-  return a < b ? b : a;
 }
