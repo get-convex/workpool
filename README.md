@@ -4,7 +4,8 @@
 
 <!-- START: Include on https://convex.dev/components -->
 
-This Convex component pools actions and mutations to restrict parallel requests.
+This Convex component queues actions and mutations as background jobs while
+limiting how many run in parallel.
 
 - Configure multiple pools with different parallelism.
 - Retry failed actions (with backoff and jitter) for
