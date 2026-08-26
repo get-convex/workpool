@@ -22,8 +22,8 @@ import {
   vOnCompleteFnContext,
   retryBehavior,
   status as statusValidator,
-  dueTimestamp,
   MINUTE,
+  toTimestamp,
 } from "./shared.js";
 import { recordEnqueued } from "./stats.js";
 import { getOrUpdateGlobals } from "./config.js";
@@ -150,14 +150,14 @@ async function insertPendingStarts(
   const now = Date.now();
   const groups = new Map<bigint | "now", Id<"work">[]>();
   for (const { workId, runAt } of entries) {
-    const key = runAt > now ? dueTimestamp(runAt) : "now";
+    const key = runAt > now ? toTimestamp(runAt) : "now";
     const group = groups.get(key);
     if (group) group.push(workId);
     else groups.set(key, [workId]);
   }
   // Beyond this, a start time provably can't commit behind the loop's cursor
   // (no commit takes five minutes), so the sweep needn't watch it.
-  const scanCutoff = dueTimestamp(now + 5 * MINUTE);
+  const scanCutoff = toTimestamp(now + 5 * MINUTE);
   for (const [key, workIds] of groups) {
     // Separate calls within one transaction share a commit stamp; append to
     // the document this transaction already wrote for this key, if any.

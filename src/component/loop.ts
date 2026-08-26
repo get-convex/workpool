@@ -27,10 +27,10 @@ import {
   SECOND,
   type RunResult,
   toTimestamp,
-  dueTimestamp,
   vResult,
 } from "./shared.js";
 import { generateReport, recordCompleted, recordStarted } from "./stats.js";
+import { assert } from "convex-helpers";
 
 const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
 const RECOVERY_BATCH_SIZE = 32;
@@ -396,14 +396,7 @@ export const run = internalMutation({
   },
 });
 
-// How many `scheduledAt` entries the sweep inspects per iteration — a read
-// budget, not a work bound: inspection is read-only and each entry is
-// inspected once ever, because the cursor advances a whole commit stamp at a
-// time and never revisits a cleared stamp. (Advancing inclusively instead
-// would re-read the boundary stamp's group every iteration for as long as its
-// entries wait to come due — unbounded for far-future work.) A stamp group
-// larger than one page is paged through in the same iteration, so this needn't
-// exceed the largest batch enqueue.
+// How many `scanTs` entries the sweep inspects per iteration
 // Documents one sweep may pass over. Bounds bytes read per iteration; it is
 // no longer load-bearing for progress, since the boundary stamp is entered by
 // index range rather than traversed.
@@ -794,17 +787,17 @@ function maxBigint(a: bigint, b: bigint) {
  * so the cursor can pass them and they don't come back until they're actually
  * due. New-format entries are keyed at their start time and only become
  * visible once due, so this only handles the 100ms buckets older versions
- * wrote. The new key needs no clamping: a not-yet-due start time rounds up to
- * at least the end of the current millisecond, which no cursor ever reaches
- * (the scan's bound is exclusive, and the ceiling can only pull it lower).
+ * wrote. The new key needs no clamping: a not-yet-due start time is in the
+ * future, which the cursor won't exceed in this transaction.
  */
 async function promoteScheduled(ctx: MutationCtx, notYet: Start[]) {
   await Promise.all(
     notYet.map(async ({ _id, legacyStartTime }) => {
+      assert(legacyStartTime);
       // A concurrent cancelation may have removed it.
       if (!(await ctx.db.get("pendingStart", _id))) return;
       await ctx.db.patch("pendingStart", _id, {
-        segment: dueTimestamp(legacyStartTime!),
+        segment: toTimestamp(legacyStartTime),
         // The key is now a wall-clock time, and `scheduled` is what records
         // that (so the cursor ceiling doesn't count it as a commit stamp).
         // No `scanTs`: written by the loop, it can't be out of order.
@@ -1028,14 +1021,9 @@ async function rescheduleJob(
     work.retryBehavior.initialBackoffMs *
     Math.pow(work.retryBehavior.base, work.attempts - 1);
   const nextAttempt = withJitter(backoffMs);
-  // The key needs no clamping against the cursor: it's strictly in the
-  // future, so it rounds up to at least the end of the current millisecond,
-  // which no cursor ever reaches — the scan's bound is exclusive and the
-  // ceiling can only pull it lower. So unlike an enqueue, this can't land
-  // behind the cursor and needs no `scanTs` for the sweep. `scheduled` still
-  // marks the key as a wall-clock time, so the cursor ceiling doesn't count
-  // it as an observed commit stamp.
-  const segment = dueTimestamp(Date.now() + Math.max(nextAttempt, 1));
+  // Unlike enqueue, this can't land behind the cursor since it's in the future
+  // and written in the same transaction as we update cursor to at most "now"
+  const segment = toTimestamp(Date.now() + Math.max(nextAttempt, 1));
   const pendingStartId = await ctx.db.insert("pendingStart", {
     workIds: [work._id],
     segment,

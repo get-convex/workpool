@@ -66,18 +66,6 @@ export function fromTimestamp(timestamp: bigint): number {
 }
 
 /**
- * A start time as an ordering value: rounded up to the next whole millisecond,
- * the first one in which the work is due for the whole millisecond's duration.
- * Rounding down would start a fractionally-scheduled entry before its time
- * (due-ness is visibility, and the read bound moves in whole milliseconds).
- * If sub-millisecond earliness stops mattering — e.g. once near-future starts
- * are clamped to "now" — this could carry the fraction instead.
- */
-export function dueTimestamp(runAt: number): bigint {
-  return toTimestamp(Math.ceil(runAt));
-}
-
-/**
  * The exclusive upper bound on entries eligible at `ms` — the end of that
  * millisecond, not the start of it.
  */
