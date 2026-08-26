@@ -7,13 +7,13 @@ import {
   retryBehavior,
   vResult,
 } from "./shared.js";
+import { deprecated } from "convex-helpers/validators";
 
 // When a queue entry becomes eligible, in nanoseconds since the epoch: the
 // commit timestamp of the enqueue for ready work, or the start time for
-// scheduled work. See cursor-strategy.md.
+// scheduled work.
 const segment = v.commitTs();
-// A time on the same nanosecond scale (commit-timestamp fields read back as
-// plain int64s).
+// Epoch time in nanoseconds. CommitTs resolves to this after commiting.
 const timestamp = v.int64();
 
 export default defineSchema({
@@ -21,13 +21,10 @@ export default defineSchema({
   globals: defineTable(vConfig),
   // Singleton, only read & written by `run`.
   internalState: defineTable({
-    // @deprecated batch-worker now owns the generation guard. We keep writing
-    // `0n` for rollback compatibility with older workpool versions.
-    generation: v.optional(v.int64()),
-    // Track where we've scanned to, so we skip tombstones on re-scan. Same
-    // field as older versions used for its wall-clock cursors, so their data
-    // still validates — the values are now commit timestamps, and an older
-    // version's much smaller ones just mean "scan from the beginning".
+    /** @deprecated batch-worker now owns the generation guard. */
+    generation: deprecated,
+    // Track where we've scanned to, so we skip tombstones on re-scan.
+    // ≤ 0.4.9 used wall-clock cursors, now are commit timestamps.
     segmentCursors: v.object({
       incoming: timestamp,
       completion: timestamp,
@@ -40,8 +37,8 @@ export default defineSchema({
     // at or below it is visible to any reader of this document, so it is a
     // safe lower bound on the next run's snapshot.
     lastCommitTs: v.optional(v.commitTs()),
-    // When the loop last checked for stuck jobs, in nanoseconds. Values an
-    // older version wrote are 100ms buckets, read as long ago; harmless.
+    // When the loop last checked for stuck jobs, in nanoseconds.
+    // In ≤ 0.4.9, values were 100ms buckets, interpreted as long ago.
     lastRecovery: timestamp,
     report: v.object({
       completed: v.number(), // finished running, counts retries & failures
@@ -98,8 +95,8 @@ export default defineSchema({
     // committed out of order (a scheduled start within five minutes).
     scanTs: v.optional(v.commitTs()),
   })
-    .index("segment", ["segment"])
-    .index("scanTs", ["scanTs", "segment"]),
+    .index("scanTs", ["scanTs", "segment"])
+    .index("segment", ["segment"]),
 
   // Written by complete, read & deleted by `main`.
   pendingCompletion: defineTable({
