@@ -49,7 +49,6 @@ export const STATUS_COOLDOWN = 2 * SECOND;
 export const COOLDOWN_CHECK_INTERVAL = 200;
 
 export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
-  generation: 0n,
   segmentCursors: {
     incoming: 0n,
     completion: 0n,

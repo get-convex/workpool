@@ -79,7 +79,6 @@ describe("complete", () => {
         },
       );
       await ctx.db.insert("internalState", {
-        generation: 0n,
         segmentCursors: {
           incoming: 0n,
           completion: 0n,

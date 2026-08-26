@@ -269,7 +269,6 @@ describe("state machine", () => {
         ? toTimestamp(Date.now() - 61 * SECOND)
         : toTimestamp(Date.now());
       await ctx.db.insert("internalState", {
-        generation: 0n,
         segmentCursors: {
           incoming: 0n,
           completion: 0n,
@@ -990,7 +989,6 @@ describe("state machine", () => {
           },
         );
         await ctx.db.insert("internalState", {
-          generation: 0n,
           segmentCursors: {
             incoming: 0n,
             completion: 0n,
@@ -1093,7 +1091,6 @@ describe("state machine", () => {
         });
 
         await ctx.db.insert("internalState", {
-          generation: 0n,
           segmentCursors: {
             incoming: 0n,
             completion: 0n,
@@ -1155,7 +1152,6 @@ describe("state machine", () => {
           },
         );
         await ctx.db.insert("internalState", {
-          generation: 0n,
           segmentCursors: {
             incoming: 0n,
             completion: 0n,
@@ -1249,7 +1245,6 @@ describe("state machine", () => {
         });
 
         await ctx.db.insert("internalState", {
-          generation: 0n,
           segmentCursors: {
             incoming: 0n,
             completion: 0n,
@@ -1340,7 +1335,6 @@ describe("state machine", () => {
           },
         );
         await ctx.db.insert("internalState", {
-          generation: 0n,
           segmentCursors: {
             incoming: 0n,
             completion: 0n,
