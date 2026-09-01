@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Bump Batch Worker dependency to prevent OCC conflicts on enqueue.
+- Keeps the Batch Worker running for a 10-second cooldown while Workpool is
+  saturated, reducing enqueue retries with worker status transitions.
 
 ## 0.4.10
 

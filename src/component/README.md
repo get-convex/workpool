@@ -47,10 +47,10 @@ The loop lifecycle is owned by `@convex-dev/batch-worker`. Workpool provides a
 state, generation checks, cooldown polling, timeout wakeups, and monitor-based
 restart if the loop dies.
 
-Workpool still avoids unproductive enqueue wakeups while saturated: if
-`internalState.running.length >= maxParallelism`, enqueue skips `ping`. Sources
-that can free capacity or change existing work (`complete`, `retry`, `cancel`,
-manual kicks, and maxParallelism increases) still ping.
+When the pool is saturated (`running.length >= maxParallelism`), `getBatch` uses
+a 10-second idle cooldown instead of the normal 2 seconds. This keeps
+batch-worker's status `running` for longer at full throttle, so most enqueue
+pings are no-ops rather than racing an idle transition.
 
 ## Retention optimization strategy
 
