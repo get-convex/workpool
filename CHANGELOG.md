@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.11
 
 - Bump Batch Worker dependency to prevent OCC conflicts on enqueue.
 - Keeps the Batch Worker running for a 10-second cooldown while Workpool is
