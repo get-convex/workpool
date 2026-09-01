@@ -108,6 +108,6 @@
   "types": "./dist/client/index.d.ts",
   "module": "./dist/client/index.js",
   "dependencies": {
-    "@convex-dev/batch-worker": "^0.2.1"
+    "@convex-dev/batch-worker": "^0.2.2"
   }
 }

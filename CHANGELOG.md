@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Bump Batch Worker dependency to prevent OCC conflicts on enqueue.
+
 ## 0.4.10
 
 - Adds `vRunResult` and type-safety for passing onComplete handlers with return
