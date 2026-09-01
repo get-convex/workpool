@@ -44,6 +44,9 @@ export const RECOVERY_PERIOD_SEGMENTS = toSegment(1 * MINUTE); // how often to c
 // status, re-polling this often during that window — preserving the old loop's
 // cooldown behavior, now expressed via batch-worker's idle hints.
 export const STATUS_COOLDOWN = 2 * SECOND;
+// At full capacity, keep batch-worker's status stable longer so enqueue pings
+// generally observe `running` and no-op instead of racing an idle transition.
+export const SATURATED_STATUS_COOLDOWN = 10 * SECOND;
 export const COOLDOWN_CHECK_INTERVAL = 200;
 // Buffer applied when querying with cursors. Transactions that started
 // before ours may still be running and commit inserts at segments behind
@@ -212,7 +215,10 @@ export const getBatch = internalQuery({
     // future-scheduled work and the periodic recovery scan.
     return {
       kind: "idle" as const,
-      cooldownMs: STATUS_COOLDOWN,
+      cooldownMs:
+        running.length >= globals.maxParallelism
+          ? SATURATED_STATUS_COOLDOWN
+          : STATUS_COOLDOWN,
       pollIntervalMs: COOLDOWN_CHECK_INTERVAL,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     };

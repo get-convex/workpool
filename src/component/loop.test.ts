@@ -10,7 +10,11 @@ import {
 } from "vitest";
 import { api, components, internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
-import { RECOVERY_PERIOD_SEGMENTS } from "./loop.js";
+import {
+  RECOVERY_PERIOD_SEGMENTS,
+  SATURATED_STATUS_COOLDOWN,
+  STATUS_COOLDOWN,
+} from "./loop.js";
 import { setupTest } from "./setup.test.js";
 import {
   DEFAULT_MAX_PARALLELISM,
@@ -487,7 +491,32 @@ describe("loop", () => {
       // Nothing running and no future work → no wake-up hint.
       if (result.kind === "idle") {
         expect(result.timeoutMs).toBeUndefined();
+        expect(result.cooldownMs).toBe(STATUS_COOLDOWN);
       }
+    });
+
+    it("uses a longer idle cooldown while saturated", async () => {
+      await initialize({ maxParallelism: 1 });
+      await enqueueWork();
+      await runLoop();
+
+      const result = await t.query(internal.loop.getBatch, {
+        name: WORKER_NAME,
+      });
+      assert(result.kind === "idle");
+      expect(result.cooldownMs).toBe(SATURATED_STATUS_COOLDOWN);
+    });
+
+    it("uses the normal idle cooldown while capacity remains", async () => {
+      await initialize({ maxParallelism: 2 });
+      await enqueueWork();
+      await runLoop();
+
+      const result = await t.query(internal.loop.getBatch, {
+        name: WORKER_NAME,
+      });
+      assert(result.kind === "idle");
+      expect(result.cooldownMs).toBe(STATUS_COOLDOWN);
     });
 
     it("returns a work batch when a pending start is ready", async () => {

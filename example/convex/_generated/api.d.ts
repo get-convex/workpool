@@ -20,6 +20,7 @@ import type * as test_scenarios_bigArgs from "../test/scenarios/bigArgs.js";
 import type * as test_scenarios_bigContext from "../test/scenarios/bigContext.js";
 import type * as test_scenarios_bigReturnTypes from "../test/scenarios/bigReturnTypes.js";
 import type * as test_scenarios_burstyBatches from "../test/scenarios/burstyBatches.js";
+import type * as test_scenarios_enqueueOcc from "../test/scenarios/enqueueOcc.js";
 import type * as test_scenarios_noisyNeighbor from "../test/scenarios/noisyNeighbor.js";
 import type * as test_scenarios_overhead from "../test/scenarios/overhead.js";
 import type * as test_scenarios_sustained from "../test/scenarios/sustained.js";
@@ -45,6 +46,7 @@ declare const fullApi: ApiFromModules<{
   "test/scenarios/bigContext": typeof test_scenarios_bigContext;
   "test/scenarios/bigReturnTypes": typeof test_scenarios_bigReturnTypes;
   "test/scenarios/burstyBatches": typeof test_scenarios_burstyBatches;
+  "test/scenarios/enqueueOcc": typeof test_scenarios_enqueueOcc;
   "test/scenarios/noisyNeighbor": typeof test_scenarios_noisyNeighbor;
   "test/scenarios/overhead": typeof test_scenarios_overhead;
   "test/scenarios/sustained": typeof test_scenarios_sustained;
