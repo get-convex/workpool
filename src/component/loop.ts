@@ -593,8 +593,16 @@ async function beginWorkBatch(
     scheduledId: Id<"_scheduled_functions">;
     started: number;
   }> = [];
+  const hasOnSuccess = (work: Doc<"work">) =>
+    Boolean(
+      work.onComplete?.kind === "byOutcome" && work.onComplete.onSuccessHandle,
+    );
+  // Queries with onSuccess need the mutation wrapper so the callback sees
+  // the same snapshot as the query. Other queries can use the batch action.
   const actionOrQuery = starts.filter(
-    ({ work }) => work.fnType === "action" || work.fnType === "query",
+    ({ work }) =>
+      work.fnType === "action" ||
+      (work.fnType === "query" && !hasOnSuccess(work)),
   );
   for (let i = 0; i < actionOrQuery.length; i += START_BATCH_SIZE) {
     const batch = actionOrQuery.slice(i, i + START_BATCH_SIZE);
@@ -621,7 +629,9 @@ async function beginWorkBatch(
   }
 
   const mutationStarts = starts.filter(
-    ({ work }) => work.fnType === "mutation",
+    ({ work }) =>
+      work.fnType === "mutation" ||
+      (work.fnType === "query" && hasOnSuccess(work)),
   );
   for (const { work, lagMs } of mutationStarts) {
     const scheduledId = await ctx.scheduler.runAfter(
@@ -634,7 +644,8 @@ async function beginWorkBatch(
         payloadId: work.payloadId,
         logLevel,
         attempt: work.attempts,
-        fnType: "mutation",
+        fnType: work.fnType as "query" | "mutation",
+        hasOnSuccess: hasOnSuccess(work),
       },
     );
     recordStarted(console, work, lagMs, scheduledId);

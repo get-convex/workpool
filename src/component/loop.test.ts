@@ -251,6 +251,46 @@ describe("loop", () => {
       expect(mutationRunning.scheduledId).not.toBe(actionRunning.scheduledId);
     });
 
+    it.each(["query", "mutation"] as const)(
+      "keeps %s work with onSuccess in a mutation transaction",
+      async (fnType) => {
+        await initialize();
+        const workId = await enqueueWork({
+          fnType,
+          onComplete: { kind: "byOutcome", onSuccessHandle: "success_handle" },
+        });
+        const ordinaryQueryId = await enqueueWork({
+          fnType: "query",
+          onComplete: { kind: "byOutcome", onFailureHandle: "failure_handle" },
+        });
+
+        await runLoop();
+
+        const { running } = await observe();
+        const work = running.find((r) => r.workId === workId);
+        const ordinaryQuery = running.find((r) => r.workId === ordinaryQueryId);
+        assert(work);
+        assert(ordinaryQuery);
+        await t.run(async (ctx) => {
+          const scheduled = await ctx.db.system.get(
+            "_scheduled_functions",
+            work.scheduledId,
+          );
+          expect(scheduled).toMatchObject({
+            name: "worker:runMutationWrapper",
+            args: [
+              expect.objectContaining({ workId, fnType, hasOnSuccess: true }),
+            ],
+          });
+          const batched = await ctx.db.system.get(
+            "_scheduled_functions",
+            ordinaryQuery.scheduledId,
+          );
+          expect(batched?.name).toBe("worker:runBatch");
+        });
+      },
+    );
+
     it("chunks action and query starts into batches of 32", async () => {
       await initialize({ maxParallelism: 64 });
       for (let i = 0; i < 33; i++) {
