@@ -85,6 +85,10 @@ export function snapshotTs(): bigint {
   return jsonToConvex(JSON.parse(json)) as bigint;
 }
 
+export function maxBigint(a: bigint, b: bigint): bigint {
+  return a > b ? a : b;
+}
+
 // Nanoseconds for the year 2000: far above any 100ms bucket an older version
 // could have written (~1.8e10 today, ~1.9e10 even four years out) and far below
 // any timestamp this one can produce, since `boundScheduledTime` keeps

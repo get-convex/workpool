@@ -22,7 +22,9 @@ import {
   vOnCompleteFnContext,
   retryBehavior,
   status as statusValidator,
+  maxBigint,
   MINUTE,
+  snapshotTs,
   toTimestamp,
 } from "./shared.js";
 import { recordEnqueued } from "./stats.js";
@@ -137,19 +139,27 @@ const MAX_PACKED = 256;
  *
  * Ready-now entries are ordered by this transaction's commit timestamp, which
  * can't land behind the loop's cursor. Scheduled entries are ordered by their
- * start time, invisible to the loop until due — but such a document could
- * commit *behind* the cursor (if the enqueue takes longer to commit than the
- * delay), so it also records its commit stamp in `scanTs`; the loop sweeps
- * that index in commit order and starts anything the cursor passed over.
+ * start time, ineligible until the loop's snapshot reaches it — but such a
+ * document could commit *behind* the cursor (if the enqueue takes longer to
+ * commit than the delay), so it also records its commit stamp in `scanTs`; the
+ * loop sweeps that index in commit order and starts anything the cursor passed
+ * over.
+ *
+ * No key is ever below its writer's snapshot: the commit stamp is above it by
+ * definition, and a start time the commit clock has already passed is raised
+ * to it (as the loop does for the keys it writes). So an entry can only land
+ * behind the cursor by committing while the loop was mid-iteration, never by
+ * the wall clock trailing the commit clock.
  */
 async function insertPendingStarts(
   ctx: MutationCtx,
   entries: { workId: Id<"work">; runAt: number }[],
 ) {
   const now = Date.now();
+  const floor = snapshotTs();
   const groups = new Map<bigint | "now", Id<"work">[]>();
   for (const { workId, runAt } of entries) {
-    const key = runAt > now ? toTimestamp(runAt) : "now";
+    const key = runAt > now ? maxBigint(toTimestamp(runAt), floor) : "now";
     const group = groups.get(key);
     if (group) group.push(workId);
     else groups.set(key, [workId]);

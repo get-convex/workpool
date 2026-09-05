@@ -28,9 +28,11 @@
   stamp is at or below the snapshot, so it's eligible as soon as it's visible; a
   scheduled entry is due once the commit clock passes its start time; and since
   nothing committing later is stamped at or below the snapshot, the cursor can
-  rest on the last key it handled. The design makes no assumptions about how
-  wall clocks relate to the commit timestamp clock — skew between them only
-  shifts when scheduled work and retries are considered due.
+  rest on the last key it handled. Every key written — enqueue, retry, or re-key
+  — is raised to at least its writer's snapshot, so nothing is ever keyed below
+  what was already visible when it was written. The design makes no assumptions
+  about how wall clocks relate to the commit timestamp clock — skew between them
+  only shifts when scheduled work and retries are considered due.
 - Upgrading in place is safe, including for work that hasn't come due yet. A
   `pendingStart` an older version wrote holds a 100ms bucket — eight orders of
   magnitude below a nanosecond timestamp — so the loop recognizes it, reads the

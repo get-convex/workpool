@@ -22,6 +22,7 @@ import {
   DEFAULT_MAX_PARALLELISM,
   fromTimestamp,
   legacyRunAt,
+  maxBigint,
   MINUTE,
   SECOND,
   type RunResult,
@@ -736,10 +737,6 @@ async function handleRecovery(
     const batch = jobs.slice(i, i + RECOVERY_BATCH_SIZE);
     await ctx.scheduler.runAfter(0, internal.recovery.recover, { jobs: batch });
   }
-}
-
-function maxBigint(a: bigint, b: bigint) {
-  return a > b ? a : b;
 }
 
 /**
