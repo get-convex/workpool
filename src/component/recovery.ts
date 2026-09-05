@@ -2,6 +2,7 @@ import { type Infer, v } from "convex/values";
 import { internalMutation, type MutationCtx } from "./_generated/server.js";
 import { createLogger } from "./logging.js";
 import { type CompleteJob, completeHandler } from "./complete.js";
+import { MINUTE } from "./shared.js";
 
 const recoveryArgs = v.object({
   jobs: v.array(
@@ -12,7 +13,18 @@ const recoveryArgs = v.object({
       started: v.number(),
     }),
   ),
+  // Time at which the main loop scheduled this recovery to run (≈ Date.now()
+  // at scheduling time, since we use runAfter(0, ...)). We use the delta vs.
+  // now to estimate how backlogged the scheduler is, then judge "stuck"
+  // relative to that lag — see MUTATION_STUCK_THRESHOLD_MS below.
+  scheduledAt: v.optional(v.number()),
 });
+
+// A mutation that's been "pending" in the scheduler for this long beyond the
+// current scheduler lag is treated as stuck. We cancel and re-enqueue it so
+// it can free up a workpool slot — staying pending past the scheduler's own
+// backlog usually means a doc-write conflict the scheduler keeps losing.
+const MUTATION_STUCK_THRESHOLD_MS = 10 * MINUTE;
 
 /**
  * This can run when things fail because of server failures / restarts, or when
@@ -37,10 +49,12 @@ export const recover = internalMutation({
 // only exported for testing
 export async function recoveryHandler(
   ctx: MutationCtx,
-  { jobs }: Infer<typeof recoveryArgs>,
+  { jobs, scheduledAt }: Infer<typeof recoveryArgs>,
 ) {
   const globals = await ctx.db.query("globals").unique();
   const console = createLogger(globals?.logLevel);
+  // If scheduledAt is omitted (older callers, or tests), treat lag as 0.
+  const schedulerLagMs = scheduledAt ? Math.max(0, Date.now() - scheduledAt) : 0;
   const completionJobs: CompleteJob[] = [];
   for (let i = 0; i < jobs.length; i++) {
     const job = jobs[i];
@@ -95,6 +109,28 @@ export async function recoveryHandler(
         completionJobs.push({
           workId: job.workId,
           runResult: { kind: "failed", error: "Canceled via scheduler" },
+          attempt: job.attempt,
+        });
+        break;
+      }
+      case "pending": {
+        // We only re-enqueue mutations. Actions sitting in pending usually
+        // mean an overloaded scheduler — cancelling them doesn't help.
+        if (work.fnType !== "mutation") {
+          break;
+        }
+        const pendingMs = Date.now() - scheduled.scheduledTime;
+        if (pendingMs < MUTATION_STUCK_THRESHOLD_MS + schedulerLagMs) {
+          break;
+        }
+        console.warn(
+          `${preamble} pending in scheduler for ${pendingMs}ms ` +
+            `(lag ${schedulerLagMs}ms, threshold ${MUTATION_STUCK_THRESHOLD_MS}ms) — re-enqueueing`,
+        );
+        await ctx.scheduler.cancel(scheduled._id);
+        completionJobs.push({
+          workId: job.workId,
+          runResult: { kind: "stuckInScheduler" },
           attempt: job.attempt,
         });
         break;
