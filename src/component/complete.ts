@@ -126,7 +126,15 @@ export async function completeHandler(
         work.attempts < maxAttempts;
       if (!retry) {
         let scheduledId = undefined;
-        if (work.onComplete) {
+        // Workers and recovery both dispatch terminal callbacks here.
+        const fnHandle =
+          work.onComplete &&
+          ("fnHandle" in work.onComplete
+            ? work.onComplete.fnHandle
+            : job.runResult.kind === "failed"
+              ? work.onComplete.onStatusHandle.failed
+              : undefined);
+        if (work.onComplete && fnHandle) {
           try {
             // Retrieve large context if stored separately
             let context = work.onComplete.context;
@@ -137,7 +145,7 @@ export async function completeHandler(
               }
             }
 
-            const handle = work.onComplete.fnHandle as FunctionHandle<
+            const handle = fnHandle as FunctionHandle<
               "mutation",
               OnCompleteArgs,
               void

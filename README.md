@@ -147,6 +147,29 @@ export const emailSent = pool.defineOnComplete<DataModel>({
 });
 ```
 
+If you only need to react to terminal failures, use `onFailure` instead of
+`onComplete`. It accepts the same handler and context:
+
+```ts
+await pool.enqueueAction(
+  ctx,
+  internal.email.sendEmail,
+  { to, subject, body },
+  {
+    onFailure: internal.email.emailSent,
+    context: { emailType, userId },
+  },
+);
+```
+
+`onFailure` runs after retries are exhausted, or immediately after a
+`NonRetryableError`. It is skipped for successful jobs and jobs canceled through
+the Workpool API. Canceling a scheduled function directly in the dashboard is
+treated as a failure by recovery and can trigger retries and `onFailure`. Like
+`onComplete`, it runs in a separate transaction from the work. A callback error
+does not retry the original work. Use `onComplete` when you also need success or
+cancellation notifications; specifying both options is an error.
+
 ### Idempotency
 
 Idempotent actions are actions that can be run multiple times safely. This
@@ -310,7 +333,11 @@ options include:
   set to `true`, it will use the `defaultRetryBehavior`. If it's set to a custom
   config, it will use that (and do retries).
 - `onComplete`: A mutation to run after the function finishes.
-- `context`: Any data you want to pass to the `onComplete` mutation.
+- `onFailure`: A mutation to run after a terminal failure, using the same
+  arguments as `onComplete`. Not called on success or cancellation. Cannot be
+  combined with `onComplete`.
+- `context`: Any data you want to pass to the `onComplete` or `onFailure`
+  mutation.
 - `runAt` and `runAfter`: Similar to `ctx.scheduler.run*`, allows you to
   schedule the work to run later. By default it's immediate.
 
