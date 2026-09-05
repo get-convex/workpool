@@ -109,10 +109,18 @@ export type RunResult<Returns = unknown> =
       kind: "canceled";
     };
 
-export const vOnCompleteFnContext = v.object({
-  fnHandle: v.string(), // mutation
-  context: v.optional(v.any()),
-});
+// Keep the legacy handle shape for existing clients and queued work. The union
+// rejects combining an all-outcomes handler with handlers for specific outcomes.
+export const vOnCompleteFnContext = v.union(
+  v.object({
+    fnHandle: v.string(), // mutation
+    context: v.optional(v.any()),
+  }),
+  v.object({
+    onStatusHandle: v.object({ failed: v.string() }), // mutations
+    context: v.optional(v.any()),
+  }),
+);
 
 export type OnCompleteArgs = {
   /**
