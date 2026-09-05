@@ -65,14 +65,6 @@ export function fromTimestamp(timestamp: bigint): number {
   );
 }
 
-/**
- * The exclusive upper bound on entries eligible at `ms` — the end of that
- * millisecond, not the start of it.
- */
-export function endOfMs(ms: number): bigint {
-  return toTimestamp(Math.floor(ms) + 1);
-}
-
 declare const Convex: {
   syscall: (op: string, jsonArgs: string) => string;
 };

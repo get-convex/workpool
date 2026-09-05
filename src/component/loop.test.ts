@@ -131,8 +131,14 @@ describe("loop", () => {
    * Drive one loop iteration the way batch-worker does: get the next batch,
    * and if there's work, run the worker mutation with it. Returns the batch
    * result so tests can inspect the idle/work decision.
+   *
+   * Starts with an empty commit. The loop's eligibility bound is its snapshot
+   * timestamp, which in convex-test is the latest commit, so an advance of the
+   * fake clock has to reach the database the way batch-worker's own commits do
+   * in production before scheduled work can come due.
    */
   async function runLoop() {
+    await t.run(async () => {});
     const result = await t.query(internal.loop.getBatch, {
       name: WORKER_NAME,
     });
@@ -1024,28 +1030,30 @@ describe("loop", () => {
       expect((await observe()).pendingStart).toHaveLength(0);
     });
 
-    it("caps the cursor at the snapshot when starting wall-keyed work", async () => {
+    it("makes scheduled work due by the commit clock, not the wall clock", async () => {
       await initialize();
       const runAt = Date.now() + SECOND;
       const workId = await enqueueWork({}, { runAt });
       await runLoop(); // sweep verifies the entry
       vi.advanceTimersByTime(SECOND);
-      // The commit clock lags the wall clock: this run's snapshot sits below
-      // the entry's wall-clock key, though the key is due.
-      const snapshot = toTimestamp(runAt) - toTimestamp(SECOND) / 2n;
-      await withSnapshotTs(snapshot, () => runLoop()); // starts it
 
-      const o = await observe();
-      expect(o.running.map((r) => r.workId)).toEqual([workId]);
-      // The cursor stops at the snapshot, not at the wall-clock key: a commit
-      // racing this iteration could land between the two, and nothing relates
-      // the two clocks.
-      expect(o.segmentCursors!.incoming).toBe(snapshot);
+      // The wall clock says due, but the snapshot hasn't reached the key: the
+      // entry is left alone, and the cursor stays below it. Advancing to the
+      // wall-clock key here would let a commit stamped between the two clocks
+      // land behind the cursor.
+      const early = toTimestamp(runAt) - 1n;
+      const held = await withSnapshotTs(early, () => runLoop());
+      expect(held.kind).toBe("idle");
+      let o = await observe();
+      expect(o.running).toHaveLength(0);
+      expect(o.segmentCursors!.incoming).toBeLessThan(toTimestamp(runAt));
 
-      // Work committing after that snapshot is still found.
-      const laterId = await enqueueWork();
+      // Once the snapshot passes the key, the entry starts and the cursor can
+      // rest on it: nothing committing later is stamped at or below it.
       await runLoop();
-      expect((await observe()).running.map((r) => r.workId)).toContain(laterId);
+      o = await observe();
+      expect(o.running.map((r) => r.workId)).toEqual([workId]);
+      expect(o.segmentCursors!.incoming).toBe(toTimestamp(runAt));
     });
   });
 
@@ -1068,7 +1076,7 @@ describe("loop", () => {
       await simulateCompletion(workId, { kind: "failed", error: "boom" }, 0);
       // A ready entry enqueued after the completion: its commit timestamp is
       // above the retry's `Date.now()`-derived one, so a cursor advancing to
-      // it in the same iteration would strand a same-millisecond retry key.
+      // it in the same iteration would strand a retry keyed by the wall clock.
       const laterId = await enqueueWork();
 
       await runLoop();
@@ -1076,35 +1084,27 @@ describe("loop", () => {
       expect(o.running.map((r) => r.workId)).toEqual([laterId]);
       const retry = o.pendingStart.find((p) => p.workIds?.includes(workId));
       assert(retry);
+      // Raised to the snapshot instead, so it's eligible next iteration.
       expect(retry.segment).toBeGreaterThanOrEqual(o.segmentCursors!.incoming);
-
-      // Keyed at the next millisecond, so it starts as soon as that arrives.
-      vi.advanceTimersByTime(1);
       await runLoop();
       o = await observe();
       expect(o.pendingStart).toHaveLength(0);
       expect(o.running.map((r) => r.workId)).toContain(workId);
     });
 
-    it("keys a sub-millisecond runAt to the next whole millisecond", async () => {
+    it("keeps a sub-millisecond runAt exact and starts it within a millisecond", async () => {
       await initialize();
-      // Truncated to whole milliseconds this `runAt` would be readable while
-      // `isDue` still says no; rounded up, it's invisible until the first
-      // millisecond the clock can call it due.
       const runAt = Date.now() + 0.5;
       const workId = await enqueueWork({}, { runAt });
-      const readyId = await enqueueWork();
-
-      await runLoop();
-      const o = await observe();
-      expect(o.running.map((r) => r.workId)).toEqual([readyId]);
-      const entry = o.pendingStart.find((p) => p.workIds?.includes(workId));
+      const entry = (await observe()).pendingStart.find((p) =>
+        p.workIds?.includes(workId),
+      );
       assert(entry);
-      expect(entry.segment).toBe(toTimestamp(Math.ceil(runAt)));
+      expect(entry.segment).toBe(toTimestamp(runAt));
 
       vi.advanceTimersByTime(1);
       await runLoop();
-      expect((await observe()).running.map((r) => r.workId)).toContain(workId);
+      expect((await observe()).running.map((r) => r.workId)).toEqual([workId]);
     });
   });
 

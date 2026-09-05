@@ -23,11 +23,14 @@
 - A batch enqueue packs entries sharing a start time into one `pendingStart`
   document (up to 256), so it writes a few documents rather than hundreds;
   starting or canceling an entry patches it out of its document.
-- The loop's cursor never advances past the snapshot timestamp its iteration
-  read at (`ctx.meta.getSnapshotTs()`): nothing that commits later is stamped at
-  or below it, so a scheduled entry starting at its wall-clock time can't push
-  the cursor ahead of a racing enqueue's commit — the design makes no
-  assumptions about how wall clocks relate to the commit timestamp clock.
+- The loop reads at a snapshot timestamp (`ctx.meta.getSnapshotTs()`), which is
+  both its eligibility bound and its cursor's limit. A ready entry's commit
+  stamp is at or below the snapshot, so it's eligible as soon as it's visible; a
+  scheduled entry is due once the commit clock passes its start time; and since
+  nothing committing later is stamped at or below the snapshot, the cursor can
+  rest on the last key it handled. The design makes no assumptions about how
+  wall clocks relate to the commit timestamp clock — skew between them only
+  shifts when scheduled work and retries are considered due.
 - Upgrading in place is safe, including for work that hasn't come due yet. A
   `pendingStart` an older version wrote holds a 100ms bucket — eight orders of
   magnitude below a nanosecond timestamp — so the loop recognizes it, reads the
