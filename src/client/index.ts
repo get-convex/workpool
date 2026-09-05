@@ -462,61 +462,83 @@ export type EnqueueOptions<Context = unknown, ReturnValue = unknown> = {
    */
   name?: string;
   /**
-   * A mutation to run after the function succeeds, fails, or is canceled.
-   * The context type is for your use, feel free to provide a validator for it.
-   * e.g.
-   * ```ts
-   * export const completion = workpool.defineOnComplete({
-   *   context: v.string(),
-   *   handler: async (ctx, {workId, context, result}) => {
-   *     // context has been validated as a string
-   *     // ... do something with the result
-   *   },
-   * });
-   * ```
-   * or more manually:
-   * ```ts
-   * export const completion = internalMutation({
-   *  args: vOnCompleteArgs(v.string()),
-   *  handler: async (ctx, args) => {
-   *    console.log(args.result, "Got Context back -> ", args.context, Date.now() - args.context);
-   *  },
-   * });
-   * ```
-   */
-  onComplete?: FunctionReference<
-    "mutation",
-    FunctionVisibility,
-    OnCompleteArgs<Context, ReturnValue>
-  > | null;
-
-  /**
-   * A context object to pass to the `onComplete` mutation.
+   * A context object to pass to the `onComplete` or `onFailure` mutation.
    * Useful for passing data from the enqueue site to the onComplete site.
    */
   context?: Context;
 } & (
   | {
       /**
-       * The time (ms since epoch) to run the action at.
-       * If not provided, the action will be run as soon as possible.
-       * Note: this is advisory only. It may run later.
+       * A mutation to run after the function succeeds, fails, or is canceled.
+       * Cannot be used together with `onFailure`.
+       * The context type is for your use, feel free to provide a validator for it.
+       * e.g.
+       * ```ts
+       * export const completion = workpool.defineOnComplete({
+       *   context: v.string(),
+       *   handler: async (ctx, {workId, context, result}) => {
+       *     // context has been validated as a string
+       *     // ... do something with the result
+       *   },
+       * });
+       * ```
+       * or more manually:
+       * ```ts
+       * export const completion = internalMutation({
+       *  args: vOnCompleteArgs(v.string()),
+       *  handler: async (ctx, args) => {
+       *    console.log(args.result, "Got Context back -> ", args.context, Date.now() - args.context);
+       *  },
+       * });
+       * ```
        */
-      runAt?: number;
-
-      runAfter?: never;
+      onComplete?: FunctionReference<
+        "mutation",
+        FunctionVisibility,
+        OnCompleteArgs<Context, ReturnValue>
+      > | null;
+      onFailure?: never;
     }
   | {
       /**
-       * The number of milliseconds to run the action after.
-       * If not provided, the action will be run as soon as possible.
-       * Note: this is advisory only. It may run later.
+       * A mutation to run when the function fails with no retries remaining,
+       * or throws a NonRetryableError. Not called on success or cancellation
+       * through the Workpool API. Recovery treats direct scheduler cancellation
+       * as a failure, which can trigger retries and this callback.
+       * Uses the same arguments and separate transaction as `onComplete`,
+       * so an existing `onComplete` handler can be passed here unchanged.
+       * Cannot be used together with `onComplete`.
        */
-      runAfter?: number;
-
-      runAt?: never;
+      onFailure?: FunctionReference<
+        "mutation",
+        FunctionVisibility,
+        OnCompleteArgs<Context, ReturnValue>
+      > | null;
+      onComplete?: never;
     }
-);
+) &
+  (
+    | {
+        /**
+         * The time (ms since epoch) to run the action at.
+         * If not provided, the action will be run as soon as possible.
+         * Note: this is advisory only. It may run later.
+         */
+        runAt?: number;
+
+        runAfter?: never;
+      }
+    | {
+        /**
+         * The number of milliseconds to run the action after.
+         * If not provided, the action will be run as soon as possible.
+         * Note: this is advisory only. It may run later.
+         */
+        runAfter?: number;
+
+        runAt?: never;
+      }
+  );
 
 export type OnCompleteArgs<Context = unknown, Returns = unknown> = {
   /**
@@ -566,6 +588,9 @@ async function enqueueArgs<Context, ReturnType>(
         Partial<Config> & { retryBehavior?: RetryBehavior })
     | undefined,
 ) {
+  if (opts?.onComplete && opts.onFailure) {
+    throw new Error("Cannot define both onComplete and onFailure handlers.");
+  }
   const [fnHandle, fnName] =
     typeof fn === "string" && fn.startsWith("function://")
       ? [fn, opts?.name ?? fn]
@@ -578,7 +603,14 @@ async function enqueueArgs<Context, ReturnType>(
           fnHandle: await createFunctionHandle(opts.onComplete),
           context: opts.context,
         }
-      : undefined,
+      : opts?.onFailure
+        ? {
+            onStatusHandle: {
+              failed: await createFunctionHandle(opts.onFailure),
+            },
+            context: opts.context,
+          }
+        : undefined,
     runAt: getRunAt(opts),
     retryBehavior: opts?.retryBehavior,
     config: {

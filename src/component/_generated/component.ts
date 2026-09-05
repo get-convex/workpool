@@ -69,7 +69,9 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           fnHandle: string;
           fnName: string;
           fnType: "action" | "mutation" | "query";
-          onComplete?: { context?: any; fnHandle: string };
+          onComplete?:
+            | { context?: any; fnHandle: string }
+            | { context?: any; onStatusHandle: { failed: string } };
           retryBehavior?: {
             base: number;
             initialBackoffMs: number;
@@ -93,7 +95,9 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             fnHandle: string;
             fnName: string;
             fnType: "action" | "mutation" | "query";
-            onComplete?: { context?: any; fnHandle: string };
+            onComplete?:
+              | { context?: any; fnHandle: string }
+              | { context?: any; onStatusHandle: { failed: string } };
             retryBehavior?: {
               base: number;
               initialBackoffMs: number;

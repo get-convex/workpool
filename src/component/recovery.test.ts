@@ -1,4 +1,6 @@
 import { convexTest } from "convex-test";
+import { createFunctionHandle, makeFunctionReference } from "convex/server";
+import { v } from "convex/values";
 import type {
   DocumentByName,
   GenericDatabaseReader,
@@ -18,15 +20,32 @@ import {
 } from "vitest";
 import { internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
-import type { MutationCtx } from "./_generated/server.js";
+import { internalMutation, type MutationCtx } from "./_generated/server.js";
 import batchWorker from "@convex-dev/batch-worker/test";
 import { recoveryHandler } from "./recovery.js";
 import schema from "./schema.js";
 import { modules } from "./setup.test.js";
+import { type OnCompleteArgs, vResult } from "./shared.js";
 
 describe("recovery", () => {
+  const callback = vi.fn<(args: OnCompleteArgs) => void>();
+  const callbackRef = makeFunctionReference<"mutation", OnCompleteArgs>(
+    "recoveryCallbacks:complete",
+  );
   async function setupTest() {
-    const t = convexTest(schema, modules);
+    const t = convexTest(schema, {
+      ...modules,
+      "./recoveryCallbacks.ts": async () => ({
+        complete: internalMutation({
+          args: {
+            workId: v.id("work"),
+            context: v.any(),
+            result: vResult,
+          },
+          handler: async (_ctx, args) => callback(args),
+        }),
+      }),
+    });
     batchWorker.register(t);
     return t;
   }
@@ -64,6 +83,7 @@ describe("recovery", () => {
 
   beforeEach(async () => {
     vi.useFakeTimers();
+    callback.mockClear();
     t = await setupTest();
 
     // Set up globals for logging
@@ -78,6 +98,65 @@ describe("recovery", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
+
+  describe.each(["onComplete", "onFailure"] as const)(
+    "%s callbacks",
+    (mode) => {
+      it.each([
+        ["missing", "Scheduled job not found"],
+        ["failed", "Function execution failed"],
+        ["canceled", "Canceled via scheduler"],
+      ] as const)("runs once for a %s scheduled job", async (state, error) => {
+        const job = await t.run(async (ctx) => {
+          const handle = await createFunctionHandle(callbackRef);
+          const workId = await makeDummyWork(ctx, {
+            onComplete:
+              mode === "onComplete"
+                ? { fnHandle: handle, context: { key: state } }
+                : {
+                    onStatusHandle: { failed: handle },
+                    context: { key: state },
+                  },
+          });
+          const scheduledId = await makeDummyScheduledFunction(ctx, workId);
+          // Prevent the placeholder worker from running when callbacks are drained.
+          await ctx.scheduler.cancel(scheduledId);
+          return { workId, scheduledId, attempt: 0, started: Date.now() };
+        });
+        await t.run(async (ctx) => {
+          const scheduled = await ctx.db.system.get(
+            "_scheduled_functions",
+            job.scheduledId,
+          );
+          assert(scheduled);
+          // Only emulate the scheduler state; recovery and callback dispatch run
+          // normally, including scheduling and executing the callback mutation.
+          ctx.db.system.get = patchedSystemGet(ctx.db, {
+            [job.scheduledId]:
+              state === "missing"
+                ? null
+                : {
+                    ...scheduled,
+                    state:
+                      state === "failed"
+                        ? { kind: state, error }
+                        : { kind: state },
+                  },
+          });
+          await recoveryHandler(ctx, { jobs: [job] });
+        });
+        // A repeated recovery scan must not dispatch the callback again.
+        await t.mutation(internal.recovery.recover, { jobs: [job] });
+        await t.finishAllScheduledFunctions(vi.runAllTimers);
+        expect(callback).toHaveBeenCalledExactlyOnceWith({
+          workId: job.workId,
+          context: { key: state },
+          result: { kind: "failed", error },
+        });
+        expect(await t.run((ctx) => ctx.db.get("work", job.workId))).toBeNull();
+      });
+    },
+  );
 
   describe("recover", () => {
     it("should skip jobs that already have a pendingCompletion", async () => {
