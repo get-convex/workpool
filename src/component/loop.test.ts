@@ -1,4 +1,5 @@
 import type { WithoutSystemFields } from "convex/server";
+import { convexToJson } from "convex/values";
 import {
   afterEach,
   assert,
@@ -139,6 +140,34 @@ describe("loop", () => {
       await t.mutation(internal.loop.run, result.batch);
     }
     return result;
+  }
+
+  /**
+   * Run `fn` with the snapshot-timestamp syscall answering `ts` instead of
+   * convex-test's real value — e.g. to simulate the commit clock lagging the
+   * wall clock. Safe as long as `ts` is at or below the real one.
+   */
+  async function withSnapshotTs<T>(ts: bigint, fn: () => Promise<T>) {
+    type Syscall = (op: string, args: string) => string;
+    const convex = (globalThis as unknown as { Convex: object }).Convex;
+    // convex-test defines `syscall` as a getter resolving the current test's
+    // context; wrap what it resolves to rather than replacing it.
+    const original = Object.getOwnPropertyDescriptor(convex, "syscall")!;
+    Object.defineProperty(convex, "syscall", {
+      configurable: true,
+      get: (): Syscall => {
+        const real = original.get!.call(convex) as Syscall;
+        return (op, args) =>
+          op === "1.0/getSnapshotTs"
+            ? JSON.stringify(convexToJson(ts))
+            : real(op, args);
+      },
+    });
+    try {
+      return await fn();
+    } finally {
+      Object.defineProperty(convex, "syscall", original);
+    }
   }
 
   /** Pretend a worker finished a job by inserting pendingCompletion. */
@@ -840,8 +869,8 @@ describe("loop", () => {
       // One document for the four ready entries, one for the scheduled one.
       let o = await observe();
       expect(o.pendingStart).toHaveLength(2);
-      const ready = o.pendingStart.find((p) => p.scheduled === undefined)!;
-      const scheduled = o.pendingStart.find((p) => p.scheduled === true)!;
+      const ready = o.pendingStart.find((p) => p.scanTs === undefined)!;
+      const scheduled = o.pendingStart.find((p) => p.scanTs !== undefined)!;
       expect(ready.workIds).toEqual(ids.slice(0, 4));
       expect(scheduled.workIds).toEqual([ids[4]]);
       expect(scheduled.segment).toBe(toTimestamp(runAt));
@@ -886,7 +915,6 @@ describe("loop", () => {
         const pendingStartId = await ctx.db.insert("pendingStart", {
           workIds: [workId],
           segment: cursor - 1n,
-          scheduled: true,
           scanTs: ctx.db.vars.commitTs,
         });
         await ctx.db.patch("work", workId, { pendingStartId });
@@ -963,7 +991,6 @@ describe("loop", () => {
         const pendingStartId = await ctx.db.insert("pendingStart", {
           workIds: ids,
           segment: cursor - 1n,
-          scheduled: true,
           scanTs: ctx.db.vars.commitTs,
         });
         await Promise.all(
@@ -997,20 +1024,28 @@ describe("loop", () => {
       expect((await observe()).pendingStart).toHaveLength(0);
     });
 
-    it("caps the cursor at observed commit stamps when starting wall-keyed work", async () => {
+    it("caps the cursor at the snapshot when starting wall-keyed work", async () => {
       await initialize();
       const runAt = Date.now() + SECOND;
       const workId = await enqueueWork({}, { runAt });
       await runLoop(); // sweep verifies the entry
       vi.advanceTimersByTime(SECOND);
-      await runLoop(); // starts it, keyed at its start time
+      // The commit clock lags the wall clock: this run's snapshot sits below
+      // the entry's wall-clock key, though the key is due.
+      const snapshot = toTimestamp(runAt) - toTimestamp(SECOND) / 2n;
+      await withSnapshotTs(snapshot, () => runLoop()); // starts it
 
       const o = await observe();
       expect(o.running.map((r) => r.workId)).toEqual([workId]);
-      // The cursor stops at the freshest commit stamp this run had seen, not
-      // at the wall-clock key: a commit racing this iteration could land
-      // below that key, and nothing relates the two clocks.
-      expect(o.segmentCursors!.incoming).toBeLessThan(toTimestamp(runAt));
+      // The cursor stops at the snapshot, not at the wall-clock key: a commit
+      // racing this iteration could land between the two, and nothing relates
+      // the two clocks.
+      expect(o.segmentCursors!.incoming).toBe(snapshot);
+
+      // Work committing after that snapshot is still found.
+      const laterId = await enqueueWork();
+      await runLoop();
+      expect((await observe()).running.map((r) => r.workId)).toContain(laterId);
     });
   });
 

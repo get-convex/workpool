@@ -139,9 +139,8 @@ const MAX_PACKED = 256;
  * can't land behind the loop's cursor. Scheduled entries are ordered by their
  * start time, invisible to the loop until due — but such a document could
  * commit *behind* the cursor (if the enqueue takes longer to commit than the
- * delay), so it's marked `scheduled` and records its commit stamp in
- * `scanTs`; the loop sweeps that index in commit order and starts anything
- * the cursor passed over.
+ * delay), so it also records its commit stamp in `scanTs`; the loop sweeps
+ * that index in commit order and starts anything the cursor passed over.
  */
 async function insertPendingStarts(
   ctx: MutationCtx,
@@ -196,7 +195,6 @@ async function insertPendingStarts(
       const pendingStartId = await ctx.db.insert("pendingStart", {
         workIds: chunk,
         segment: key === "now" ? ctx.db.vars.commitTs : key,
-        ...(key === "now" ? {} : { scheduled: true }),
         ...(key !== "now" && key <= scanCutoff
           ? { scanTs: ctx.db.vars.commitTs }
           : {}),

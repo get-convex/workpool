@@ -1,6 +1,6 @@
 import type { Infer, Validator, VAny } from "convex/values";
 
-import { v } from "convex/values";
+import { jsonToConvex, v } from "convex/values";
 import { type Logger, logLevel } from "./logging.js";
 
 export const fnType = v.union(
@@ -71,6 +71,26 @@ export function fromTimestamp(timestamp: bigint): number {
  */
 export function endOfMs(ms: number): bigint {
   return toTimestamp(Math.floor(ms) + 1);
+}
+
+declare const Convex: {
+  syscall: (op: string, jsonArgs: string) => string;
+};
+
+/**
+ * The timestamp of the snapshot this transaction reads from, in nanoseconds on
+ * the commit-timestamp clock. Every transaction stamped at or below it is
+ * visible to this one, and every transaction that commits after it — whether
+ * or not it has started yet — is stamped above it. So it is the highest value
+ * a cursor over a commit-ordered index can advance to without passing
+ * something it hasn't read.
+ *
+ * TODO(convex): replace with `ctx.meta.getSnapshotTs()` once a released
+ * `convex` exposes it; this is the syscall it wraps.
+ */
+export function snapshotTs(): bigint {
+  const json = Convex.syscall("1.0/getSnapshotTs", "{}");
+  return jsonToConvex(JSON.parse(json)) as bigint;
 }
 
 // Nanoseconds for the year 2000: far above any 100ms bucket an older version

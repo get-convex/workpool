@@ -26,6 +26,7 @@ import {
   MINUTE,
   SECOND,
   type RunResult,
+  snapshotTs,
   toTimestamp,
   vResult,
 } from "./shared.js";
@@ -120,8 +121,9 @@ const batchFields = {
   // is absent when it inspected nothing.
   sweepStarts: v.array(vStart),
   sweepStop: v.optional(v.int64()),
-  // The highest commit timestamp observed while building the batch — the
-  // frontier the incoming cursor may advance to, but not beyond.
+  // The snapshot the batch was read at. Nothing that commits later is stamped
+  // at or below it, so it is the frontier the incoming cursor may advance to,
+  // but not beyond.
   cursorCeiling: v.int64(),
 };
 type Batch = Infer<ReturnType<typeof v.object<typeof batchFields>>>;
@@ -153,23 +155,16 @@ export const getBatch = internalQuery({
     const isRecoveryIter =
       running.length > 0 && nowTs - lastRecovery >= RECOVERY_PERIOD_NS;
 
-    const {
-      starts,
-      sweepStarts,
-      sweepStop,
-      cancelations,
-      completions,
-      cursorCeiling,
-    } = await queryPending(ctx, {
-      completionCursor: cursors.completion,
-      cancelationCursor: cursors.cancelation,
-      incomingCursor: cursors.incoming,
-      sweepCursor: cursors.sweep ?? 0n,
-      lastCommitTs: (state?.lastCommitTs as bigint | undefined) ?? 0n,
-      maxParallelism: globals.maxParallelism,
-      runningCount: running.length,
-      eligibleBefore,
-    });
+    const { starts, sweepStarts, sweepStop, cancelations, completions } =
+      await queryPending(ctx, {
+        completionCursor: cursors.completion,
+        cancelationCursor: cursors.cancelation,
+        incomingCursor: cursors.incoming,
+        sweepCursor: cursors.sweep ?? 0n,
+        maxParallelism: globals.maxParallelism,
+        runningCount: running.length,
+        eligibleBefore,
+      });
 
     // The sweep counts as work when it found entries to start or moved past
     // new documents; re-verifying the live documents at its inclusive
@@ -201,7 +196,7 @@ export const getBatch = internalQuery({
         starts,
         sweepStarts,
         sweepStop,
-        cursorCeiling,
+        cursorCeiling: snapshotTs(),
       };
       return { kind: "work" as const, batch };
     }
@@ -350,26 +345,23 @@ export const run = internalMutation({
     // Capacity can cut the starts short, so only advance each cursor over the
     // leading run we finished with — started or re-keyed. Stopping at the
     // first entry we left alone is what keeps it from being skipped. The
-    // incoming cursor additionally never passes `cursorCeiling`, the highest
-    // commit timestamp observed while building the batch: a wall-clock key
-    // can exceed every commit stamp that exists, and a commit racing this run
-    // would land behind a cursor set there. (The keys this run itself writes
-    // need no accounting — they're all at or above the end of the current
-    // millisecond, which no cursor reaches: the scan's bound is exclusive and
-    // the ceiling only lowers.) Equality is fine throughout: the index is
-    // read with `gte`.
+    // incoming cursor additionally never passes `cursorCeiling`, the snapshot
+    // the batch was read at: a wall-clock key can exceed every commit stamp
+    // that exists, and a commit racing this run would land behind a cursor
+    // set there. (The keys this run itself writes need no accounting — they're
+    // all at or above the end of the current millisecond, which no cursor
+    // reaches: the scan's bound is exclusive and the ceiling only lowers.)
+    // Equality is fine throughout: the index is read with `gte`. Nor can the
+    // ceiling move the cursor backwards: the previous run set it at or below
+    // its own snapshot, and this run's snapshot includes that run's commit.
     const handled = new Set([...pending, ...notYet].map((s) => s._id));
     let incoming = state.segmentCursors.incoming;
     for (const start of batch.starts) {
       if (!handled.has(start._id)) break;
       incoming = start.segment;
     }
-    // Never backwards: a batch can carry a ceiling below the cursor when it
-    // observed no commit stamps at all (e.g. a recovery-only iteration).
-    state.segmentCursors.incoming = maxBigint(
-      state.segmentCursors.incoming,
-      incoming < batch.cursorCeiling ? incoming : batch.cursorCeiling,
-    );
+    state.segmentCursors.incoming =
+      incoming < batch.cursorCeiling ? incoming : batch.cursorCeiling;
     // The sweep cursor rests at the last inspected entry — (commit stamp,
     // creation time), since a batch enqueue shares one stamp. Its components
     // are read straight off inspected entries, so no ceiling is needed. If
@@ -385,10 +377,6 @@ export const run = internalMutation({
         batch.sweepStop,
       );
     }
-    // Record this run's own commit stamp: the next run reads this document,
-    // so its snapshot is at least this recent, and the mark seeds its ceiling.
-    state.lastCommitTs = ctx.db.vars.commitTs;
-
     await ctx.db.replace("internalState", state._id, state);
     // Return null: batch-worker re-runs `getBatch` immediately to drain, and
     // idles (per getBatch's hints) once there's nothing left.
@@ -410,7 +398,6 @@ async function queryPending(
     cancelationCursor,
     incomingCursor,
     sweepCursor,
-    lastCommitTs,
     maxParallelism,
     runningCount,
     eligibleBefore,
@@ -419,7 +406,6 @@ async function queryPending(
     cancelationCursor: bigint;
     incomingCursor: bigint;
     sweepCursor: bigint;
-    lastCommitTs: bigint;
     maxParallelism: number;
     runningCount: number;
     eligibleBefore: bigint;
@@ -534,7 +520,6 @@ async function queryPending(
   //
   const readyLimit = Math.max(0, startLimit - sweepStarts.length);
   const starts: Start[] = [];
-  const readyStamps: bigint[] = [];
   if (readyLimit > 0) {
     const stream = ctx.db
       .query("pendingStart")
@@ -547,9 +532,6 @@ async function queryPending(
       // in `segment`; recovering it here means `run` handles it like any
       // other not-yet-due entry and re-keys it as a timestamp.
       const legacyStartTime = legacyRunAt(segment);
-      if (doc.scheduled !== true && legacyStartTime === undefined) {
-        readyStamps.push(segment);
-      }
       for (const workId of memberIds(doc)) {
         if (excluded.has(workId)) continue;
         if (starts.length >= readyLimit) break scan;
@@ -557,29 +539,7 @@ async function queryPending(
       }
     }
   }
-  // The highest commit timestamp observed while building this batch. Every
-  // source is the stamp of a transaction visible to this snapshot, so
-  // anything committing later is stamped above it — the frontier the cursor
-  // may advance to. `scheduled` documents are wall-clock-keyed and don't
-  // count (their stamps do, via the sweep); the rest carry an observed commit
-  // stamp in `segment` (an older version's tiny buckets are excluded with the
-  // same check that recovers their start time).
-  const cursorCeiling = [
-    lastCommitTs,
-    ...completions.map((c) => c.segment as bigint),
-    ...cancelations.map((c) => c.segment as bigint),
-    ...readyStamps,
-    ...(sweepStop === undefined ? [] : [sweepStop]),
-  ].reduce(maxBigint);
-
-  return {
-    completions,
-    cancelations,
-    starts,
-    sweepStarts,
-    sweepStop,
-    cursorCeiling,
-  };
+  return { completions, cancelations, starts, sweepStarts, sweepStop };
 }
 
 /** The work queued in a pendingStart document. */
@@ -798,10 +758,7 @@ async function promoteScheduled(ctx: MutationCtx, notYet: Start[]) {
       if (!(await ctx.db.get("pendingStart", _id))) return;
       await ctx.db.patch("pendingStart", _id, {
         segment: toTimestamp(legacyStartTime),
-        // The key is now a wall-clock time, and `scheduled` is what records
-        // that (so the cursor ceiling doesn't count it as a commit stamp).
         // No `scanTs`: written by the loop, it can't be out of order.
-        scheduled: true,
       });
     }),
   );
@@ -1027,7 +984,6 @@ async function rescheduleJob(
   const pendingStartId = await ctx.db.insert("pendingStart", {
     workIds: [work._id],
     segment,
-    scheduled: true,
   });
   await ctx.db.patch("work", work._id, { pendingStartId });
   return true;

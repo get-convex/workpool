@@ -33,10 +33,6 @@ export default defineSchema({
       // beginning".
       sweep: v.optional(timestamp),
     }),
-    // The commit timestamp of the previous `run`. Every transaction stamped
-    // at or below it is visible to any reader of this document, so it is a
-    // safe lower bound on the next run's snapshot.
-    lastCommitTs: v.optional(v.commitTs()),
     // When the loop last checked for stuck jobs, in nanoseconds.
     // In ≤ 0.4.9, values were 100ms buckets, interpreted as long ago.
     lastRecovery: timestamp,
@@ -88,9 +84,6 @@ export default defineSchema({
     // @deprecated The single entry of a document written by version ≤ 0.4.9.
     workId: v.optional(v.id("work")),
     segment,
-    // Present iff `segment` is a wall-clock start time rather than a commit
-    // timestamp.
-    scheduled: v.optional(v.boolean()),
     // The enqueue's commit timestamp, present iff the document could have
     // committed out of order (a scheduled start within five minutes).
     scanTs: v.optional(v.commitTs()),
