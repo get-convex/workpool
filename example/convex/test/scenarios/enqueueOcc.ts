@@ -121,13 +121,25 @@ export const storm = internalAction({
       blockerMs = 60_000,
     },
   ) => {
-    if (!Number.isInteger(durationMs) || durationMs < 1_000 || durationMs > 120_000) {
+    if (
+      !Number.isInteger(durationMs) ||
+      durationMs < 1_000 ||
+      durationMs > 120_000
+    ) {
       throw new Error("durationMs must be an integer from 1,000 to 120,000");
     }
-    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 100) {
+    if (
+      !Number.isInteger(concurrency) ||
+      concurrency < 1 ||
+      concurrency > 100
+    ) {
       throw new Error("concurrency must be an integer from 1 to 100");
     }
-    if (!Number.isInteger(payloadBytes) || payloadBytes < 0 || payloadBytes > 500_000) {
+    if (
+      !Number.isInteger(payloadBytes) ||
+      payloadBytes < 0 ||
+      payloadBytes > 500_000
+    ) {
       throw new Error("payloadBytes must be an integer from 0 to 500,000");
     }
 
