@@ -31,7 +31,11 @@ import {
   vResult,
 } from "./shared.js";
 import { generateReport, recordCompleted, recordStarted } from "./stats.js";
-import { findPendingStart } from "./pendingStart.js";
+import {
+  findPendingStart,
+  memberIds,
+  removeFromPendingStart,
+} from "./pendingStart.js";
 
 const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
 const RECOVERY_BATCH_SIZE = 32;
@@ -127,11 +131,13 @@ export const getBatch = internalQuery({
             starts: [],
             sweepStarts: [],
             upgrade: {
-              starts: docs.map((doc) => ({
-                pendingId: doc._id,
-                workId: doc.workId,
-                segment: doc.segment as bigint,
-              })),
+              starts: docs.flatMap((doc) =>
+                memberIds(doc).map((workId) => ({
+                  pendingId: doc._id,
+                  workId,
+                  segment: doc.segment as bigint,
+                })),
+              ),
               done: docs.length < MAIN_BATCH_SIZE,
             },
           },
@@ -318,7 +324,7 @@ export const run = internalMutation({
       state.segmentCursors.cancelation = batch.cancelations.at(-1)!.segment;
     }
     // Every selected start was handled. Cap at the snapshot so racing
-    // commits remain ahead. Inclusive reads retain entries sharing a timestamp.
+    // commits remain ahead. Inclusive reads retain partially handled documents.
     const snapshot = snapshotTs();
     const lastStart = batch.starts.at(-1);
     if (lastStart) {
@@ -395,10 +401,18 @@ async function queryPending(
     let docs = 0;
     const take = (doc: Doc<"pendingStart">): "more" | "stop" => {
       const segment = doc.segment as bigint;
-      if (!excluded.has(doc.workId)) {
-        if (sweepStarts.length >= startLimit) return "stop";
-        sweepStarts.push({ pendingId: doc._id, workId: doc.workId, segment });
+      const ids = memberIds(doc).filter((id) => !excluded.has(id));
+      // Behind the cursor, so due: the cursor never passes the eligibility bound.
+      // Take what fits in the start slots. A partially-taken document keeps
+      // the cursor at bay — its started entries patch out and the next pass
+      // re-finds the rest.
+      const room = startLimit - sweepStarts.length;
+      if (room <= 0) return "stop";
+      const taken = ids.slice(0, room);
+      for (const workId of taken) {
+        sweepStarts.push({ pendingId: doc._id, workId, segment });
       }
+      if (taken.length < ids.length) return "stop";
       return ++docs >= SWEEP_DOC_BATCH ? "stop" : "more";
     };
 
@@ -434,8 +448,9 @@ async function queryPending(
   }
 
   // Entries the sweep starts take slots first; only fetch ready work for the
-  // slots left over. Everything eligible, oldest first. Inclusive reads retain
-  // entries sharing a timestamp when capacity cuts a batch short.
+  // slots left over. Everything eligible, oldest first. Documents are read
+  // whole, but a partially-taken document is safe: the cursor stops at its
+  // `segment`, and the inclusive re-read picks up the entries left behind.
   const readyLimit = Math.max(0, startLimit - sweepStarts.length);
   const starts: Start[] = [];
   if (readyLimit > 0) {
@@ -446,15 +461,13 @@ async function queryPending(
           .gte("segment", incomingCursor)
           .lte("segment", toTimestamp(Date.now())),
       );
-    for await (const doc of stream) {
+    scan: for await (const doc of stream) {
       const segment = doc.segment as bigint;
-      if (excluded.has(doc.workId)) continue;
-      if (starts.length >= readyLimit) break;
-      starts.push({
-        pendingId: doc._id,
-        workId: doc.workId,
-        segment,
-      });
+      for (const workId of memberIds(doc)) {
+        if (excluded.has(workId)) continue;
+        if (starts.length >= readyLimit) break scan;
+        starts.push({ pendingId: doc._id, workId, segment });
+      }
     }
   }
   return { completions, cancelations, starts, sweepStarts, sweepStop };
@@ -536,6 +549,10 @@ async function handleCancelation(
     console.debug(`[main] attempting to cancel ${canceled.length}`);
   }
   const canceledWork = new Set<Id<"work">>();
+  const removals = new Map<
+    Id<"pendingStart">,
+    { doc: Doc<"pendingStart">; workIds: Id<"work">[] }
+  >();
   const jobs: CompleteJob[] = [...toCancel];
   await Promise.all(
     canceled.map(async ({ pendingId, workId }) => {
@@ -556,7 +573,13 @@ async function handleCancelation(
       }
       const pendingStart = await findPendingStart(ctx, work);
       if (!pendingStart) return;
-      await ctx.db.delete("pendingStart", pendingStart._id);
+      const group = removals.get(pendingStart._id);
+      if (group) group.workIds.push(workId);
+      else
+        removals.set(pendingStart._id, {
+          doc: pendingStart,
+          workIds: [workId],
+        });
       state.report.canceled++;
       jobs.push({
         workId,
@@ -564,6 +587,12 @@ async function handleCancelation(
         attempt: work.attempts,
       });
     }),
+  );
+  // One patch per document prevents concurrent removals from overwriting each other.
+  await Promise.all(
+    [...removals.values()].map(({ doc, workIds }) =>
+      removeFromPendingStart(ctx, doc, workIds),
+    ),
   );
   if (jobs.length) {
     await ctx.scheduler.runAfter(0, internal.complete.complete, { jobs });
@@ -612,7 +641,11 @@ async function handleRecovery(
   }
 }
 
-/** Remove handled queue entries and start eligible work. */
+/**
+ * Starts pending work. Entries are removed from their queue documents as
+ * they're handled — started, found gone, or found canceled — one patch (or
+ * delete, when empty) per document.
+ */
 async function handleStart(
   ctx: MutationCtx,
   state: Doc<"internalState">,
@@ -621,48 +654,74 @@ async function handleStart(
   { logLevel }: Config,
 ) {
   console.debug(`[main] scheduling ${pending.length} pending work`);
-  const entries = await Promise.all(
-    pending.map(async (entry) => {
-      const [doc, work] = await Promise.all([
-        ctx.db.get("pendingStart", entry.pendingId),
-        ctx.db.get("work", entry.workId),
-      ]);
-      return { ...entry, doc, work };
-    }),
-  );
+  const byDoc = new Map<Id<"pendingStart">, Start[]>();
+  for (const entry of pending) {
+    const entries = byDoc.get(entry.pendingId);
+    if (entries) entries.push(entry);
+    else byDoc.set(entry.pendingId, [entry]);
+  }
+  // Point reads issued together cost one round trip rather than one per
+  // entry; a batch of them awaited one at a time dominates the iteration.
+  const [docs, works] = await Promise.all([
+    Promise.all(
+      [...byDoc.keys()].map(
+        async (docId) =>
+          [docId, await ctx.db.get("pendingStart", docId)] as const,
+      ),
+    ).then((pairs) => new Map(pairs)),
+    Promise.all(
+      pending.map(
+        async ({ workId }) =>
+          [workId, await ctx.db.get("work", workId)] as const,
+      ),
+    ).then((pairs) => new Map(pairs)),
+  ]);
   const starts: { work: Doc<"work">; lagMs: number }[] = [];
-  for (const { pendingId, workId, segment, doc, work } of entries) {
+  for (const [docId, entries] of byDoc) {
+    // Guard against a document a concurrent cancelation emptied.
+    const doc = docs.get(docId);
     if (!doc) continue;
-    await ctx.db.delete("pendingStart", pendingId);
-    if (state.running.some((r) => r.workId === workId)) {
-      console.error(`[main] ${workId} already running (skipping start)`);
-      continue;
-    }
-    if (!work) {
-      console.error(`Trying to start, but work not found: ${workId}`);
-      continue;
-    }
-    if (work.canceled) {
-      console.debug(`[main] ${workId} was canceled (not starting)`);
-      state.report.canceled++;
-      await ctx.scheduler.runAfter(0, internal.complete.complete, {
-        jobs: [
-          {
-            workId,
-            runResult: { kind: "canceled" as const },
-            attempt: work.attempts,
-          },
-        ],
+    const members = memberIds(doc);
+    const removed: Id<"work">[] = [];
+    for (const { workId, segment } of entries) {
+      // A concurrent cancelation may have removed just this entry.
+      if (!members.includes(workId)) continue;
+      // Whatever happens below, the entry leaves the queue: nothing rescans
+      // behind the cursor, so it must not be left unreadable.
+      removed.push(workId);
+      if (state.running.some((r) => r.workId === workId)) {
+        console.error(`[main] ${workId} already running (skipping start)`);
+        continue;
+      }
+      const work = works.get(workId);
+      if (!work) {
+        console.error(`Trying to start, but work not found: ${workId}`);
+        continue;
+      }
+      if (work.canceled) {
+        // Finish cancelation if its queue entry survived an earlier attempt.
+        console.debug(`[main] ${workId} was canceled (not starting)`);
+        state.report.canceled++;
+        await ctx.scheduler.runAfter(0, internal.complete.complete, {
+          jobs: [
+            {
+              workId,
+              runResult: { kind: "canceled" as const },
+              attempt: work.attempts,
+            },
+          ],
+        });
+        continue;
+      }
+      if (work.pendingStartId === undefined) {
+        await ctx.db.patch("work", workId, { pendingStartId: docId });
+      }
+      starts.push({
+        work,
+        lagMs: Date.now() - fromTimestamp(segment),
       });
-      continue;
     }
-    if (work.pendingStartId === undefined) {
-      await ctx.db.patch("work", workId, { pendingStartId: pendingId });
-    }
-    starts.push({
-      work,
-      lagMs: Date.now() - fromTimestamp(segment),
-    });
+    await removeFromPendingStart(ctx, doc, removed);
   }
 
   state.running.push(...(await beginWorkBatch(ctx, starts, console, logLevel)));
@@ -795,7 +854,7 @@ async function rescheduleJob(
     snapshotTs(),
   );
   const pendingStartId = await ctx.db.insert("pendingStart", {
-    workId: work._id,
+    workIds: [work._id],
     segment,
   });
   await ctx.db.patch("work", work._id, { pendingStartId });
