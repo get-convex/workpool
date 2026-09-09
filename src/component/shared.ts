@@ -91,11 +91,6 @@ export function eligibilityBound(): bigint {
 // Separates legacy 100ms buckets from timestamps within the scheduling bounds.
 export const MIN_TIMESTAMP = toTimestamp(Date.UTC(2000, 0, 1));
 
-/** Decode a legacy start time, or return undefined for a modern timestamp. */
-export function legacyRunAt(segment: bigint): number | undefined {
-  return segment < MIN_TIMESTAMP ? fromSegment(segment) : undefined;
-}
-
 export const vConfig = v.object({
   maxParallelism: v.number(),
   logLevel,
