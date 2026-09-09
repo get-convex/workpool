@@ -66,13 +66,18 @@ export default defineSchema({
     onComplete: v.optional(vOnCompleteFnContext),
     retryBehavior: v.optional(retryBehavior),
     canceled: v.optional(v.boolean()),
-    // May point to a deleted entry after starting, or be absent on legacy work.
+    // May be stale after starting, or absent on legacy work. Check membership.
     pendingStartId: v.optional(v.id("pendingStart")),
   }),
 
-  // Work waiting to start, one document per work item.
+  // Work waiting to start: one document per transaction and `segment` value,
+  // holding up to a cap of entries.
   pendingStart: defineTable({
-    workId: v.id("work"),
+    // The work waiting to start at `segment`. Entries leave as they start or
+    // cancel; the document is deleted when none remain.
+    workIds: v.optional(v.array(v.id("work"))),
+    // @deprecated Legacy single-work document.
+    workId: v.optional(v.id("work")),
     segment,
     // The enqueue's commit timestamp, present iff the document could have
     // committed out of order (a scheduled start within five minutes).
