@@ -670,6 +670,19 @@ describe("loop", () => {
   // ────────────────────────────────────────────────────────────────────
 
   describe("cancellation", () => {
+    it("removes queued work even when it is already marked canceled", async () => {
+      await initialize();
+      const workId = await enqueueWork({ canceled: true });
+      await t.mutation(api.lib.cancel, { id: workId });
+
+      await runLoop();
+
+      const o = await observe();
+      expect(o.pendingStart).toHaveLength(0);
+      expect(o.pendingCancelation).toHaveLength(0);
+      expect(o.running).toHaveLength(0);
+    });
+
     it("removes a pendingStart cancellation before the work runs", async () => {
       await initialize();
       const workId = await enqueueWork();
