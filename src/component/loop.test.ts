@@ -22,6 +22,7 @@ import {
   DEFAULT_MAX_PARALLELISM,
   fromSegment,
   fromTimestamp,
+  snapshotTs,
   toSegment,
   toTimestamp,
   WORKER_NAME,
@@ -117,12 +118,16 @@ describe("loop", () => {
     });
   }
 
-  /**
-   * Drive one loop iteration the way batch-worker does: get the next batch,
-   * and if there's work, run the worker mutation with it. Returns the batch
-   * result so tests can inspect the idle/work decision.
-   */
+  async function advanceClockToSnapshot() {
+    // convex-test advances commit timestamps even while the fake clock is frozen.
+    const snapshot = await t.query(async () => snapshotTs());
+    const snapshotMs = Number((snapshot + 999_999n) / 1_000_000n);
+    if (snapshotMs > Date.now()) vi.setSystemTime(snapshotMs);
+  }
+
+  /** Run getBatch and run in one transaction. */
   async function runLoop() {
+    await advanceClockToSnapshot();
     return t.run(async (ctx) => {
       const result = await ctx.runQuery(internal.loop.getBatch, {
         name: WORKER_NAME,
@@ -735,6 +740,24 @@ describe("loop", () => {
   // ────────────────────────────────────────────────────────────────────
 
   describe("getBatch", () => {
+    it("waits for wall time when the snapshot clock is ahead", async () => {
+      await initialize();
+      const now = Date.now();
+      vi.setSystemTime(now + SECOND);
+      const workId = await enqueueWork();
+      vi.setSystemTime(now);
+
+      const result = await t.query(internal.loop.getBatch, {
+        name: WORKER_NAME,
+      });
+      expect(result.kind).toBe("idle");
+      expect((await observe()).running).toHaveLength(0);
+
+      vi.setSystemTime(now + SECOND);
+      await runLoop();
+      expect((await observe()).running.map((r) => r.workId)).toEqual([workId]);
+    });
+
     it("returns idle when there's nothing to do", async () => {
       await initialize();
       const result = await t.query(internal.loop.getBatch, {
@@ -775,6 +798,7 @@ describe("loop", () => {
     it("returns a work batch when a pending start is ready", async () => {
       await initialize();
       const workId = await enqueueWork();
+      await advanceClockToSnapshot();
       const result = await t.query(internal.loop.getBatch, {
         name: WORKER_NAME,
       });
@@ -818,7 +842,7 @@ describe("loop", () => {
 
       const second = await runLoop();
       assert(second.kind === "idle");
-      expect(second.timeoutMs).toBe(100 * SECOND);
+      expect(second.timeoutMs).toBe(runAt - Date.now());
 
       // It starts when it comes due, untouched in the meantime.
       vi.setSystemTime(runAt);
