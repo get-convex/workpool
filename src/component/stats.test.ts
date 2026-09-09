@@ -71,8 +71,8 @@ describe("stats reports", () => {
     });
   });
 
-  it("counts queue documents including scheduled and legacy entries", async () => {
-    await enqueue(toTimestamp(Date.now()));
+  it("reports a small eligible backlog without scheduling a count", async () => {
+    await enqueue(toTimestamp(Date.now() - 500));
     await enqueue(toSegment(Date.now()));
     await enqueue(toTimestamp(Date.now() - 1000));
     await enqueue(toSegment(Date.now() + 60_000));
@@ -81,7 +81,7 @@ describe("stats reports", () => {
       ctx.db.patch("internalState", stateId, {
         segmentCursors: {
           ...INITIAL_STATE.segmentCursors,
-          incoming: toTimestamp(Date.now()),
+          incoming: toTimestamp(Date.now() - 1500),
         },
       }),
     );
@@ -89,16 +89,21 @@ describe("stats reports", () => {
     expect(reports()).toEqual([
       expect.objectContaining({
         event: "report",
-        backlog: 5,
+        backlog: 2,
         running: 0,
         failureRate: 0.4,
         permanentFailureRate: 0.25,
       }),
     ]);
+    await t.run(async (ctx) => {
+      expect(
+        await ctx.db.system.query("_scheduled_functions").collect(),
+      ).toHaveLength(0);
+    });
   });
 
-  it("reports large queues without scanning documents or scheduling follow-up reports", async () => {
-    for (let i = 0; i < 300; i++) await enqueue(toTimestamp(Date.now()));
+  it("defers a large backlog count after a bounded read", async () => {
+    for (let i = 0; i < 300; i++) await enqueue(toTimestamp(Date.now() - 1000));
     await t.run(async (ctx) => {
       const state = (await ctx.db.get("internalState", stateId))!;
       const before = await ctx.meta.getTransactionMetrics();
@@ -107,11 +112,17 @@ describe("stats reports", () => {
         logLevel: "REPORT",
       });
       const after = await ctx.meta.getTransactionMetrics();
-      expect(after.documentsRead.used - before.documentsRead.used).toBe(0);
       expect(
-        await ctx.db.system.query("_scheduled_functions").collect(),
-      ).toHaveLength(0);
+        after.documentsRead.used - before.documentsRead.used,
+      ).toBeLessThanOrEqual(11);
+      const scheduled = await ctx.db.system
+        .query("_scheduled_functions")
+        .collect();
+      expect(scheduled).toHaveLength(1);
+      expect(scheduled[0].name).toBe("stats:calculateBacklogAndReport");
     });
+    expect(reports()).toEqual([]);
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
     expect(reports()).toEqual([expect.objectContaining({ backlog: 300 })]);
   });
 
