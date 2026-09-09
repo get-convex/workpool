@@ -1,10 +1,10 @@
-import { v, getConvexSize } from "convex/values";
+import { v } from "convex/values";
+import { kickMainLoop } from "./kick.js";
 import { internal } from "./_generated/api.js";
-import { internalMutation } from "./_generated/server.js";
+import { internalMutation, type MutationCtx } from "./_generated/server.js";
+import { findPendingStart } from "./pendingStart.js";
 
 const DEFAULT_OLDER_THAN = 1000 * 60 * 60 * 24;
-const MAX_ROWS_READ = 100;
-const MAX_BYTES_READ = 4_000_000;
 
 export const clearPending = internalMutation({
   args: {
@@ -14,41 +14,25 @@ export const clearPending = internalMutation({
   handler: async (ctx, args) => {
     const time =
       args.before ?? Date.now() - (args.olderThan ?? DEFAULT_OLDER_THAN);
-    let i = 0,
-      totalBytes = 0,
-      hasMore = false,
-      nextTime;
     console.log("Clearing pending before", new Date(time).toUTCString());
     for await (const entry of ctx.db
       .query("pendingStart")
       .withIndex("by_creation_time", (q) => q.lte("_creationTime", time))
       .order("desc")) {
-      i++;
       const work = await ctx.db.get("work", entry.workId);
-      totalBytes +=
-        getConvexSize(entry) + getConvexSize(work) + (work?.payloadSize ?? 0);
-      if (i > MAX_ROWS_READ || totalBytes > MAX_BYTES_READ) {
-        hasMore = true;
-        nextTime = entry._creationTime;
-        console.log(`Continuing after ${i} entries, ${totalBytes} bytes`);
-        break;
-      }
-      await ctx.db.delete("pendingStart", entry._id);
       if (work) {
-        // Clean up any large data stored separately
-        if (work.payloadId) {
-          await ctx.db.delete("payload", work.payloadId);
-        }
+        if (work.payloadId) await ctx.db.delete("payload", work.payloadId);
         await ctx.db.delete("work", work._id);
       }
+      await ctx.db.delete("pendingStart", entry._id);
+      if (await usedHalfTransactionBudget(ctx)) {
+        await ctx.scheduler.runAfter(0, internal.danger.clearPending, {
+          before: entry._creationTime,
+        });
+        return;
+      }
     }
-    if (hasMore) {
-      await ctx.scheduler.runAfter(0, internal.danger.clearPending, {
-        before: nextTime,
-      });
-    } else {
-      console.log(`Done clearing pending entries. ${i} in the last batch.`);
-    }
+    console.log("Done clearing pending entries.");
   },
 });
 
@@ -60,20 +44,16 @@ export const clearOldWork = internalMutation({
   handler: async (ctx, args) => {
     const time =
       args.before ?? Date.now() - (args.olderThan ?? DEFAULT_OLDER_THAN);
-    let i = 0,
-      totalBytes = 0,
-      hasMore = false,
-      nextTime;
     console.log("Clearing old work before", new Date(time).toUTCString());
     for await (const entry of ctx.db
       .query("work")
       .withIndex("by_creation_time", (q) => q.lte("_creationTime", time))
       .order("desc")) {
-      i++;
-      const pendingStart = await ctx.db
-        .query("pendingStart")
-        .withIndex("workId", (q) => q.eq("workId", entry._id))
-        .unique();
+      if (entry.pendingStartId === undefined) {
+        // The upgrade pass removes orphaned legacy queue entries.
+        await kickMainLoop(ctx, "kick");
+      }
+      const pendingStart = await findPendingStart(ctx, entry);
       const pendingCompletion = await ctx.db
         .query("pendingCompletion")
         .withIndex("workId", (q) => q.eq("workId", entry._id))
@@ -82,18 +62,6 @@ export const clearOldWork = internalMutation({
         .query("pendingCancelation")
         .withIndex("workId", (q) => q.eq("workId", entry._id))
         .unique();
-      totalBytes +=
-        getConvexSize(entry) +
-        getConvexSize(pendingStart) +
-        getConvexSize(pendingCompletion) +
-        getConvexSize(pendingCancelation) +
-        (entry.payloadSize ?? 0);
-      if (i > MAX_ROWS_READ || totalBytes > MAX_BYTES_READ) {
-        hasMore = true;
-        nextTime = entry._creationTime;
-        console.log(`Continuing after ${i} entries, ${totalBytes} bytes`);
-        break;
-      }
       if (pendingStart) {
         await ctx.db.delete("pendingStart", pendingStart._id);
       }
@@ -118,13 +86,21 @@ export const clearOldWork = internalMutation({
           .join(", ")})`,
       );
       await ctx.db.delete("work", entry._id);
+      if (await usedHalfTransactionBudget(ctx)) {
+        await ctx.scheduler.runAfter(0, internal.danger.clearOldWork, {
+          before: entry._creationTime,
+        });
+        return;
+      }
     }
-    if (hasMore) {
-      await ctx.scheduler.runAfter(0, internal.danger.clearOldWork, {
-        before: nextTime,
-      });
-    } else {
-      console.log(`Done clearing old work. ${i} in the last batch.`);
-    }
+    console.log("Done clearing old work.");
   },
 });
+
+/** Leave headroom to finish the current document and schedule another batch. */
+async function usedHalfTransactionBudget(ctx: MutationCtx) {
+  const metrics = await ctx.meta.getTransactionMetrics();
+  return Object.values(metrics).some(
+    ({ used, remaining }) => used >= remaining,
+  );
+}

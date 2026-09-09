@@ -1,22 +1,13 @@
 # Workpool: implementation notes and high-level architecture
 
-Concepts:
-
-- `segment`: A slice of time to process work. All work is bucketed into one.
-  This enables us to batch work and avoid database conflicts.
-- `generation`: A monotonically increasing counter owned by batch-worker to
-  ensure only one loop chain runs for a worker at a time. The old workpool
-  generation field is deprecated and only accepted for pre-migration docs.
-- "Retention" is used to refer to situations where a query might have to read
-  over a lot of "tombstones" - deleted data that hasn't been vacuumed from the
-  underlying database yet. If there are frequent deletions, scanning across them
-  can delay a query. Because of our delete-heavy queuing strategy, we have to be
-  careful. Strategies are below.
-- Cursors: A pointer to the last processed place in a table. In our case, they
-  might allow data to be written before them if out-of-order writes happen, so
-  we need to account for finding those "missed" writes on some granularity. We
-  choose to wait until there isn't any immediate work to do before those scans.
-  They help avoid retention issues.
+- `segment`: a nanosecond timestamp. Immediate work uses its enqueue commit
+  timestamp; scheduled work uses its start time.
+- Cursors: inclusive positions in the pending queues that skip deleted rows. The
+  incoming cursor never passes the snapshot. A separate `scanTs` cursor recovers
+  near-term scheduled enqueues that commit behind it.
+- `generation`: batch-worker's counter that permits only one active loop chain.
+- Tombstones: deleted rows that remain in storage until vacuumed. Advancing
+  cursors avoids repeatedly reading them.
 
 ## Data state machine
 
@@ -52,14 +43,12 @@ a 10-second idle cooldown instead of the normal 2 seconds. This keeps
 batch-worker's status `running` for longer at full throttle, so most enqueue
 pings are no-ops rather than racing an idle transition.
 
-## Retention optimization strategy
+## Storage and reads
 
-- Producers (Client, Worker, Recovery) write to a future "segment".
-- Consumers (`run`) read the current segment.
-  - On conflicts, producers will write to progressively higher segments, while
-    the main loop will continue to read the segment originally called with. This
-    means conflicts are less likely on each retry.
-- Patch singletons to avoid tombstones.
-- Use segements & cursors to bound reads to latest data.
-  - Do scans outside of the critical path (during load).
-- Do point reads otherwise.
+- Store one queue document per work item and delete it when the work starts or
+  cancels.
+- Read queues through bounded index ranges and point-read work documents.
+- Keep the incoming cursor at or below the transaction snapshot so later commits
+  remain reachable. Re-key future legacy buckets during upgrade.
+- Limit the sweep's boundary read to entries behind the incoming cursor, so
+  large batches of future work are not repeatedly scanned.
