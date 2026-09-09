@@ -5,10 +5,16 @@ import {
   internalQuery,
   type MutationCtx,
 } from "./_generated/server.js";
-import { type Config, DEFAULT_MAX_PARALLELISM, WORKER_NAME } from "./shared.js";
+import {
+  type Config,
+  DEFAULT_MAX_PARALLELISM,
+  WORKER_NAME,
+  toTimestamp,
+} from "./shared.js";
 import { createLogger, type Logger, logLevel, shouldLog } from "./logging.js";
-import { components } from "./_generated/api.js";
+import { components, internal } from "./_generated/api.js";
 import schema from "./schema.js";
+import { paginator } from "convex-helpers/server/pagination";
 
 /**
  * Record stats about work execution. Intended to be queried by Axiom or Datadog.
@@ -65,20 +71,43 @@ export async function generateReport(
   ctx: MutationCtx,
   console: Logger,
   state: Doc<"internalState">,
-  { logLevel }: Config,
+  { maxParallelism, logLevel }: Config,
 ) {
   if (!shouldLog(logLevel, "REPORT")) {
+    // Don't waste time if we're not going to log.
     return;
   }
-  // Count queued work, including future work, without scanning documents.
-  recordReport(console, {
-    ...state.report,
-    running: state.running.length,
-    backlog: await (ctx.db.query("pendingStart") as any).count(),
-  });
+  const currentSegment = toTimestamp(Date.now());
+  const pendingStart = await paginator(ctx.db, schema)
+    .query("pendingStart")
+    .withIndex("segment", (q) =>
+      q
+        .gte("segment", state.segmentCursors.incoming)
+        .lt("segment", currentSegment),
+    )
+    .paginate({
+      numItems: Math.max(maxParallelism, 10),
+      cursor: null,
+    });
+  if (pendingStart.isDone) {
+    recordReport(console, {
+      ...state.report,
+      running: state.running.length,
+      backlog: pendingStart.page.length,
+    });
+  } else {
+    await ctx.scheduler.runAfter(0, internal.stats.calculateBacklogAndReport, {
+      startSegment: 0n,
+      endSegment: currentSegment,
+      cursor: pendingStart.continueCursor,
+      report: state.report,
+      running: state.running.length,
+      logLevel,
+    });
+  }
 }
 
-/** Compatibility handler for reports already scheduled by older versions. */
+/** Count large backlogs outside the main loop. */
 export const calculateBacklogAndReport = internalMutation({
   args: {
     // @deprecated Unused; accepted so in-flight calls from older versions
