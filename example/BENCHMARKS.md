@@ -125,6 +125,16 @@ lateness is approximate: the harness starts its timer before calling the
 enqueuing mutation. Three recorded attempts do not independently prove the final
 retry's terminal result.
 
+If the long-delay CLI call errors or times out, check the existing run before
+retrying. The recorded 310-second run returned a generic CLI error even though
+the server action completed successfully; the cause was not established. Read
+persisted probes with `npx convex run test/scheduling:probes`, inspect the
+server action's completion/error logs, and check `testWorkpool` queue and
+running state using the drain checklist below. If work is still active, wait for
+it to settle. Archive that evidence before cleanup or another run: rerunning the
+command resets the probes and enqueues new delayed/retry work without canceling
+the previous work.
+
 ## Comparing a code change against itself
 
 Use the same component for both variants, with a build and successful deploy for
@@ -161,8 +171,8 @@ npx convex run test/cleanup:counts  # repeat until every count is zero
 Cleanup deletes **all** `tasks`, `latencyTasks`, `runs`, `schedulingProbes`, and
 `data`, including dashboard history. It does not clear `counters` or component
 tables, cancel tasks, or wait for workers. First verify each component has no
-`work`, `pendingStart`, `pendingCompletion`, `pendingCancelation`, or running
-entries. Then wait for all cleanup counts to reach zero; a missing/error
+`work`, `pendingStart`, `pendingCompletion`, `pendingCancelation`, `payload`, or
+running entries. Then wait for all cleanup counts to reach zero; a missing/error
 response is not zero. Concurrent runs and delayed leftovers can repopulate
 tables after cleanup.
 
