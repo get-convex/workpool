@@ -15,11 +15,11 @@ import {
   DEFAULT_MAX_PARALLELISM,
   fromSegment,
   getCurrentSegment,
-  getNextSegment,
+  toTimestamp,
   SECOND,
   WORKER_NAME,
 } from "./shared.js";
-import { RECOVERY_PERIOD_SEGMENTS } from "./loop.js";
+
 import { setupTest } from "./setup.test.js";
 
 // ---------------------------------------------------------------------------
@@ -166,6 +166,13 @@ const S12_CANCELED_AWAITING_COMPLETE: CompositeState = {
 // ---------------------------------------------------------------------------
 
 const ACTION_RECOVERY_THRESHOLD_MS = 5 * 60 * 1000;
+/** One recovery period in the 100ms buckets `runLoop` picks times with. */
+const RECOVERY_PERIOD_SEGMENTS = 600n;
+
+/** The bucket after the current one, as older versions computed it. */
+function getNextSegment(): bigint {
+  return getCurrentSegment() + 1n;
+}
 
 describe("state machine", () => {
   let t: ReturnType<typeof setupTest>;
@@ -259,11 +266,15 @@ describe("state machine", () => {
 
       // Set up internalState
       const lastRecovery = opts?.oldForRecovery
-        ? getCurrentSegment() - RECOVERY_PERIOD_SEGMENTS - 1n
-        : getCurrentSegment();
+        ? toTimestamp(Date.now() - 61 * SECOND)
+        : toTimestamp(Date.now());
       await ctx.db.insert("internalState", {
-        generation: 0n,
-        segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
+        segmentCursors: {
+          incoming: 0n,
+          completion: 0n,
+          cancelation: 0n,
+          sweep: 0n,
+        },
         lastRecovery,
         report: {
           completed: 0,
@@ -278,7 +289,13 @@ describe("state machine", () => {
 
       // pendingStart
       if (state.pendingStart) {
-        await ctx.db.insert("pendingStart", { workId: wId, segment: seg });
+        const pendingStartId = await ctx.db.insert("pendingStart", {
+          workId: wId,
+          segment: seg,
+        });
+        if (await ctx.db.get("work", wId)) {
+          await ctx.db.patch("work", wId, { pendingStartId });
+        }
       }
 
       // pendingCompletion
@@ -314,10 +331,10 @@ describe("state machine", () => {
   async function observeState(workId: Id<"work">): Promise<ObservedState> {
     return t.run(async (ctx) => {
       const work = await ctx.db.get("work", workId);
-      const ps = await ctx.db
-        .query("pendingStart")
-        .withIndex("workId", (q) => q.eq("workId", workId))
-        .first();
+      const ps =
+        (await ctx.db.query("pendingStart").collect()).find(
+          (p) => p.workId === workId,
+        ) ?? null;
       const state = await ctx.db.query("internalState").unique();
       const inRunning =
         state?.running.some((r) => r.workId === workId) ?? false;
@@ -853,7 +870,7 @@ describe("state machine", () => {
       expect(s.running).toBe(false);
     });
 
-    it("pendingStart + running for same workId -> skips start but leaves pendingStart", async () => {
+    it("pendingStart + running for same workId -> skips start and drops the pendingStart", async () => {
       const { workId, segment } = await setupState({
         work: { attempts: 0, hasRetryBehavior: false, fnType: "action" },
         pendingStart: true,
@@ -864,10 +881,10 @@ describe("state machine", () => {
       await runLoop(segment);
       const s = await observeState(workId);
       expect(s.running).toBe(true);
-      // BUG: handleStart skips the start but does NOT delete the pendingStart
-      // entry (returns null before the delete call). This means the orphaned
-      // pendingStart will be picked up again on the next loop iteration.
-      expect(s.pendingStart).toBe(true);
+      // The pendingStart is spurious — the work is already running — and the
+      // ready lane's cursor has moved past it, so it has to be deleted here or
+      // it would sit in the table unread forever.
+      expect(s.pendingStart).toBe(false);
     });
 
     it("duplicate pendingCompletion via complete.complete -> BUG: attempts still incremented", async () => {
@@ -914,7 +931,10 @@ describe("state machine", () => {
           fnArgs: {},
           attempts: 0,
         });
-        await ctx.db.insert("pendingStart", { workId: id, segment: seg });
+        await ctx.db.insert("pendingStart", {
+          workId: id,
+          segment: seg,
+        });
         return id;
       });
 
@@ -970,9 +990,13 @@ describe("state machine", () => {
           },
         );
         await ctx.db.insert("internalState", {
-          generation: 0n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: getCurrentSegment(),
+          segmentCursors: {
+            incoming: 0n,
+            completion: 0n,
+            cancelation: 0n,
+            sweep: 0n,
+          },
+          lastRecovery: toTimestamp(Date.now()),
           report: {
             completed: 0,
             succeeded: 0,
@@ -1032,7 +1056,7 @@ describe("state machine", () => {
       await t.run(async (ctx) => {
         await ctx.db.insert("pendingCancelation", {
           workId,
-          segment,
+          segment: segment,
         });
       });
 
@@ -1043,9 +1067,9 @@ describe("state machine", () => {
       expect(s.pendingCompletion).toBe(false);
     });
 
-    it("multiple cancels for same work -> BUG: crashes with double delete", async () => {
+    it("multiple cancels for the same work complete it once", async () => {
       const seg = getNextSegment();
-      await t.run<Id<"work">>(async (ctx) => {
+      const workId = await t.run<Id<"work">>(async (ctx) => {
         const wId = await ctx.db.insert("work", {
           fnType: "action",
           fnHandle: "h",
@@ -1053,7 +1077,12 @@ describe("state machine", () => {
           fnArgs: {},
           attempts: 0,
         });
-        await ctx.db.insert("pendingStart", { workId: wId, segment: seg });
+        await ctx.db.patch("work", wId, {
+          pendingStartId: await ctx.db.insert("pendingStart", {
+            workId: wId,
+            segment: seg,
+          }),
+        });
         await ctx.db.insert("pendingCancelation", {
           workId: wId,
           segment: seg,
@@ -1064,9 +1093,13 @@ describe("state machine", () => {
         });
 
         await ctx.db.insert("internalState", {
-          generation: 0n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: getCurrentSegment(),
+          segmentCursors: {
+            incoming: 0n,
+            completion: 0n,
+            cancelation: 0n,
+            sweep: 0n,
+          },
+          lastRecovery: toTimestamp(Date.now()),
           report: {
             completed: 0,
             succeeded: 0,
@@ -1080,10 +1113,32 @@ describe("state machine", () => {
         return wId;
       });
 
-      // BUG: handleCancelation processes duplicate pendingCancelation entries
-      // in parallel. Both find the same pendingStart and try to delete it,
-      // causing a "Delete on non-existent doc" crash.
-      await expect(runLoop(seg)).rejects.toThrow();
+      await runLoop(seg);
+      expect(await observeState(workId)).toMatchObject({
+        pendingStart: false,
+        pendingCancelation: false,
+        running: false,
+        work: { canceled: true },
+      });
+      await t.run(async (ctx) => {
+        const state = (await ctx.db.query("internalState").unique())!;
+        expect(state.report.canceled).toBe(1);
+        const completions = (
+          await ctx.db.system.query("_scheduled_functions").collect()
+        ).filter((f) => f.name === "complete:complete");
+        expect(completions).toHaveLength(1);
+        expect(completions[0].args).toEqual([
+          {
+            jobs: [
+              {
+                workId,
+                runResult: { kind: "canceled" },
+                attempt: 0,
+              },
+            ],
+          },
+        ]);
+      });
     });
 
     it("complete(success) + cancel interleaved -> cancel is no-op (work already gone)", async () => {
@@ -1122,9 +1177,13 @@ describe("state machine", () => {
           },
         );
         await ctx.db.insert("internalState", {
-          generation: 0n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: getCurrentSegment(),
+          segmentCursors: {
+            incoming: 0n,
+            completion: 0n,
+            cancelation: 0n,
+            sweep: 0n,
+          },
+          lastRecovery: toTimestamp(Date.now()),
           report: {
             completed: 0,
             succeeded: 0,
@@ -1212,9 +1271,13 @@ describe("state machine", () => {
         });
 
         await ctx.db.insert("internalState", {
-          generation: 0n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: getCurrentSegment(),
+          segmentCursors: {
+            incoming: 0n,
+            completion: 0n,
+            cancelation: 0n,
+            sweep: 0n,
+          },
+          lastRecovery: toTimestamp(Date.now()),
           report: {
             completed: 0,
             succeeded: 0,
@@ -1232,12 +1295,22 @@ describe("state machine", () => {
           retry: false,
           runResult: { kind: "success", returnValue: null },
         });
-        await ctx.db.insert("pendingStart", { workId: w2, segment: seg });
+        await ctx.db.patch("work", w2, {
+          pendingStartId: await ctx.db.insert("pendingStart", {
+            workId: w2,
+            segment: seg,
+          }),
+        });
         await ctx.db.insert("pendingCancelation", {
           workId: w2,
           segment: seg,
         });
-        await ctx.db.insert("pendingStart", { workId: w3, segment: seg });
+        await ctx.db.patch("work", w3, {
+          pendingStartId: await ctx.db.insert("pendingStart", {
+            workId: w3,
+            segment: seg,
+          }),
+        });
 
         return { w1, w2, w3 };
       });
@@ -1289,9 +1362,13 @@ describe("state machine", () => {
           },
         );
         await ctx.db.insert("internalState", {
-          generation: 0n,
-          segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
-          lastRecovery: getCurrentSegment(),
+          segmentCursors: {
+            incoming: 0n,
+            completion: 0n,
+            cancelation: 0n,
+            sweep: 0n,
+          },
+          lastRecovery: toTimestamp(Date.now()),
           report: {
             completed: 0,
             succeeded: 0,
