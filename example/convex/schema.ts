@@ -38,4 +38,27 @@ export default defineSchema({
     name: v.string(),
     value: v.number(),
   }).index("name", ["name"]),
+  // When each probe in test/scheduling.ts ran, to check delayed and retried
+  // work against a real deployment.
+  schedulingProbes: defineTable({
+    label: v.string(),
+    at: v.number(),
+    attempt: v.optional(v.number()),
+  }),
+  // One row per task in test/latency.ts, carrying when it was meant to run and
+  // when it actually did, so ordering and lateness can be measured directly
+  // rather than inferred from completion times.
+  latencyTasks: defineTable({
+    cell: v.string(), // which experiment cell enqueued it
+    pool: v.union(v.literal("new"), v.literal("old")),
+    delayMs: v.number(), // 0 for immediate
+    seq: v.number(), // enqueue order within the cell
+    enqueuedAt: v.number(), // clock at the enqueuing mutation
+    runAt: v.number(), // when it was asked to run
+    startedAt: v.optional(v.number()), // clock inside the task itself
+    // Which enqueuing transaction produced it. Tasks sharing a pairId share a
+    // commit, so an immediate one is the control for a scheduled one.
+    pairId: v.optional(v.number()),
+    committedAt: v.optional(v.number()), // when its enqueue returned
+  }).index("cell", ["cell"]),
 });
