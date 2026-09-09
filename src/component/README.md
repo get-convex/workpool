@@ -3,8 +3,8 @@
 - `segment`: a nanosecond timestamp. Immediate work uses its enqueue commit
   timestamp; scheduled work uses its start time.
 - Cursors: inclusive positions in the pending queues that skip deleted rows. The
-  incoming cursor never passes the snapshot. A separate `scanTs` cursor recovers
-  near-term scheduled enqueues that commit behind it.
+  incoming cursor never passes the snapshot. `segmentCursors.sweep` walks the
+  `scanTs` index to recover near-term scheduled enqueues that commit behind it.
 - `generation`: batch-worker's counter that permits only one active loop chain.
 - Tombstones: deleted rows that remain in storage until vacuumed. Advancing
   cursors avoids repeatedly reading them.
