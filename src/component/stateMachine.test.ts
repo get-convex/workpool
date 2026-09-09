@@ -291,7 +291,7 @@ describe("state machine", () => {
       if (state.pendingStart) {
         const pendingStartId = await ctx.db.insert("pendingStart", {
           workId: wId,
-          segment: seg,
+          segment: toTimestamp(fromSegment(seg)),
         });
         if (await ctx.db.get("work", wId)) {
           await ctx.db.patch("work", wId, { pendingStartId });
@@ -307,7 +307,7 @@ describe("state machine", () => {
         };
         await ctx.db.insert("pendingCompletion", {
           workId: wId,
-          segment: seg,
+          segment: toTimestamp(fromSegment(seg)),
           retry: state.pendingCompletion.retry,
           runResult: resultMap[state.pendingCompletion.resultKind],
         });
@@ -317,7 +317,7 @@ describe("state machine", () => {
       if (state.pendingCancelation) {
         await ctx.db.insert("pendingCancelation", {
           workId: wId,
-          segment: seg,
+          segment: toTimestamp(fromSegment(seg)),
         });
       }
 
@@ -782,7 +782,7 @@ describe("state machine", () => {
         const backlogWorkId = await makeDummyWork(ctx);
         await ctx.db.insert("pendingStart", {
           workId: backlogWorkId,
-          segment,
+          segment: toTimestamp(fromSegment(segment)),
         });
         return backlogWorkId;
       });
@@ -933,7 +933,7 @@ describe("state machine", () => {
         });
         await ctx.db.insert("pendingStart", {
           workId: id,
-          segment: seg,
+          segment: toTimestamp(fromSegment(seg)),
         });
         return id;
       });
@@ -1056,7 +1056,7 @@ describe("state machine", () => {
       await t.run(async (ctx) => {
         await ctx.db.insert("pendingCancelation", {
           workId,
-          segment,
+          segment: toTimestamp(fromSegment(segment)),
         });
       });
 
@@ -1080,16 +1080,16 @@ describe("state machine", () => {
         await ctx.db.patch("work", wId, {
           pendingStartId: await ctx.db.insert("pendingStart", {
             workId: wId,
-            segment: seg,
+            segment: toTimestamp(fromSegment(seg)),
           }),
         });
         await ctx.db.insert("pendingCancelation", {
           workId: wId,
-          segment: seg,
+          segment: toTimestamp(fromSegment(seg)),
         });
         await ctx.db.insert("pendingCancelation", {
           workId: wId,
-          segment: seg,
+          segment: toTimestamp(fromSegment(seg)),
         });
 
         await ctx.db.insert("internalState", {
@@ -1196,7 +1196,7 @@ describe("state machine", () => {
         });
         await ctx.db.insert("pendingCompletion", {
           workId: wId,
-          segment: seg,
+          segment: toTimestamp(fromSegment(seg)),
           retry: true,
           runResult: { kind: "failed", error: "test" },
         });
@@ -1291,24 +1291,24 @@ describe("state machine", () => {
 
         await ctx.db.insert("pendingCompletion", {
           workId: w1,
-          segment: seg,
+          segment: toTimestamp(fromSegment(seg)),
           retry: false,
           runResult: { kind: "success", returnValue: null },
         });
         await ctx.db.patch("work", w2, {
           pendingStartId: await ctx.db.insert("pendingStart", {
             workId: w2,
-            segment: seg,
+            segment: toTimestamp(fromSegment(seg)),
           }),
         });
         await ctx.db.insert("pendingCancelation", {
           workId: w2,
-          segment: seg,
+          segment: toTimestamp(fromSegment(seg)),
         });
         await ctx.db.patch("work", w3, {
           pendingStartId: await ctx.db.insert("pendingStart", {
             workId: w3,
-            segment: seg,
+            segment: toTimestamp(fromSegment(seg)),
           }),
         });
 
@@ -1383,13 +1383,13 @@ describe("state machine", () => {
         // Pending retry + pending cancel at the same time
         await ctx.db.insert("pendingCompletion", {
           workId: wId,
-          segment: seg,
+          segment: toTimestamp(fromSegment(seg)),
           retry: true,
           runResult: { kind: "failed", error: "test" },
         });
         await ctx.db.insert("pendingCancelation", {
           workId: wId,
-          segment: seg,
+          segment: toTimestamp(fromSegment(seg)),
         });
 
         return wId;
