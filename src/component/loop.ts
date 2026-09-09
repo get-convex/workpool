@@ -544,7 +544,6 @@ async function handleCancelation(
   const jobs: CompleteJob[] = [...toCancel];
   await Promise.all(
     canceled.map(async ({ pendingId, workId }) => {
-      if (!(await ctx.db.get("pendingCancelation", pendingId))) return;
       await ctx.db.delete("pendingCancelation", pendingId);
       if (canceledWork.has(workId)) {
         console.error(`[main] ${workId} already canceled`);
@@ -557,7 +556,9 @@ async function handleCancelation(
         return;
       }
       // Prevent retries even if the work is already running.
-      await ctx.db.patch("work", workId, { canceled: true });
+      if (!work.canceled) {
+        await ctx.db.patch("work", workId, { canceled: true });
+      }
       const pendingStart = await findPendingStart(ctx, work);
       if (!pendingStart) return;
       await ctx.db.delete("pendingStart", pendingStart._id);
