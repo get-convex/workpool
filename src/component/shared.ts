@@ -83,11 +83,6 @@ export function maxBigint(a: bigint, b: bigint): bigint {
   return a > b ? a : b;
 }
 
-/** Work is eligible when either the snapshot or the wall clock reaches its key. */
-export function eligibilityBound(): bigint {
-  return maxBigint(snapshotTs(), toTimestamp(Date.now()));
-}
-
 // Separates legacy 100ms buckets from timestamps within the scheduling bounds.
 export const MIN_TIMESTAMP = toTimestamp(Date.UTC(2000, 0, 1));
 

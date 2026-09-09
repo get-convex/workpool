@@ -20,7 +20,6 @@ import {
 import {
   type Config,
   DEFAULT_MAX_PARALLELISM,
-  eligibilityBound,
   fromTimestamp,
   fromSegment,
   maxBigint,
@@ -194,7 +193,7 @@ export const getBatch = internalQuery({
     // completions can wake us sooner, including when all slots are occupied.
     const futureStart = await ctx.db
       .query("pendingStart")
-      .withIndex("segment", (q) => q.gt("segment", eligibilityBound()))
+      .withIndex("segment", (q) => q.gt("segment", toTimestamp(Date.now())))
       .first();
     const waits: number[] = [];
     if (futureStart) {
@@ -449,7 +448,9 @@ async function queryPending(
     const stream = ctx.db
       .query("pendingStart")
       .withIndex("segment", (q) =>
-        q.gte("segment", incomingCursor).lte("segment", eligibilityBound()),
+        q
+          .gte("segment", incomingCursor)
+          .lte("segment", toTimestamp(Date.now())),
       );
     for await (const doc of stream) {
       const segment = doc.segment as bigint;
