@@ -224,8 +224,7 @@ export const run = internalMutation({
   handler: async (ctx, batch) => {
     const state = await getOrCreateState(ctx);
     if (batch.upgrade) {
-      // Repair old pointers and keys once, before normal cursors can pass them.
-      const snapshot = snapshotTs();
+      // Preserve legacy times; cursors reset after the upgrade finishes.
       for (const start of batch.upgrade.starts) {
         const work = await ctx.db.get("work", start.workId);
         if (!work) {
@@ -236,7 +235,7 @@ export const run = internalMutation({
           pendingStartId: start.pendingId,
         });
         await ctx.db.patch("pendingStart", start.pendingId, {
-          segment: maxBigint(toTimestamp(fromSegment(start.segment)), snapshot),
+          segment: toTimestamp(fromSegment(start.segment)),
         });
       }
       await ctx.db.patch("internalState", state._id, {

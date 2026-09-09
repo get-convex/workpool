@@ -49,6 +49,6 @@ pings are no-ops rather than racing an idle transition.
   cancels.
 - Read queues through bounded index ranges and point-read work documents.
 - Keep the incoming cursor at or below the transaction snapshot so later commits
-  remain reachable. Re-key future legacy buckets during upgrade.
+  remain reachable. Convert legacy buckets before resetting the cursors.
 - Limit the sweep's boundary read to entries behind the incoming cursor, so
   large batches of future work are not repeatedly scanned.
