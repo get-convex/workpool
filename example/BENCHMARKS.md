@@ -1,40 +1,66 @@
 # Benchmarking the workpool
 
+Recorded results: [2026-09-08, revision `8186121`](./benchmarks/2026-09-08.md).
+
 Harnesses in `example/convex/test/`, all driving a real deployment:
 
-| entry point                      | measures                                               |
-| -------------------------------- | ------------------------------------------------------ |
-| `test/scenarios/throughput`      | end-to-end throughput and completion latency           |
-| `test/latency:default`           | when tasks _start_, vs. when they were due             |
-| `test/latency:pairs`             | a scheduled task against a `commitTs` sibling          |
-| `test/latency:backlog`           | a late scheduled entry behind a bulk sharing one stamp |
-| `test/scheduling:default`        | delayed + retried work, end to end                     |
-| `test/cleanup:start` / `:counts` | empty the bookkeeping tables (see below)               |
+| entry point                            | measures                                        | pools     |
+| -------------------------------------- | ----------------------------------------------- | --------- |
+| `test/scenarios/throughput:default`    | end-to-end throughput and completion latency    | new / old |
+| `test/scenarios/burstyBatches:default` | concurrent enqueue waves, or a light trickle    | new / old |
+| `test/scenarios/sustained:default`     | paced arrivals with variable-duration actions   | new / old |
+| `test/scenarios/noisyNeighbor:run`     | slow/failing neighbors, per-class outcomes      | new / old |
+| `test/latency:default`                 | when tasks _start_, vs. when they were due      | new / old |
+| `test/latency:pairs`                   | scheduled tasks against an immediate sibling    | new / old |
+| `test/latency:backlog`                 | a late entry behind bulk scheduled work         | new / old |
+| `test/scheduling:default`              | delayed work and retry attempts                 | new only  |
+| `test/cleanup:start` / `:counts`       | clear app bookkeeping; does not drain workpools | shared    |
 
-Both can run against either component: `"pool": "new"` is this branch's
-`testWorkpool`, `"pool": "old"` is the published baseline mounted as
-`oldWorkpool`. Comparing the two in one run is the only way to attribute a
-change to the code rather than to the deployment.
+`"pool": "new"` is this checkout's `testWorkpool`; `"pool": "old"` is the
+published package mounted as `oldWorkpool`. Check the installed baseline rather
+than relying on dashboard labels or previous reports:
 
 ```sh
-npx convex dev --once   # push the component before measuring anything
+node -p 'require("./node_modules/@convex-dev/workpool-old/package.json").version'
+npm run build:codegen && npx convex dev --once
 ```
+
+Run commands from the repo root against a dedicated dev deployment. The example
+imports the component through its `dist` exports, so **build before deploying**.
+A failed deploy means the previous design is still running. In particular,
+pre-snapshot experimental deployments can retain the removed `lastCommitTs`
+field in `internalState`, causing schema validation to fail. Resolve that state
+compatibility issue before measuring; do not treat a failed push as a new build.
+
+Archive the commit, any source diff, dependency versions, deployment, exact
+arguments, raw outputs, and run order. Paired runs on one deployment help
+control time-varying noise, but different components still have different
+storage histories. They compare complete designs, not an isolated source change.
 
 ## Throughput
 
 ```sh
 npx convex run test/scenarios/throughput:default '{
   "taskCount": 5000, "batchSize": 100, "interBatchMs": 50,
-  "maxParallelism": 200, "taskDurationMs": 20,
-  "taskType": "mutation", "pool": "new"
+  "maxParallelism": 200, "taskType": "mutation", "pool": "new"
 }'
 ```
 
-Paired A/B against the baseline, alternating which arm leads each rep:
+Repeat with `"pool": "old"` for the baseline. For actions, use
+`"taskType": "action", "taskDurationMs": 20`. **`taskDurationMs` is ignored for
+mutations**, even though the current harness includes it in the returned
+parameters and log message. The mutation workload above performs no artificial
+delay or database workload beyond the completion recorder.
 
-```sh
-REPS=3 ./.context/bench-commitTs.sh
-```
+Discard warmups, then measure at least three pairs, alternating `old,new`,
+`new,old`, `old,new`. Clear bookkeeping and wait for both components to drain
+between arms. Save JSON before cleanup. Report individual runs, per-pair ratios,
+and the spread, not just the fastest run.
+
+`completedCount` currently counts terminal callbacks, including failures and
+cancelations: `markTaskCompleted` does not save `result.kind`. Check runtime
+errors as well as `timedOut`, `status`, and the exact expected count. A CLI exit
+code of zero alone does not establish that a benchmark finished successfully.
 
 ## Start latency and ordering
 
@@ -46,126 +72,140 @@ npx convex run test/latency:default '{
 }'
 ```
 
-Every task records its own start clock, so the returned rows support start
-lateness (`startedAt - runAt`), start ordering, and per-delay-class breakdowns.
-Options beyond the above: `holdOps` and `nestedCalls` stretch the enqueuing
-transaction, `interChunkMs` spreads enqueues out, `settleMs` bounds the wait.
+Every task records its own start clock, supporting start lateness
+(`startedAt - runAt`), start ordering, and per-delay-class breakdowns. `holdOps`
+and `nestedCalls` stretch the enqueuing transaction, `interChunkMs` spreads
+enqueues out, and `settleMs` bounds the additional wait.
 
-To ask whether the _ordering path_ costs anything, use `pairs` instead. It
-enqueues, in one transaction, a control task ordered by `db.vars.commitTs`
-alongside scheduled ones. The control shares the commit, so both become visible
-at the same instant, and when the transaction takes longer to commit than a
-delay that task is already overdue on landing — leaving any difference in start
-time attributable to the path rather than the wait.
+`pairs` enqueues an immediate control alongside scheduled tasks in one
+transaction. On the new pool the control is ordered by `db.vars.commitTs`; the
+old pool uses its own immediate ordering. Siblings become visible together. When
+a scheduled task is already overdue at commit, their start-time difference is
+useful for comparing scheduling paths, though execution noise and capacity still
+contribute.
 
 ```sh
 npx convex run test/latency:pairs '{
-  "cell": "demo", "pool": "new", "count": 40,
+  "cell": "pairs-demo", "pool": "new", "count": 40,
   "soonDelays": [200], "nestedCalls": 800, "maxParallelism": 200
 }'
 ```
 
-`backlog` puts a bulk of scheduled work sharing one commit stamp ahead of such a
-pair — the shape that once stalled the sweep:
+`backlog` puts bulk scheduled work sharing one commit stamp ahead of such a
+pair:
 
 ```sh
 npx convex run test/latency:backlog '{
-  "cell": "demo", "pool": "new", "bulkCount": 2000, "bulkDelayMs": 60000,
+  "cell": "backlog-demo", "pool": "new", "bulkCount": 2000, "bulkDelayMs": 60000,
   "soonDelayMs": 100, "nestedCalls": 800, "maxParallelism": 200
 }'
 ```
 
-Both need concurrent ready-now work to be meaningful — see the pool note below.
+For a behind-cursor experiment, both need light concurrent ready-now work — see
+the pool note below. The commands above do **not** generate that traffic. A
+completed pair without evidence that the incoming cursor passed the scheduled
+key is a latency sample, not proof the sweep ran. `committedAt` in the pair rows
+is the action's clock after the enqueue RPC returned, not the database commit
+timestamp; a worker can start before that observation.
+
+`backlog` returns when its two probes start, while the bulk may still be waiting
+for `bulkDelayMs`. Wait for that work to finish before cleaning up or running
+another cell. Use distinct `cell` names: `resetCell` deletes probe rows but does
+not cancel their queued tasks.
+
+The delayed/retry smoke check is separate and only supports the new pool:
+
+```sh
+npx convex run test/scheduling:default
+npx convex run test/scheduling:default '{"delayMs":310000}'
+```
+
+The second crosses the five-minute threshold where enqueues omit `scanTs`. Its
+lateness is approximate: the harness starts its timer before calling the
+enqueuing mutation. Three recorded attempts do not independently prove the final
+retry's terminal result.
 
 ## Comparing a code change against itself
 
-`.context/exp-consts.py` edits a constant in `loop.ts`, deploys, measures, and
-repeats — on the same component, in mirrored order, with cleanup between runs:
+Use the same component for both variants, with a build and successful deploy for
+each source change, discarded warmups, cleanup, and balanced run order. Keep
+edits in isolated checkouts so restoring a variant cannot overwrite other work.
+Do not change constants during a comparison of the current design against the
+published baseline.
 
-```sh
-python3 .context/exp-consts.py mainbatch    # MAIN_BATCH_SIZE 64/128/256
-```
-
-It refuses to run on a dirty `src/component` and restores via `git checkout`, so
-its own edits can't clobber work in flight. Findings from the runs already done
-are in `.context/README.md`.
+Historical `.context/bench-commitTs.sh`, `.context/exp-consts.py`, and
+experiment reports are workspace artifacts, not tracked tooling available in a
+fresh clone. They are not the authoritative procedure: their warmup counts/order
+differ from their comments, and restoring with `git checkout` can erase
+concurrent edits.
 
 ## Getting numbers you can trust
 
-Everything below was learned the hard way while producing
-`.context/scheduling-experiments.md` and `.context/commitTs-benchmark.md`.
+**Warm up, and discard it.** Earlier experiments showed substantial warmup
+drift. Start with three discarded runs per workload and pool, and check whether
+timings stabilize; three is a heuristic, not a guarantee. Balanced ordering does
+not automatically cancel nonlinear drift.
 
-**Warm up, and discard it.** The first runs against a deployment are reliably
-the slowest — one sequence went 20.9s → 19.1s → 17.0s → 16.1s before flattening,
-a ~20% drift that dwarfs most effects being measured. Three discarded runs is
-usually enough. A mirrored order (a,b,c,c,b,a) does _not_ rescue you here: the
-drift decays rather than being linear, so it doesn't cancel.
+**Prefer paired runs.** Report the within-pair throughput ratio as well as
+absolute measurements. Deployment-level variation can move both arms together. A
+ratio does not remove differences in component storage history.
 
-**Prefer paired runs.** Deployment-level noise moves both arms together; one rep
-of the throughput benchmark had both arms 15% slow while the ratio between them
-held to within a point. Trust the ratio over the absolute.
-
-**Clear the bookkeeping between runs.** This one matters more than everything
-else here:
+**Drain, archive, then clear bookkeeping between runs.** On this dedicated
+benchmark deployment:
 
 ```sh
-npx convex run test/cleanup:start     # then poll test/cleanup:counts
+npx convex run test/cleanup:start
+npx convex run test/cleanup:counts  # repeat until every count is zero
 ```
 
-`tasks` and `latencyTasks` gain a row per measured task, written from _inside_
-the measured path, and nothing reads them across runs. Left alone they reached
-659,075 and 87,680 rows in one session — so every run paid a different, growing
-index-maintenance cost on a table incidental to the thing being measured.
-Clearing between runs cut within-variant spread from 59% of the mean to 20%, and
-to 3–5% once warm. That is the difference between seeing a 6% effect and
-concluding there wasn't one.
+Cleanup deletes **all** `tasks`, `latencyTasks`, `runs`, `schedulingProbes`, and
+`data`, including dashboard history. It does not clear `counters` or component
+tables, cancel tasks, or wait for workers. First verify each component has no
+`work`, `pendingStart`, `pendingCompletion`, `pendingCancelation`, or running
+entries. Then wait for all cleanup counts to reach zero; a missing/error
+response is not zero. Concurrent runs and delayed leftovers can repopulate
+tables after cleanup.
 
-**Establish the noise floor before believing an effect.** Run the same
-configuration several times and look at the spread; that's the smallest
-difference the rig can see. A three-way comparison coming out non-monotonic (the
-middle variant fastest or slowest) is a reliable tell that you're reading noise,
-since no real effect can produce it.
+Bookkeeping writes are inside the measured path, so accumulated table state is a
+confound. Cleanup bounds live rows; it does not reset storage history or prove
+that the two components have identical costs.
 
-Resist "the infrastructure is flaky" as an explanation. It was reached once here
-and it was wrong — requests genuinely were being dropped, but the spread was
-accumulated state, and the conclusion was unfalsifiable as stated. Look for
-something growing between runs first.
+**Establish the noise floor before believing an effect.** Repeat identical
+configurations and inspect the spread before interpreting a small effect.
+Non-monotonic results are not proof of noise: batching, contention, and latency
+tradeoffs can produce a real optimum. Investigate accumulated state, offered
+load, failures, and resource limits before assigning a cause.
 
-**A transaction is one sample.** Every entry enqueued in a single transaction
-shares a commit stamp and a start time. Measuring 200 entries at once gives one
-Bernoulli trial, not 200 — the first pass at the out-of-order experiment
-produced all-or-nothing 200/0 results for exactly that reason. Use `chunkSize`.
+**A transaction is one sample for commit ordering.** Entries in one enqueue
+share a commit stamp and frozen enqueue clock. Their worker start times can
+differ because workers run in separate transactions. Treat a chunk as one
+correlated trial for out-of-order landing, and use `chunkSize` to obtain
+multiple transactions. Those transactions still share deployment-level noise.
 
-**Isolate a code change on one component.** Deploy variant A to `testWorkpool`
-and measure, then deploy variant B to the _same_ component and measure again.
-Running variant A on `testWorkpool` against variant B on `oldWorkpool` conflates
-the change with each component's accumulated table history; that confound once
-reversed a result entirely.
+**`Date.now()` is frozen inside a mutation.** A wall-clock spin loop cannot
+measure duration there. To stretch a transaction, count operations (`holdOps`)
+or call `nestedNoop` repeatedly (`nestedCalls`), and time it from an action,
+where the clock advances. These remain subject to function execution limits;
+nested calls that do database work consume budget.
 
-**A saturated pool hides scheduling effects.** With a backlog the loop's cursor
-lags wall-clock, so anything that depends on the cursor tracking the present
-(out-of-order landing, say) simply won't happen. Keep the pool drained — high
-`maxParallelism`, light load — when that's what you're measuring.
-
-**`Date.now()` is frozen inside a mutation.** A wall-clock spin loop never
-terminates; it burns the read limit and fails. To stretch a transaction, count
-operations instead (`holdOps`) or nest mutation calls (`nestedCalls`, which
-doesn't consume the read/write budget), and time it from an action, where the
-clock is real.
-
-**A saturated or idle pool hides anything cursor-related.** With a backlog the
-loop's cursor lags wall-clock; with an idle pool it doesn't move at all. Either
-way a scheduled entry is never behind it, so out-of-order landing simply cannot
-happen and the measurement comes back clean for the wrong reason. Those cells
-need light concurrent ready-now work at high `maxParallelism`.
+**Control pool load for cursor experiments.** A saturated pool's incoming cursor
+can lag, and an idle pool's cursor may not advance. Neither reliably produces
+the behind-cursor condition. Use light concurrent ready-now work at high
+`maxParallelism`, and verify cursor advancement and available capacity during
+the slow enqueue. High parallelism alone is insufficient.
 
 ## Reading a slow loop
 
-`npx convex logs --jsonl --success` is the fastest way to see where loop time
-goes; each entry carries execution time alongside documents read and written.
+```sh
+npx convex logs --jsonl --success
+```
 
-The signature worth recognising: **execution time up while read and write volume
-is down means round trips, not work.** That is how the packing regression was
-found — a sequential `await ctx.db.get()` inside a per-entry loop cost one round
-trip per entry, 64 per iteration, for a flat ~150ms. Batch point reads with
-`Promise.all`.
+Entries carry execution time and documents/bytes read and written. Execution
+time rising while read/write volume falls is a reason to inspect sequential
+round trips, not a diagnosis by itself. Check OCC and execution statistics too.
+A past packing regression came from sequential per-entry point reads;
+independent reads can be batched with `Promise.all`.
+
+Both current mounts use a nested `batchWorker`. Include
+`testWorkpool/batchWorker` and `oldWorkpool/batchWorker` when comparing loop
+executions; counting only the parent component misses loop scheduling.
