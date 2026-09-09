@@ -105,7 +105,7 @@ type Start = Infer<typeof vStart>;
 
 // batch-worker runs `getBatch` and `run` in the same transaction, so a batch
 // never crosses a deploy or a snapshot: `run` sees exactly the state the
-// batch was built from.
+// batch was built from, and `snapshotTs()` answers the same in both.
 /** The shape `getBatch` hands to `run`. */
 const batchFields = {
   // What "now" was (in nanoseconds) when the batch was built.
@@ -121,11 +121,6 @@ const batchFields = {
   // is absent when it inspected nothing.
   sweepStarts: v.array(vStart),
   sweepStop: v.optional(v.int64()),
-  // The snapshot the batch was read at. It is the eligibility bound — a ready
-  // entry's commit stamp is at or below it, and a scheduled entry is due once
-  // the commit clock passes its start time — and the floor for the keys this
-  // run writes, since nothing committing later is stamped at or below it.
-  snapshot: v.int64(),
 };
 type Batch = Infer<ReturnType<typeof v.object<typeof batchFields>>>;
 
@@ -148,7 +143,6 @@ export const getBatch = internalQuery({
     const cursors = state?.segmentCursors ?? INITIAL_STATE.segmentCursors;
     const lastRecovery = state?.lastRecovery ?? INITIAL_STATE.lastRecovery;
     const nowTs = toTimestamp(Date.now());
-    const snapshot = snapshotTs();
 
     // Once per recovery period (≈1min), check for stuck running jobs. The
     // pending queues need no periodic rescan: they're ordered by commit
@@ -164,7 +158,6 @@ export const getBatch = internalQuery({
         sweepCursor: cursors.sweep ?? 0n,
         maxParallelism: globals.maxParallelism,
         runningCount: running.length,
-        snapshot,
       });
 
     // The sweep counts as work when it found entries to start or moved past
@@ -197,7 +190,6 @@ export const getBatch = internalQuery({
         starts,
         sweepStarts,
         sweepStop,
-        snapshot,
       };
       return { kind: "work" as const, batch };
     }
@@ -212,7 +204,7 @@ export const getBatch = internalQuery({
     // includes this one's commit) picks it up.
     const futureStart = await ctx.db
       .query("pendingStart")
-      .withIndex("segment", (q) => q.gt("segment", snapshot))
+      .withIndex("segment", (q) => q.gt("segment", snapshotTs()))
       .first();
     const waits: number[] = [];
     if (futureStart) {
@@ -259,7 +251,6 @@ export const run = internalMutation({
       state,
       batch.completions,
       console,
-      batch.snapshot,
     );
     console.timeEnd(compLabel);
 
@@ -303,7 +294,7 @@ export const run = internalMutation({
     if (notYet.length > 0) {
       const promoteLabel = `[main] promote(${notYet.length})`;
       console.time(promoteLabel);
-      await promoteScheduled(ctx, notYet, batch.snapshot);
+      await promoteScheduled(ctx, notYet);
       console.timeEnd(promoteLabel);
     }
 
@@ -399,7 +390,6 @@ async function queryPending(
     sweepCursor,
     maxParallelism,
     runningCount,
-    snapshot,
   }: {
     completionCursor: bigint;
     cancelationCursor: bigint;
@@ -407,7 +397,6 @@ async function queryPending(
     sweepCursor: bigint;
     maxParallelism: number;
     runningCount: number;
-    snapshot: bigint;
   },
 ) {
   const completions = await ctx.db
@@ -512,19 +501,24 @@ async function queryPending(
   }
 
   // Entries the sweep starts take slots first; only fetch ready work for the
-  // slots left over. Everything eligible, oldest first: ready entries are
-  // stamped at or below the snapshot by definition, and scheduled work sorts
-  // above it until the commit clock reaches its start time, so it's left alone
-  // without pinning the cursor. Documents are read whole, but a partially-taken
-  // document is safe: the cursor stops at its `segment`, and the inclusive
-  // re-read picks up the entries left behind.
+  // slots left over. Everything eligible, oldest first. Documents are read
+  // whole, but a partially-taken document is safe: the cursor stops at its
+  // `segment`, and the inclusive re-read picks up the entries left behind.
+  //
+  // The snapshot this transaction reads at is the eligibility bound. A ready
+  // entry's key is its commit stamp, which is at or below the snapshot by
+  // definition, so it's eligible as soon as it's visible. A scheduled entry's
+  // key is its start time, so it sorts above the snapshot until the commit
+  // clock reaches that time and is left alone without pinning the cursor. And
+  // because nothing committing later is stamped at or below the snapshot, the
+  // cursor can rest on any key read here without passing something unseen.
   const readyLimit = Math.max(0, startLimit - sweepStarts.length);
   const starts: Start[] = [];
   if (readyLimit > 0) {
     const stream = ctx.db
       .query("pendingStart")
       .withIndex("segment", (q) =>
-        q.gte("segment", incomingCursor).lte("segment", snapshot),
+        q.gte("segment", incomingCursor).lte("segment", snapshotTs()),
       );
     scan: for await (const doc of stream) {
       const segment = doc.segment as bigint;
@@ -579,7 +573,6 @@ async function handleCompletions(
   state: Doc<"internalState">,
   completed: Completion[],
   console: Logger,
-  snapshot: bigint,
 ) {
   // Completions that were going to be retried but have since been canceled.
   const toCancel: CompleteJob[] = [];
@@ -601,7 +594,7 @@ async function handleCompletions(
           console.warn(`[main] ${c.workId} is gone, but trying to complete`);
           return;
         }
-        if (await rescheduleJob(ctx, work, console, snapshot)) {
+        if (await rescheduleJob(ctx, work, console)) {
           state.report.retries++;
           recordCompleted(console, work, "retrying", undefined);
         } else {
@@ -748,11 +741,8 @@ async function handleRecovery(
  * the snapshot this run, and a wall-clock start time just ahead of `Date.now()`
  * may already be behind the commit clock.
  */
-async function promoteScheduled(
-  ctx: MutationCtx,
-  notYet: Start[],
-  snapshot: bigint,
-) {
+async function promoteScheduled(ctx: MutationCtx, notYet: Start[]) {
+  const snapshot = snapshotTs();
   await Promise.all(
     notYet.map(async ({ _id, legacyStartTime }) => {
       assert(legacyStartTime);
@@ -949,7 +939,6 @@ async function rescheduleJob(
   ctx: MutationCtx,
   work: Doc<"work">,
   console: Logger,
-  snapshot: bigint,
 ): Promise<boolean> {
   const pendingCancelation = await ctx.db
     .query("pendingCancelation")
@@ -984,7 +973,10 @@ async function rescheduleJob(
   // Raised to at least the snapshot, the furthest the cursor this transaction
   // writes can reach, so the entry can't land behind it. A backoff shorter than
   // the skew between the wall and commit clocks starts next iteration.
-  const segment = maxBigint(toTimestamp(Date.now() + nextAttempt), snapshot);
+  const segment = maxBigint(
+    toTimestamp(Date.now() + nextAttempt),
+    snapshotTs(),
+  );
   const pendingStartId = await ctx.db.insert("pendingStart", {
     workIds: [work._id],
     segment,
