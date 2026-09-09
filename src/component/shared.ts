@@ -86,6 +86,16 @@ export function maxBigint(a: bigint, b: bigint): bigint {
   return a > b ? a : b;
 }
 
+/**
+ * The highest key eligible to start: the later of the snapshot and the wall
+ * clock. Ready entries carry a commit stamp, at or below the snapshot; scheduled
+ * entries carry a start time, due when either clock reaches it. Taking the
+ * later of the two means neither clock lagging the other holds work back.
+ */
+export function eligibilityBound(): bigint {
+  return maxBigint(snapshotTs(), toTimestamp(Date.now()));
+}
+
 // Nanoseconds for the year 2000: far above any 100ms bucket an older version
 // could have written (~1.8e10 today, ~1.9e10 even four years out) and far below
 // any timestamp this one can produce, since `boundScheduledTime` keeps

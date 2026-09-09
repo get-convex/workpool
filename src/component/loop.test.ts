@@ -130,12 +130,8 @@ describe("loop", () => {
    * Drive one loop iteration the way batch-worker does: get the next batch,
    * and if there's work, run the worker mutation with it. Returns the batch
    * result so tests can inspect the idle/work decision.
-   *
-   * Starts with an empty commit so the fake clock reaches convex-test's
-   * snapshot, which only advances on commit.
    */
   async function runLoop() {
-    await t.run(async () => {});
     const result = await t.query(internal.loop.getBatch, {
       name: WORKER_NAME,
     });
@@ -999,28 +995,27 @@ describe("loop", () => {
       expect((await observe()).pendingStart).toHaveLength(0);
     });
 
-    it("makes scheduled work due by the commit clock, not the wall clock", async () => {
+    it("caps the cursor at the snapshot when starting wall-keyed work", async () => {
       await initialize();
       const runAt = Date.now() + SECOND;
       const workId = await enqueueWork({}, { runAt });
       await runLoop(); // sweep verifies the entry
+      // Nothing commits between here and the read, so the snapshot stays
+      // below the key while the wall clock says it's due.
       vi.advanceTimersByTime(SECOND);
+      await runLoop();
 
-      // The wall clock says due, but nothing has committed since it advanced,
-      // so the snapshot hasn't reached the key: the entry is left alone and the
-      // cursor stays below it.
-      const held = await t.query(internal.loop.getBatch, { name: WORKER_NAME });
-      expect(held.kind).toBe("idle");
       let o = await observe();
-      expect(o.running).toHaveLength(0);
+      expect(o.running.map((r) => r.workId)).toEqual([workId]);
+      // The cursor stops at the snapshot, not the wall-clock key: a commit
+      // racing this iteration could land between the two.
       expect(o.segmentCursors!.incoming).toBeLessThan(toTimestamp(runAt));
 
-      // A commit carries the snapshot past the key: the entry starts and the
-      // cursor rests on it.
+      // Work committing after that snapshot is still found.
+      const laterId = await enqueueWork();
       await runLoop();
       o = await observe();
-      expect(o.running.map((r) => r.workId)).toEqual([workId]);
-      expect(o.segmentCursors!.incoming).toBe(toTimestamp(runAt));
+      expect(o.running.map((r) => r.workId)).toContain(laterId);
     });
   });
 

@@ -365,14 +365,9 @@ describe("state machine", () => {
     });
   }
 
-  /**
-   * Drive one loop iteration the way batch-worker does. The empty commit
-   * carries the clock change into convex-test's snapshot, which only advances
-   * on commit.
-   */
+  /** Drive one loop iteration the way batch-worker does. */
   async function runLoop(segment: bigint) {
     vi.setSystemTime(fromSegment(segment));
-    await t.run(async () => {});
     const result = await t.query(internal.loop.getBatch, {
       name: WORKER_NAME,
     });

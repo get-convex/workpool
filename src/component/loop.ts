@@ -20,6 +20,7 @@ import {
 import {
   type Config,
   DEFAULT_MAX_PARALLELISM,
+  eligibilityBound,
   fromTimestamp,
   legacyRunAt,
   maxBigint,
@@ -199,11 +200,9 @@ export const getBatch = internalQuery({
     // recovery scan. A ping still wakes us sooner. Work the sweep couldn't
     // retire (a due entry with no capacity) is covered too: capacity implies
     // jobs are running, so the recovery wait applies and completions ping us.
-    // The wait is on the wall clock while eligibility is on the commit clock,
-    // so waking early just costs an iteration.
     const futureStart = await ctx.db
       .query("pendingStart")
-      .withIndex("segment", (q) => q.gt("segment", snapshotTs()))
+      .withIndex("segment", (q) => q.gt("segment", eligibilityBound()))
       .first();
     const waits: number[] = [];
     if (futureStart) {
@@ -339,14 +338,17 @@ export const run = internalMutation({
     }
     // Capacity can cut the starts short, so only advance each cursor over the
     // leading run we finished with — started or re-keyed. Stopping at the
-    // first entry we left alone is what keeps it from being skipped. Any key
-    // the scan read is a safe resting point: nothing can commit at or below
-    // the snapshot it was read under. Equality is fine throughout: the index is
+    // first entry we left alone is what keeps it from being skipped. The
+    // cursor also never passes the snapshot: a wall-clock key can sit above
+    // every commit stamp that exists, and a commit racing this run would land
+    // behind a cursor set there. Equality is fine throughout: the index is
     // read with `gte`.
     const handled = new Set([...pending, ...notYet].map((s) => s._id));
+    const snapshot = snapshotTs();
     for (const start of batch.starts) {
       if (!handled.has(start._id)) break;
-      state.segmentCursors.incoming = start.segment;
+      state.segmentCursors.incoming =
+        start.segment < snapshot ? start.segment : snapshot;
     }
     // The sweep cursor rests at the last inspected entry — (commit stamp,
     // creation time), since a batch enqueue shares one stamp. Its components
@@ -499,19 +501,13 @@ async function queryPending(
   // slots left over. Everything eligible, oldest first. Documents are read
   // whole, but a partially-taken document is safe: the cursor stops at its
   // `segment`, and the inclusive re-read picks up the entries left behind.
-  //
-  // The bound is the snapshot rather than the wall clock: a ready entry's
-  // commit stamp is at or below it by definition, a scheduled entry's start
-  // time sorts above it until the commit clock gets there, and no later commit
-  // can land at or below it — so one value is both the eligibility test and a
-  // safe resting point for the cursor.
   const readyLimit = Math.max(0, startLimit - sweepStarts.length);
   const starts: Start[] = [];
   if (readyLimit > 0) {
     const stream = ctx.db
       .query("pendingStart")
       .withIndex("segment", (q) =>
-        q.gte("segment", incomingCursor).lte("segment", snapshotTs()),
+        q.gte("segment", incomingCursor).lte("segment", eligibilityBound()),
       );
     scan: for await (const doc of stream) {
       const segment = doc.segment as bigint;
