@@ -22,7 +22,7 @@ import {
   DEFAULT_MAX_PARALLELISM,
   eligibilityBound,
   fromTimestamp,
-  legacyRunAt,
+  fromSegment,
   maxBigint,
   MINUTE,
   MIN_TIMESTAMP,
@@ -32,7 +32,6 @@ import {
   vResult,
 } from "./shared.js";
 import { generateReport, recordCompleted, recordStarted } from "./stats.js";
-import { assert } from "convex-helpers";
 import { findPendingStart } from "./pendingStart.js";
 
 const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
@@ -71,7 +70,7 @@ export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
 // batch-worker owns loop scheduling, generation checks, and liveness recovery.
 
 const vCompletion = v.object({
-  _id: v.id("pendingCompletion"),
+  pendingId: v.id("pendingCompletion"),
   workId: v.id("work"),
   runResult: vResult,
   retry: v.boolean(),
@@ -80,18 +79,16 @@ const vCompletion = v.object({
 type Completion = Infer<typeof vCompletion>;
 
 const vCancelation = v.object({
-  _id: v.id("pendingCancelation"),
+  pendingId: v.id("pendingCancelation"),
   workId: v.id("work"),
   segment: v.int64(),
 });
 type Cancelation = Infer<typeof vCancelation>;
 
 const vStart = v.object({
-  _id: v.id("pendingStart"),
+  pendingId: v.id("pendingStart"),
   workId: v.id("work"),
   segment: v.int64(),
-  // Decoded from a legacy 100ms bucket; not stored.
-  legacyStartTime: v.optional(v.number()),
 });
 type Start = Infer<typeof vStart>;
 
@@ -132,10 +129,9 @@ export const getBatch = internalQuery({
             sweepStarts: [],
             upgrade: {
               starts: docs.map((doc) => ({
-                _id: doc._id,
+                pendingId: doc._id,
                 workId: doc.workId,
                 segment: doc.segment as bigint,
-                legacyStartTime: legacyRunAt(doc.segment as bigint),
               })),
               done: docs.length < MAIN_BATCH_SIZE,
             },
@@ -176,14 +172,14 @@ export const getBatch = internalQuery({
       const batch: Batch = {
         recovery: isRecoveryIter,
         completions: completions.map((c) => ({
-          _id: c._id,
+          pendingId: c._id,
           workId: c.workId,
           runResult: c.runResult,
           retry: c.retry,
           segment: c.segment as bigint,
         })),
         cancelations: cancelations.map((c) => ({
-          _id: c._id,
+          pendingId: c._id,
           workId: c.workId,
           segment: c.segment as bigint,
         })),
@@ -234,12 +230,14 @@ export const run = internalMutation({
       for (const start of batch.upgrade.starts) {
         const work = await ctx.db.get("work", start.workId);
         if (!work) {
-          await ctx.db.delete("pendingStart", start._id);
+          await ctx.db.delete("pendingStart", start.pendingId);
           continue;
         }
-        await ctx.db.patch("work", work._id, { pendingStartId: start._id });
-        await ctx.db.patch("pendingStart", start._id, {
-          segment: maxBigint(toTimestamp(start.legacyStartTime!), snapshot),
+        await ctx.db.patch("work", work._id, {
+          pendingStartId: start.pendingId,
+        });
+        await ctx.db.patch("pendingStart", start.pendingId, {
+          segment: maxBigint(toTimestamp(fromSegment(start.segment)), snapshot),
         });
       }
       await ctx.db.patch("internalState", state._id, {
@@ -280,28 +278,10 @@ export const run = internalMutation({
       state.lastRecovery = nowTs;
     }
 
-    // Modern entries are due by either clock. Legacy buckets can still
-    // represent future work, which must be re-keyed before advancing.
-    const now = Date.now();
-    const isDue = (s: Start) =>
-      s.legacyStartTime === undefined || s.legacyStartTime <= now;
-    const all = [...batch.starts, ...batch.sweepStarts];
-    const notYet = all.filter((s) => !isDue(s));
-    // Oldest first: `segment` is when an entry became eligible, and a swept
-    // entry has been eligible since its (past) start time.
-    const eligible = all
-      .filter(isDue)
-      .sort(
-        (a, b) =>
-          (a.legacyStartTime ?? fromTimestamp(a.segment)) -
-          (b.legacyStartTime ?? fromTimestamp(b.segment)),
-      );
-    if (notYet.length > 0) {
-      const promoteLabel = `[main] promote(${notYet.length})`;
-      console.time(promoteLabel);
-      await promoteScheduled(ctx, notYet);
-      console.timeEnd(promoteLabel);
-    }
+    // Merge the segment scan and sweep in eligibility order.
+    const eligible = [...batch.starts, ...batch.sweepStarts].sort((a, b) =>
+      a.segment < b.segment ? -1 : a.segment > b.segment ? 1 : 0,
+    );
 
     // Slice to actual available capacity (completions may have freed slots).
     // Guard against negative numbers in case running.length > maxParallelism.
@@ -345,10 +325,10 @@ export const run = internalMutation({
     }
     // Advance only across handled entries, capped at the snapshot so racing
     // commits remain ahead. Inclusive reads retain entries sharing a timestamp.
-    const handled = new Set([...pending, ...notYet].map((s) => s._id));
+    const handled = new Set(pending.map((s) => s.pendingId));
     const snapshot = snapshotTs();
     for (const start of batch.starts) {
-      if (!handled.has(start._id)) break;
+      if (!handled.has(start.pendingId)) break;
       state.segmentCursors.incoming =
         start.segment < snapshot ? start.segment : snapshot;
     }
@@ -356,7 +336,7 @@ export const run = internalMutation({
     // Entries left at the boundary stamp are revisited by an inclusive read.
     if (
       batch.sweepStop !== undefined &&
-      batch.sweepStarts.every((s) => handled.has(s._id))
+      batch.sweepStarts.every((s) => handled.has(s.pendingId))
     ) {
       state.segmentCursors.sweep = maxBigint(
         state.segmentCursors.sweep ?? 0n,
@@ -424,7 +404,7 @@ async function queryPending(
       const segment = doc.segment as bigint;
       if (!excluded.has(doc.workId)) {
         if (sweepStarts.length >= startLimit) return "stop";
-        sweepStarts.push({ _id: doc._id, workId: doc.workId, segment });
+        sweepStarts.push({ pendingId: doc._id, workId: doc.workId, segment });
       }
       return ++docs >= SWEEP_DOC_BATCH ? "stop" : "more";
     };
@@ -473,17 +453,12 @@ async function queryPending(
       );
     for await (const doc of stream) {
       const segment = doc.segment as bigint;
-      // A document from before commit-timestamp ordering keeps its start time
-      // in `segment`; recovering it here means `run` handles it like any
-      // other not-yet-due entry and re-keys it as a timestamp.
-      const legacyStartTime = legacyRunAt(segment);
       if (excluded.has(doc.workId)) continue;
       if (starts.length >= readyLimit) break;
       starts.push({
-        _id: doc._id,
+        pendingId: doc._id,
         workId: doc.workId,
         segment,
-        legacyStartTime,
       });
     }
   }
@@ -504,7 +479,7 @@ async function handleCompletions(
   const toCancel: CompleteJob[] = [];
   await Promise.all(
     completed.map(async (c) => {
-      await ctx.db.delete("pendingCompletion", c._id);
+      await ctx.db.delete("pendingCompletion", c.pendingId);
 
       const running = state.running.find((r) => r.workId === c.workId);
       if (!running) {
@@ -568,9 +543,9 @@ async function handleCancelation(
   const canceledWork = new Set<Id<"work">>();
   const jobs: CompleteJob[] = [...toCancel];
   await Promise.all(
-    canceled.map(async ({ _id, workId }) => {
-      if (!(await ctx.db.get("pendingCancelation", _id))) return;
-      await ctx.db.delete("pendingCancelation", _id);
+    canceled.map(async ({ pendingId, workId }) => {
+      if (!(await ctx.db.get("pendingCancelation", pendingId))) return;
+      await ctx.db.delete("pendingCancelation", pendingId);
       if (canceledWork.has(workId)) {
         console.error(`[main] ${workId} already canceled`);
         return;
@@ -641,24 +616,6 @@ async function handleRecovery(
   }
 }
 
-/** Convert future legacy buckets to timestamps at or above this snapshot. */
-async function promoteScheduled(ctx: MutationCtx, notYet: Start[]) {
-  const snapshot = snapshotTs();
-  await Promise.all(
-    notYet.map(async ({ _id, workId, legacyStartTime }) => {
-      assert(legacyStartTime);
-      if (!(await ctx.db.get("pendingStart", _id))) return;
-      if (await ctx.db.get("work", workId)) {
-        await ctx.db.patch("work", workId, { pendingStartId: _id });
-      }
-      await ctx.db.patch("pendingStart", _id, {
-        segment: maxBigint(toTimestamp(legacyStartTime), snapshot),
-        // No `scanTs`: written by the loop, it can't be out of order.
-      });
-    }),
-  );
-}
-
 /** Remove handled queue entries and start eligible work. */
 async function handleStart(
   ctx: MutationCtx,
@@ -671,16 +628,16 @@ async function handleStart(
   const entries = await Promise.all(
     pending.map(async (entry) => {
       const [doc, work] = await Promise.all([
-        ctx.db.get("pendingStart", entry._id),
+        ctx.db.get("pendingStart", entry.pendingId),
         ctx.db.get("work", entry.workId),
       ]);
       return { ...entry, doc, work };
     }),
   );
   const starts: { work: Doc<"work">; lagMs: number }[] = [];
-  for (const { _id, workId, segment, legacyStartTime, doc, work } of entries) {
+  for (const { pendingId, workId, segment, doc, work } of entries) {
     if (!doc) continue;
-    await ctx.db.delete("pendingStart", _id);
+    await ctx.db.delete("pendingStart", pendingId);
     if (state.running.some((r) => r.workId === workId)) {
       console.error(`[main] ${workId} already running (skipping start)`);
       continue;
@@ -704,11 +661,11 @@ async function handleStart(
       continue;
     }
     if (work.pendingStartId === undefined) {
-      await ctx.db.patch("work", workId, { pendingStartId: _id });
+      await ctx.db.patch("work", workId, { pendingStartId: pendingId });
     }
     starts.push({
       work,
-      lagMs: Date.now() - (legacyStartTime ?? fromTimestamp(segment)),
+      lagMs: Date.now() - fromTimestamp(segment),
     });
   }
 
