@@ -367,8 +367,8 @@ describe("state machine", () => {
 
   /**
    * Drive one loop iteration the way batch-worker does. The empty commit
-   * carries the clock change into the database: the loop's eligibility bound
-   * is its snapshot timestamp, which in convex-test is the latest commit.
+   * carries the clock change into convex-test's snapshot, which only advances
+   * on commit.
    */
   async function runLoop(segment: bigint) {
     vi.setSystemTime(fromSegment(segment));

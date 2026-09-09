@@ -1,5 +1,4 @@
 import type { WithoutSystemFields } from "convex/server";
-import { convexToJson } from "convex/values";
 import {
   afterEach,
   assert,
@@ -132,10 +131,8 @@ describe("loop", () => {
    * and if there's work, run the worker mutation with it. Returns the batch
    * result so tests can inspect the idle/work decision.
    *
-   * Starts with an empty commit. The loop's eligibility bound is its snapshot
-   * timestamp, which in convex-test is the latest commit, so an advance of the
-   * fake clock has to reach the database the way batch-worker's own commits do
-   * in production before scheduled work can come due.
+   * Starts with an empty commit so the fake clock reaches convex-test's
+   * snapshot, which only advances on commit.
    */
   async function runLoop() {
     await t.run(async () => {});
@@ -146,34 +143,6 @@ describe("loop", () => {
       await t.mutation(internal.loop.run, result.batch);
     }
     return result;
-  }
-
-  /**
-   * Run `fn` with the snapshot-timestamp syscall answering `ts` instead of
-   * convex-test's real value — e.g. to simulate the commit clock lagging the
-   * wall clock. Safe as long as `ts` is at or below the real one.
-   */
-  async function withSnapshotTs<T>(ts: bigint, fn: () => Promise<T>) {
-    type Syscall = (op: string, args: string) => string;
-    const convex = (globalThis as unknown as { Convex: object }).Convex;
-    // convex-test defines `syscall` as a getter resolving the current test's
-    // context; wrap what it resolves to rather than replacing it.
-    const original = Object.getOwnPropertyDescriptor(convex, "syscall")!;
-    Object.defineProperty(convex, "syscall", {
-      configurable: true,
-      get: (): Syscall => {
-        const real = original.get!.call(convex) as Syscall;
-        return (op, args) =>
-          op === "1.0/getSnapshotTs"
-            ? JSON.stringify(convexToJson(ts))
-            : real(op, args);
-      },
-    });
-    try {
-      return await fn();
-    } finally {
-      Object.defineProperty(convex, "syscall", original);
-    }
   }
 
   /** Pretend a worker finished a job by inserting pendingCompletion. */
@@ -1037,19 +1006,17 @@ describe("loop", () => {
       await runLoop(); // sweep verifies the entry
       vi.advanceTimersByTime(SECOND);
 
-      // The wall clock says due, but the snapshot hasn't reached the key: the
-      // entry is left alone, and the cursor stays below it. Advancing to the
-      // wall-clock key here would let a commit stamped between the two clocks
-      // land behind the cursor.
-      const early = toTimestamp(runAt) - 1n;
-      const held = await withSnapshotTs(early, () => runLoop());
+      // The wall clock says due, but nothing has committed since it advanced,
+      // so the snapshot hasn't reached the key: the entry is left alone and the
+      // cursor stays below it.
+      const held = await t.query(internal.loop.getBatch, { name: WORKER_NAME });
       expect(held.kind).toBe("idle");
       let o = await observe();
       expect(o.running).toHaveLength(0);
       expect(o.segmentCursors!.incoming).toBeLessThan(toTimestamp(runAt));
 
-      // Once the snapshot passes the key, the entry starts and the cursor can
-      // rest on it: nothing committing later is stamped at or below it.
+      // A commit carries the snapshot past the key: the entry starts and the
+      // cursor rests on it.
       await runLoop();
       o = await observe();
       expect(o.running.map((r) => r.workId)).toEqual([workId]);
@@ -1074,9 +1041,8 @@ describe("loop", () => {
       });
       await runLoop();
       await simulateCompletion(workId, { kind: "failed", error: "boom" }, 0);
-      // A ready entry enqueued after the completion: its commit timestamp is
-      // above the retry's `Date.now()`-derived one, so a cursor advancing to
-      // it in the same iteration would strand a retry keyed by the wall clock.
+      // A ready entry enqueued after the completion sorts above a wall-clock
+      // retry key, so a cursor advancing to it would strand the retry.
       const laterId = await enqueueWork();
 
       await runLoop();

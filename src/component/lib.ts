@@ -139,17 +139,11 @@ const MAX_PACKED = 256;
  *
  * Ready-now entries are ordered by this transaction's commit timestamp, which
  * can't land behind the loop's cursor. Scheduled entries are ordered by their
- * start time, ineligible until the loop's snapshot reaches it — but such a
- * document could commit *behind* the cursor (if the enqueue takes longer to
- * commit than the delay), so it also records its commit stamp in `scanTs`; the
- * loop sweeps that index in commit order and starts anything the cursor passed
- * over.
- *
- * No key is ever below its writer's snapshot: the commit stamp is above it by
- * definition, and a start time the commit clock has already passed is raised
- * to it (as the loop does for the keys it writes). So an entry can only land
- * behind the cursor by committing while the loop was mid-iteration, never by
- * the wall clock trailing the commit clock.
+ * start time, raised to this transaction's snapshot if the commit clock is
+ * already past it, so no key is ever below its writer's snapshot. Such a
+ * document can still commit *behind* the cursor (if the enqueue takes longer to
+ * commit than the delay), so it also records its commit stamp in `scanTs` for
+ * the loop's sweep.
  */
 async function insertPendingStarts(
   ctx: MutationCtx,

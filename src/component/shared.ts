@@ -70,12 +70,9 @@ declare const Convex: {
 };
 
 /**
- * The timestamp of the snapshot this transaction reads from, in nanoseconds on
- * the commit-timestamp clock. Every transaction stamped at or below it is
- * visible to this one, and every transaction that commits after it — whether
- * or not it has started yet — is stamped above it. So it is the highest value
- * a cursor over a commit-ordered index can advance to without passing
- * something it hasn't read.
+ * The snapshot this transaction reads at, in nanoseconds on the
+ * commit-timestamp clock. Everything stamped at or below it is visible here,
+ * and everything that commits later is stamped above it.
  *
  * TODO(convex): replace with `ctx.meta.getSnapshotTs()` once a released
  * `convex` exposes it; this is the syscall it wraps.
