@@ -39,15 +39,23 @@ describe("stats reports", () => {
     vi.useRealTimers();
   });
 
-  async function enqueue(segment: bigint) {
+  async function enqueue(segment: bigint, count = 1, legacy = false) {
     await t.run(async (ctx) => {
-      const workId = await ctx.db.insert("work", {
-        fnType: "action",
-        fnHandle: "test",
-        fnName: "test",
-        attempts: 0,
+      const workIds: Id<"work">[] = [];
+      for (let i = 0; i < count; i++) {
+        workIds.push(
+          await ctx.db.insert("work", {
+            fnType: "action",
+            fnHandle: "test",
+            fnName: "test",
+            attempts: 0,
+          }),
+        );
+      }
+      await ctx.db.insert("pendingStart", {
+        segment,
+        ...(legacy ? { workId: workIds[0] } : { workIds }),
       });
-      await ctx.db.insert("pendingStart", { workId, segment });
     });
   }
 
@@ -72,11 +80,11 @@ describe("stats reports", () => {
   });
 
   it("reports a small eligible backlog without scheduling a count", async () => {
-    await enqueue(toTimestamp(Date.now() - 500));
-    await enqueue(toSegment(Date.now()));
-    await enqueue(toTimestamp(Date.now() - 1000));
-    await enqueue(toSegment(Date.now() + 60_000));
-    await enqueue(toTimestamp(Date.now() + 60_000));
+    await enqueue(toTimestamp(Date.now() - 500), 30);
+    await enqueue(toSegment(Date.now()), 1, true);
+    await enqueue(toTimestamp(Date.now() - 1000), 2);
+    await enqueue(toSegment(Date.now() + 60_000), 1, true);
+    await enqueue(toTimestamp(Date.now() + 60_000), 50);
     await t.run(async (ctx) =>
       ctx.db.patch("internalState", stateId, {
         segmentCursors: {
@@ -103,7 +111,8 @@ describe("stats reports", () => {
   });
 
   it("defers a large backlog count after a bounded read", async () => {
-    for (let i = 0; i < 300; i++) await enqueue(toTimestamp(Date.now() - 1000));
+    for (let i = 0; i < 300; i++)
+      await enqueue(toTimestamp(Date.now() - 1000), 2);
     await t.run(async (ctx) => {
       const state = (await ctx.db.get("internalState", stateId))!;
       const before = await ctx.meta.getTransactionMetrics();
@@ -127,8 +136,8 @@ describe("stats reports", () => {
   });
 
   it("accepts reports scheduled by older versions", async () => {
-    await enqueue(toSegment(Date.now()));
-    await enqueue(toSegment(Date.now() + 60_000));
+    await enqueue(toSegment(Date.now()), 1, true);
+    await enqueue(toSegment(Date.now() + 60_000), 1, true);
     await t.mutation(internal.stats.calculateBacklogAndReport, {
       startSegment: 0n,
       endSegment: toSegment(Date.now()),

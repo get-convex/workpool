@@ -694,7 +694,7 @@ describe("loop", () => {
       // Work doc still exists; pendingStart was re-inserted with backoff segment.
       const o = await observe();
       expect(o.pendingStart).toHaveLength(1);
-      expect(o.pendingStart[0].workId).toBe(workId);
+      expect(o.pendingStart[0].workIds).toEqual([workId]);
       expect(await statusOf(workId)).toMatchObject({
         state: "pending",
         previousAttempts: 1,
@@ -769,6 +769,29 @@ describe("loop", () => {
       expect(o.pendingStart).toHaveLength(0);
       expect(o.pendingCancelation).toHaveLength(0);
       expect(o.running).toHaveLength(0);
+    });
+
+    it("removes multiple canceled members from one packed document", async () => {
+      await initialize();
+      const ids = await t.mutation(api.lib.enqueueBatch, {
+        items: Array.from({ length: 3 }, () => ({
+          fnType: "action" as const,
+          fnHandle: "test_handle",
+          fnName: "test_handle",
+          fnArgs: {},
+          runAt: Date.now() + 60_000,
+        })),
+        config: { logLevel: "WARN" },
+      });
+      for (const id of ids.slice(0, 2))
+        await t.mutation(api.lib.cancel, { id });
+      await runLoop();
+      expect((await observe()).pendingStart.map((p) => p.workIds)).toEqual([
+        [ids[2]],
+      ]);
+      await t.mutation(api.lib.cancel, { id: ids[2] });
+      await runLoop();
+      expect((await observe()).pendingStart).toHaveLength(0);
     });
 
     it("removes a pendingStart cancellation before the work runs", async () => {
@@ -1048,6 +1071,51 @@ describe("loop", () => {
   // The out-of-order sweep: entries whose enqueue lost the race
   // ────────────────────────────────────────────────────────────────────
 
+  describe("packed enqueues", () => {
+    it("packs a batch enqueue into one document and drains it", async () => {
+      await initialize({ maxParallelism: 3 });
+      const runAt = Date.now() + 100 * SECOND;
+      const ids = await t.mutation(api.lib.enqueueBatch, {
+        items: Array.from({ length: 5 }, (_, i) => ({
+          fnType: "action" as const,
+          fnHandle: "test_handle",
+          fnName: `fn${i}`,
+          fnArgs: {},
+          runAt: i < 4 ? Date.now() : runAt,
+        })),
+        config: {},
+      });
+
+      // One document for the four ready entries, one for the scheduled one.
+      let o = await observe();
+      expect(o.pendingStart).toHaveLength(2);
+      const ready = o.pendingStart.find((p) => p.scanTs === undefined)!;
+      const scheduled = o.pendingStart.find((p) => p.scanTs !== undefined)!;
+      expect(ready.workIds).toEqual(ids.slice(0, 4));
+      expect(scheduled.workIds).toEqual([ids[4]]);
+      expect(scheduled.segment).toBe(toTimestamp(runAt));
+      expect(scheduled.scanTs).toBeDefined();
+
+      // Capacity 3: the ready document shrinks by a patch, then empties.
+      await runLoop();
+      o = await observe();
+      expect(o.running).toHaveLength(3);
+      expect(o.pendingStart.find((p) => p._id === ready._id)?.workIds).toEqual([
+        ids[3],
+      ]);
+      for (const r of o.running) {
+        await simulateCompletion(r.workId, {
+          kind: "success",
+          returnValue: null,
+        });
+      }
+      await runLoop();
+      o = await observe();
+      expect(o.running.map((r) => r.workId)).toEqual([ids[3]]);
+      expect(o.pendingStart.map((p) => p._id)).toEqual([scheduled._id]);
+    });
+  });
+
   describe("out-of-order sweep", () => {
     /**
      * A near-future enqueue whose commit took longer than its delay: the
@@ -1065,7 +1133,7 @@ describe("loop", () => {
           attempts: 0,
         });
         const pendingStartId = await ctx.db.insert("pendingStart", {
-          workId,
+          workIds: [workId],
           segment: cursor - 1n,
           scanTs: ctx.db.vars.commitTs,
         });
@@ -1127,9 +1195,9 @@ describe("loop", () => {
       // uncovered rather than passing it.
       const idle = await runLoop();
       expect(idle.kind).toBe("idle");
-      expect((await observe()).pendingStart.map((p) => p.workId)).toEqual([
-        lostId,
-      ]);
+      expect(
+        (await observe()).pendingStart.flatMap((p) => p.workIds ?? []),
+      ).toEqual([lostId]);
 
       await simulateCompletion(
         firstId,
@@ -1140,6 +1208,63 @@ describe("loop", () => {
       const o = await observe();
       expect(o.pendingStart).toHaveLength(0);
       expect(o.running.map((r) => r.workId)).toEqual([lostId]);
+    });
+
+    it("drains a packed document with more entries than start slots", async () => {
+      await initialize({ maxParallelism: 2 });
+      // Run something so the incoming cursor is somewhere real, then land a
+      // 5-entry document behind it — a batch enqueue that lost the race.
+      await runLoop();
+      const seedId = await enqueueWork();
+      await runLoop();
+      const cursor = (await observe()).segmentCursors!.incoming;
+      const lostIds = await t.run(async (ctx) => {
+        const ids = [];
+        for (let i = 0; i < 5; i++) {
+          ids.push(
+            await ctx.db.insert("work", {
+              fnType: "action",
+              fnHandle: "test_handle",
+              fnName: "test_handle",
+              fnArgs: {},
+              attempts: 0,
+            }),
+          );
+        }
+        const pendingStartId = await ctx.db.insert("pendingStart", {
+          workIds: ids,
+          segment: cursor - 1n,
+          scanTs: ctx.db.vars.commitTs,
+        });
+        await Promise.all(
+          ids.map((id) => ctx.db.patch("work", id, { pendingStartId })),
+        );
+        return ids;
+      });
+      await simulateCompletion(
+        seedId,
+        { kind: "success", returnValue: null },
+        0,
+      );
+
+      // Two slots per iteration: the document shrinks by patches, and the
+      // sweep cursor waits for it to drain before covering its stamp.
+      const started = new Set<Id<"work">>();
+      for (let i = 0; i < 5; i++) {
+        await runLoop();
+        const o = await observe();
+        for (const r of o.running) started.add(r.workId);
+        for (const r of o.running) {
+          await simulateCompletion(
+            r.workId,
+            { kind: "success", returnValue: null },
+            0,
+          );
+        }
+        if (started.size === 5) break;
+      }
+      expect([...started].sort()).toEqual([...lostIds].sort());
+      expect((await observe()).pendingStart).toHaveLength(0);
     });
 
     it("caps the cursor at the snapshot when starting wall-keyed work", async () => {
@@ -1189,7 +1314,7 @@ describe("loop", () => {
       await runLoop();
       let o = await observe();
       expect(o.running.map((r) => r.workId)).toEqual([laterId]);
-      const retry = o.pendingStart.find((p) => p.workId === workId);
+      const retry = o.pendingStart.find((p) => p.workIds?.includes(workId));
       assert(retry);
       // Raised to the snapshot instead, so it's eligible next iteration.
       expect(retry.segment).toBeGreaterThanOrEqual(o.segmentCursors!.incoming);
@@ -1203,8 +1328,8 @@ describe("loop", () => {
       await initialize();
       const runAt = Date.now() + 0.5;
       const workId = await enqueueWork({}, { runAt });
-      const entry = (await observe()).pendingStart.find(
-        (p) => p.workId === workId,
+      const entry = (await observe()).pendingStart.find((p) =>
+        p.workIds?.includes(workId),
       );
       assert(entry);
       expect(entry.segment).toBe(toTimestamp(runAt));
