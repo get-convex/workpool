@@ -23,16 +23,15 @@
 - A batch enqueue packs entries sharing a start time into one `pendingStart`
   document (up to 256), so it writes a few documents rather than hundreds;
   starting or canceling an entry patches it out of its document.
-- The loop reads at a snapshot timestamp (`ctx.meta.getSnapshotTs()`) and its
-  cursor never passes it: nothing committing later is stamped at or below the
-  snapshot, so a scheduled entry starting at its wall-clock time can't push the
-  cursor ahead of a racing enqueue's commit. Work is eligible up to the later of
-  the snapshot and the wall clock, so ready work starts as soon as it's visible
-  and scheduled work as soon as either clock says it's due. Every key written —
-  enqueue, retry, or re-key — is raised to at least its writer's snapshot, so
-  nothing is ever keyed below what was already visible when it was written. The
-  design makes no assumptions about how wall clocks relate to the commit
-  timestamp clock.
+- The loop reads at a snapshot timestamp and its cursor never passes it: nothing
+  committing later is stamped at or below the snapshot, so a scheduled entry
+  starting at its wall-clock time can't push the cursor ahead of a racing
+  enqueue's commit. Work is eligible up to the later of the snapshot and the
+  wall clock, so ready work starts as soon as it's visible and scheduled work as
+  soon as either clock says it's due. Every key written — enqueue, retry, or
+  re-key — is raised to at least its writer's snapshot, so nothing is ever keyed
+  below what was already visible when it was written. The design makes no
+  assumptions about how wall clocks relate to the commit timestamp clock.
 - Upgrading in place is safe, including for work that hasn't come due yet. A
   `pendingStart` an older version wrote holds a 100ms bucket — eight orders of
   magnitude below a nanosecond timestamp — so the loop recognizes it, reads the
@@ -47,11 +46,9 @@
   starts, `status` reports it as `"pending"` — even if it's mid-attempt (queued
   is the longer-lived of the two states it could be in) — and canceling it takes
   effect immediately but only clears its queue entry when that entry comes due.
-- This change is not backwards compatible. It requires a `convex` release with
-  `ctx.meta.getSnapshotTs()` (TODO: pin the version once it ships), and
-  downgrading a workpool that has run this version is not supported: an older
-  version would read a nanosecond timestamp as a 100ms bucket far in the future
-  and never start the work.
+- This change is not backwards compatible. Downgrading a workpool that has run
+  this version is not supported: an older version would read a nanosecond
+  timestamp as a 100ms bucket far in the future and never start the work.
 
 ## 0.4.10
 
