@@ -153,7 +153,7 @@ export const getBatch = internalQuery({
         incomingCursor: cursors.incoming,
         sweepCursor: cursors.sweep ?? 0n,
         maxParallelism: globals.maxParallelism,
-        runningCount: running.length,
+        running,
       });
 
     // The sweep counts as work when it found entries to start or moved past
@@ -277,15 +277,11 @@ export const run = internalMutation({
       state.lastRecovery = nowTs;
     }
 
-    // Merge the segment scan and sweep in eligibility order.
-    const eligible = [...batch.starts, ...batch.sweepStarts].sort((a, b) =>
+    // Sweep entries precede the cursor; the segment scan is already ordered.
+    batch.sweepStarts.sort((a, b) =>
       a.segment < b.segment ? -1 : a.segment > b.segment ? 1 : 0,
     );
-
-    // Slice to actual available capacity (completions may have freed slots).
-    // Guard against negative numbers in case running.length > maxParallelism.
-    const actualCapacity = globals.maxParallelism - state.running.length;
-    const pending = actualCapacity > 0 ? eligible.slice(0, actualCapacity) : [];
+    const pending = [...batch.sweepStarts, ...batch.starts];
     const startLabel = `[main] pendingStart(${pending.length})`;
     console.time(startLabel);
     await handleStart(ctx, state, pending, console, globals);
@@ -322,21 +318,16 @@ export const run = internalMutation({
     if (batch.cancelations.length > 0) {
       state.segmentCursors.cancelation = batch.cancelations.at(-1)!.segment;
     }
-    // Advance only across handled entries, capped at the snapshot so racing
+    // Every selected start was handled. Cap at the snapshot so racing
     // commits remain ahead. Inclusive reads retain entries sharing a timestamp.
-    const handled = new Set(pending.map((s) => s.pendingId));
     const snapshot = snapshotTs();
-    for (const start of batch.starts) {
-      if (!handled.has(start.pendingId)) break;
+    const lastStart = batch.starts.at(-1);
+    if (lastStart) {
       state.segmentCursors.incoming =
-        start.segment < snapshot ? start.segment : snapshot;
+        lastStart.segment < snapshot ? lastStart.segment : snapshot;
     }
-    // Advance the sweep only after handling every entry it selected.
     // Entries left at the boundary stamp are revisited by an inclusive read.
-    if (
-      batch.sweepStop !== undefined &&
-      batch.sweepStarts.every((s) => handled.has(s.pendingId))
-    ) {
+    if (batch.sweepStop !== undefined) {
       state.segmentCursors.sweep = maxBigint(
         state.segmentCursors.sweep ?? 0n,
         batch.sweepStop,
@@ -359,14 +350,14 @@ async function queryPending(
     incomingCursor,
     sweepCursor,
     maxParallelism,
-    runningCount,
+    running,
   }: {
     completionCursor: bigint;
     cancelationCursor: bigint;
     incomingCursor: bigint;
     sweepCursor: bigint;
     maxParallelism: number;
-    runningCount: number;
+    running: Doc<"internalState">["running"];
   },
 ) {
   const completions = await ctx.db
@@ -377,17 +368,21 @@ async function queryPending(
     .query("pendingCancelation")
     .withIndex("segment", (q) => q.gte("segment", cancelationCursor))
     .take(CANCELLATION_BATCH_SIZE);
-  // Available slots after we process this batch's completions. Cap at
-  // MAIN_BATCH_SIZE so a single iteration's per-item writes (delete
-  // pendingStart + scheduler.runAfter) don't grow unbounded.
+  // Only completions for running jobs free slots, even if duplicated.
+  const completed = new Set(completions.map((c) => c.workId));
+  const remainingRunning = running.filter(
+    (r) => !completed.has(r.workId),
+  ).length;
+  // Bound per-iteration writes. getBatch and run share a snapshot, so every
+  // selected start fits after completions are processed.
   const startLimit = Math.min(
     MAIN_BATCH_SIZE,
-    Math.max(0, maxParallelism - runningCount + completions.length),
+    Math.max(0, maxParallelism - remainingRunning),
   );
   // Work completing or canceling this iteration is skipped when reading; the
   // same iteration removes those entries, so the cursors may pass them.
   const excluded = new Set([
-    ...completions.map((c) => c.workId),
+    ...completed,
     ...cancelations.map((c) => c.workId),
   ]);
 

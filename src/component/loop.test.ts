@@ -287,6 +287,63 @@ describe("loop", () => {
   // ────────────────────────────────────────────────────────────────────
 
   describe("capacity", () => {
+    it.each(["duplicate", "non-running"] as const)(
+      "does not reserve a start slot for a %s completion",
+      async (extraCompletion) => {
+        await initialize({ maxParallelism: 2 });
+        const finished = await enqueueWork();
+        const stillRunning = await enqueueWork();
+        await runLoop();
+        await simulateCompletion(finished, {
+          kind: "success",
+          returnValue: null,
+        });
+        await t.run(async (ctx) => {
+          const workId =
+            extraCompletion === "duplicate"
+              ? finished
+              : await ctx.db.insert("work", {
+                  fnType: "action",
+                  fnHandle: "test_handle",
+                  fnName: "test_handle",
+                  fnArgs: {},
+                  attempts: 0,
+                });
+          await ctx.db.insert("pendingCompletion", {
+            workId,
+            runResult: { kind: "success", returnValue: null },
+            retry: false,
+            segment: ctx.db.vars.commitTs,
+          });
+        });
+        const next = await enqueueWork();
+        const overflow = await enqueueWork();
+
+        const result = await runLoop();
+        assert(result.kind === "work");
+        expect(result.batch.completions).toHaveLength(2);
+        expect([
+          ...result.batch.sweepStarts,
+          ...result.batch.starts,
+        ]).toHaveLength(1);
+        expect((await observe()).running.map((r) => r.workId)).toEqual([
+          stillRunning,
+          next,
+        ]);
+        expect(await statusOf(overflow)).toMatchObject({ state: "pending" });
+
+        await simulateCompletion(stillRunning, {
+          kind: "success",
+          returnValue: null,
+        });
+        await runLoop();
+        expect((await observe()).running.map((r) => r.workId)).toEqual([
+          next,
+          overflow,
+        ]);
+      },
+    );
+
     it("never starts more than maxParallelism in one iteration", async () => {
       await initialize({ maxParallelism: 3 });
       for (let i = 0; i < 7; i++) await enqueueWork();
@@ -1008,6 +1065,29 @@ describe("loop", () => {
       // Its commit stamp is covered, so the sweep never re-reads it.
       expect(o.segmentCursors!.sweep).toBeGreaterThan(0n);
       expect(readyId).toBeDefined();
+    });
+
+    it("starts sweep entries in segment order before the ready scan", async () => {
+      await initialize({ maxParallelism: 5 });
+      const running = await enqueueWork();
+      await runLoop();
+      const cursor = (await observe()).segmentCursors!.incoming;
+      const newer = await enqueueBehindCursor(cursor);
+      const older = await enqueueBehindCursor(cursor - 1n);
+      const ready = await enqueueWork();
+      const laterReady = await enqueueWork();
+
+      await runLoop();
+
+      const o = await observe();
+      expect(o.running.map((r) => r.workId)).toEqual([
+        running,
+        older,
+        newer,
+        ready,
+        laterReady,
+      ]);
+      expect(o.pendingStart).toHaveLength(0);
     });
 
     it("waits for capacity to retire an out-of-order entry, without losing it", async () => {
