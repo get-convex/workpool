@@ -19,15 +19,17 @@ import {
   boundScheduledTime,
   vConfig,
   fnType,
-  getCurrentSegment,
-  max,
   vOnCompleteFnContext,
   retryBehavior,
   status as statusValidator,
-  toSegment,
+  maxBigint,
+  MINUTE,
+  snapshotTs,
+  toTimestamp,
 } from "./shared.js";
 import { recordEnqueued } from "./stats.js";
 import { getOrUpdateGlobals } from "./config.js";
+import { findPendingStart } from "./pendingStart.js";
 
 const INLINE_METADATA_THRESHOLD = 8_000; // 8KB threshold
 const MAX_DOC_SIZE = 1_000_000; // Some buffer for 1MiB actual limit
@@ -57,7 +59,8 @@ export const enqueue = mutation({
     return await enqueueHandler(ctx, console, itemArgs);
   },
 });
-async function enqueueHandler(
+/** Exported for tests, so they enqueue exactly what the public API writes. */
+export async function enqueueHandler(
   ctx: MutationCtx,
   console: Logger,
   { runAt, ...workArgs }: ObjectType<typeof itemArgs>,
@@ -111,11 +114,21 @@ async function enqueueHandler(
 
   // Store the work item
   const workId = await ctx.db.insert("work", workItem);
-
-  await ctx.db.insert("pendingStart", {
+  const now = Date.now();
+  const scheduled = runAt > now;
+  // Scheduled keys stay at or above the snapshot, which bounds the cursor.
+  const segment = scheduled
+    ? maxBigint(toTimestamp(runAt), snapshotTs())
+    : ctx.db.vars.commitTs;
+  const pendingStartId = await ctx.db.insert("pendingStart", {
     workId,
-    segment: max(toSegment(runAt), getCurrentSegment()),
+    segment,
+    // Only near-term starts can commit behind the cursor.
+    ...(scheduled && (segment as bigint) <= toTimestamp(now + 5 * MINUTE)
+      ? { scanTs: ctx.db.vars.commitTs }
+      : {}),
   });
+  await ctx.db.patch("work", workId, { pendingStartId });
   recordEnqueued(console, { workId, fnName: workArgs.fnName, runAt });
   return workId;
 }
@@ -146,7 +159,7 @@ export const cancel = mutation({
       await kickMainLoop(ctx, "cancel");
       await ctx.db.insert("pendingCancelation", {
         workId: id,
-        segment: getCurrentSegment(),
+        segment: ctx.db.vars.commitTs,
       });
     }
   },
@@ -176,13 +189,12 @@ export const cancelAll = mutation({
     if (shouldCancel.some((c) => c)) {
       await kickMainLoop(ctx, "cancel");
     }
-    const segment = getCurrentSegment();
     await Promise.all(
       pageOfWork.map(({ _id }, index) => {
         if (shouldCancel[index]) {
           return ctx.db.insert("pendingCancelation", {
             workId: _id,
-            segment,
+            segment: ctx.db.vars.commitTs,
           });
         }
       }),
@@ -207,11 +219,14 @@ async function statusHandler(ctx: QueryCtx, { id }: { id: Id<"work"> }) {
   if (!work) {
     return { state: "finished" } as const;
   }
-  const pendingStart = await ctx.db
-    .query("pendingStart")
-    .withIndex("workId", (q) => q.eq("workId", id))
-    .unique();
-  if (pendingStart) {
+  if (work.pendingStartId === undefined) {
+    // Old running jobs have no queue pointer; queued jobs get one during upgrade.
+    const state = await ctx.db.query("internalState").order("desc").first();
+    if (!state?.running.some((r) => r.workId === id)) {
+      return { state: "pending", previousAttempts: work.attempts } as const;
+    }
+  }
+  if (await findPendingStart(ctx, work)) {
     return { state: "pending", previousAttempts: work.attempts } as const;
   }
   const pendingCompletion = await ctx.db
