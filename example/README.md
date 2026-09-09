@@ -5,6 +5,9 @@ also doubles as a benchmark dashboard for the workpool component itself — it
 exercises the API and surfaces throughput and latency metrics for the scenarios
 in `convex/test/scenarios/`.
 
+To run the benchmarks from the command line, and for what it takes to get
+numbers worth trusting, see [BENCHMARKS.md](./BENCHMARKS.md).
+
 ## Running the dashboard
 
 From the repo root, in two terminals:
@@ -21,10 +24,10 @@ the vite config reads from the repo root (`envDir: "../"`).
 
 The dashboard is a single comparison workspace. Pick a preset (`burstyBatches`,
 `throughput`, `overhead`, `sustained`, `bigArgs`, `bigContext`, or
-`bigReturnTypes`) and it runs the published 0.4.7 baseline, then this branch,
-with identical parameters. The completed pair is selected automatically and
-rendered as outcome cards, throughput and latency charts, and recent-run history
-on the same page.
+`bigReturnTypes`) and it runs the published baseline pinned by
+`@convex-dev/workpool-old`, then this branch, with identical parameters. The
+completed pair is selected automatically and rendered as outcome cards,
+throughput and latency charts, and recent-run history on the same page.
 
 Scheduled-function instrumentation stays internal to the components. Backfill a
 checked run from its component system table with:
