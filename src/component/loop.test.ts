@@ -532,6 +532,32 @@ describe("loop", () => {
       },
     );
 
+    it("preserves the time ordering of overdue legacy work", async () => {
+      await initialize({ maxParallelism: 1 });
+      const now = Date.now();
+      const newer = await enqueueLegacyWork(now + 2 * SECOND);
+      const older = await enqueueLegacyWork(now + SECOND);
+      vi.setSystemTime(now + 3 * SECOND);
+      // Advance the snapshot past both scheduled times.
+      await t.run(async () => null);
+
+      await runLoop(); // upgrade
+      await runLoop();
+
+      let o = await observe();
+      expect(o.running.map((r) => r.workId)).toEqual([older]);
+      expect(o.pendingStart).toHaveLength(1);
+      expect(o.pendingStart[0].segment).toBe(
+        toTimestamp(fromSegment(toSegment(now + 2 * SECOND))),
+      );
+
+      await simulateCompletion(older, { kind: "success", returnValue: null });
+      await runLoop();
+      o = await observe();
+      expect(o.running.map((r) => r.workId)).toEqual([newer]);
+      expect(o.pendingStart).toHaveLength(0);
+    });
+
     it("starts work that was already due", async () => {
       await initialize();
       const workId = await enqueueLegacyWork(Date.now());
