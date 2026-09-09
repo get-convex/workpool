@@ -51,7 +51,6 @@ describe("stats", () => {
       // Setup internal state
       const stateId = await t.run(async (ctx) => {
         return await ctx.db.insert("internalState", {
-          generation: 1n,
           segmentCursors: {
             incoming: 0n,
             completion: 0n,
@@ -96,7 +95,6 @@ describe("stats", () => {
       // Setup internal state
       const stateId = await t.run(async (ctx) => {
         return await ctx.db.insert("internalState", {
-          generation: 1n,
           segmentCursors: {
             incoming: 0n,
             completion: 0n,
@@ -170,7 +168,6 @@ describe("stats", () => {
       // Setup internal state
       const stateId = await t.run(async (ctx) => {
         return await ctx.db.insert("internalState", {
-          generation: 1n,
           segmentCursors: {
             incoming: 0n,
             completion: 0n,
@@ -254,7 +251,6 @@ describe("stats", () => {
       // Setup internal state
       const stateId = await t.run(async (ctx) => {
         return await ctx.db.insert("internalState", {
-          generation: 1n,
           segmentCursors: {
             incoming: 0n,
             completion: 0n,
