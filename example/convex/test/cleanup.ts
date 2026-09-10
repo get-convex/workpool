@@ -12,22 +12,24 @@ const TABLES = [
 
 /** Clear bookkeeping between runs; advance the cursor to skip tombstones. */
 export const step = internalMutation({
-  args: { index: v.number(), limit: v.number(), after: v.number() },
+  args: {
+    index: v.number(),
+    limit: v.number(),
+    cursor: v.union(v.string(), v.null()),
+  },
   returns: v.null(),
-  handler: async (ctx, { index, limit, after }) => {
+  handler: async (ctx, { index, limit, cursor }) => {
     validateLimit(limit);
     if (index >= TABLES.length) return null;
     const table = TABLES[index];
-    const docs = await ctx.db
+    const result = await ctx.db
       .query(table)
-      .withIndex("by_creation_time", (q) => q.gt("_creationTime", after))
-      .take(limit);
-    for (const doc of docs) await ctx.db.delete(table, doc._id);
-    const done = docs.length < limit;
+      .paginate({ cursor, numItems: limit });
+    for (const doc of result.page) await ctx.db.delete(table, doc._id);
     await ctx.scheduler.runAfter(0, internal.test.cleanup.step, {
-      index: done ? index + 1 : index,
+      index: result.isDone ? index + 1 : index,
       limit,
-      after: done ? 0 : docs[docs.length - 1]._creationTime,
+      cursor: result.isDone ? null : result.continueCursor,
     });
     return null;
   },
@@ -41,7 +43,7 @@ export const start = internalMutation({
     await ctx.scheduler.runAfter(0, internal.test.cleanup.step, {
       index: 0,
       limit,
-      after: 0,
+      cursor: null,
     });
     return null;
   },
