@@ -238,17 +238,50 @@ class RunnerTests(unittest.TestCase):
         logger = runner["LOGGER"]
         runner["call"] = Mock(return_value={"work": 0})
         runner["measure"] = Mock()
-        runner["cleanup"].side_effect = lambda: setattr(logger.poll, "return_value", 0)
         output = io.StringIO()
         with (
             patch("subprocess.Popen", return_value=logger),
-            patch("time.sleep"),
+            patch(
+                "time.sleep",
+                side_effect=lambda _: setattr(logger.poll, "return_value", 0),
+            ),
             contextlib.redirect_stdout(output),
             self.assertRaisesRegex(RuntimeError, "Runtime logging stopped"),
         ):
             runner["main"]()
         self.assertNotIn("COMPLETE", output.getvalue())
         logger.terminate.assert_called_once()
+
+    def test_log_flush_precedes_shutdown_on_success_and_failure(self):
+        for failure in [None, RuntimeError("Benchmark failed"), KeyboardInterrupt()]:
+            with self.subTest(failure=failure):
+                runner = self.load_runner()
+                logger = runner["LOGGER"]
+                runner["call"] = Mock(return_value={"work": 0})
+                runner["measure"] = Mock(side_effect=failure)
+                output = io.StringIO()
+
+                def flush(seconds, logger=logger, output=output):
+                    self.assertEqual(seconds, 2)
+                    logger.terminate.assert_not_called()
+                    self.assertNotIn("COMPLETE", output.getvalue())
+
+                with (
+                    patch("subprocess.Popen", return_value=logger),
+                    patch("time.sleep", side_effect=flush) as sleep,
+                    contextlib.redirect_stdout(output),
+                ):
+                    if failure is None:
+                        runner["main"]()
+                    else:
+                        with self.assertRaises(type(failure)) as raised:
+                            runner["main"]()
+                        self.assertIs(raised.exception, failure)
+
+                sleep.assert_called_once_with(2)
+                logger.terminate.assert_called_once()
+                logger.wait.assert_called_once_with(timeout=10)
+                self.assertEqual("COMPLETE" in output.getvalue(), failure is None)
 
 
 if __name__ == "__main__":
