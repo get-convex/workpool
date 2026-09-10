@@ -131,8 +131,8 @@ export async function completeHandler(
           work.onComplete &&
           ("fnHandle" in work.onComplete
             ? work.onComplete.fnHandle
-            : job.runResult.kind === "failed"
-              ? work.onComplete.onStatusHandle.failed
+            : job.runResult.kind !== "success"
+              ? work.onComplete.onStatusHandle[job.runResult.kind]
               : undefined);
         if (work.onComplete && fnHandle) {
           try {

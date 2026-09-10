@@ -462,7 +462,7 @@ export type EnqueueOptions<Context = unknown, ReturnValue = unknown> = {
    */
   name?: string;
   /**
-   * A context object to pass to the `onComplete` or `onFailure` mutation.
+   * A context object to pass to the `onComplete`, `onFailure`, or `onCancel` mutation.
    * Useful for passing data from the enqueue site to the onComplete site.
    */
   context?: Context;
@@ -470,7 +470,7 @@ export type EnqueueOptions<Context = unknown, ReturnValue = unknown> = {
   | {
       /**
        * A mutation to run after the function succeeds, fails, or is canceled.
-       * Cannot be used together with `onFailure`.
+       * Cannot be used together with `onFailure` or `onCancel`.
        * The context type is for your use, feel free to provide a validator for it.
        * e.g.
        * ```ts
@@ -498,18 +498,32 @@ export type EnqueueOptions<Context = unknown, ReturnValue = unknown> = {
         OnCompleteArgs<Context, ReturnValue>
       > | null;
       onFailure?: never;
+      onCancel?: never;
     }
   | {
       /**
        * A mutation to run when the function fails with no retries remaining,
-       * or throws a NonRetryableError. Not called on success or cancellation
-       * through the Workpool API. Recovery treats direct scheduler cancellation
-       * as a failure, which can trigger retries and this callback.
+       * or throws a NonRetryableError. Not called for successful or canceled results.
+       * Direct scheduler cancellation is treated as a failure, which can trigger
+       * retries and this callback.
        * Uses the same arguments and separate transaction as `onComplete`,
        * so an existing `onComplete` handler can be passed here unchanged.
-       * Cannot be used together with `onComplete`.
+       * Can be used together with `onCancel`, but not `onComplete`.
        */
       onFailure?: FunctionReference<
+        "mutation",
+        FunctionVisibility,
+        OnCompleteArgs<Context, ReturnValue>
+      > | null;
+      /**
+       * A mutation to run when work finishes with a canceled result, using the
+       * same arguments and separate transaction as `onComplete`.
+       * Cancellation prevents starting or retrying work; it does not stop an
+       * in-progress attempt. That attempt may still finish with success or failure.
+       * Direct scheduler cancellation is treated as a failure, not cancellation.
+       * Can be used together with `onFailure`, but not `onComplete`.
+       */
+      onCancel?: FunctionReference<
         "mutation",
         FunctionVisibility,
         OnCompleteArgs<Context, ReturnValue>
@@ -588,8 +602,10 @@ async function enqueueArgs<Context, ReturnType>(
         Partial<Config> & { retryBehavior?: RetryBehavior })
     | undefined,
 ) {
-  if (opts?.onComplete && opts.onFailure) {
-    throw new Error("Cannot define both onComplete and onFailure handlers.");
+  if (opts?.onComplete && (opts.onFailure || opts.onCancel)) {
+    throw new Error(
+      "Cannot define both onComplete and onFailure/onCancel handlers.",
+    );
   }
   const [fnHandle, fnName] =
     typeof fn === "string" && fn.startsWith("function://")
@@ -603,10 +619,15 @@ async function enqueueArgs<Context, ReturnType>(
           fnHandle: await createFunctionHandle(opts.onComplete),
           context: opts.context,
         }
-      : opts?.onFailure
+      : opts?.onFailure || opts?.onCancel
         ? {
             onStatusHandle: {
-              failed: await createFunctionHandle(opts.onFailure),
+              failed: opts.onFailure
+                ? await createFunctionHandle(opts.onFailure)
+                : undefined,
+              canceled: opts.onCancel
+                ? await createFunctionHandle(opts.onCancel)
+                : undefined,
             },
             context: opts.context,
           }

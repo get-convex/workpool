@@ -38,13 +38,24 @@ describe("lib", () => {
 
   describe("enqueue", () => {
     it.each([false, true])(
-      "accepts legacy and failure callback handles (batch: %s)",
+      "accepts legacy and outcome callback handles (batch: %s)",
       async (batch) => {
         const callbacks = [
           { fnHandle: "completeHandle", context: { key: "complete" } },
           {
             onStatusHandle: { failed: "failureHandle" },
             context: { key: "failure" },
+          },
+          {
+            onStatusHandle: { canceled: "cancelHandle" },
+            context: { key: "cancel" },
+          },
+          {
+            onStatusHandle: {
+              failed: "failureHandle",
+              canceled: "cancelHandle",
+            },
+            context: { key: "both" },
           },
         ];
         const items = callbacks.map((onComplete) => ({
@@ -74,22 +85,28 @@ describe("lib", () => {
       "rejects mixed callback handles at the component boundary (batch: %s)",
       async (batch) => {
         // Bypass the client guard to exercise the component's own validator.
-        const item = {
-          fnHandle: "workHandle",
-          fnName: "work",
-          fnArgs: {},
-          fnType: "mutation" as const,
-          runAt: Date.now(),
-          onComplete: {
-            fnHandle: "completeHandle",
-            onStatusHandle: { failed: "failureHandle" },
-          },
-        };
-        await expect(
-          batch
-            ? t.mutation(api.lib.enqueueBatch, { items: [item], config: {} })
-            : t.mutation(api.lib.enqueue, { ...item, config: {} }),
-        ).rejects.toThrow(/Validator error/);
+        for (const onStatusHandle of [
+          { failed: "failureHandle" },
+          { canceled: "cancelHandle" },
+          { failed: "failureHandle", canceled: "cancelHandle" },
+        ]) {
+          const item = {
+            fnHandle: "workHandle",
+            fnName: "work",
+            fnArgs: {},
+            fnType: "mutation" as const,
+            runAt: Date.now(),
+            onComplete: {
+              fnHandle: "completeHandle",
+              onStatusHandle,
+            },
+          };
+          await expect(
+            batch
+              ? t.mutation(api.lib.enqueueBatch, { items: [item], config: {} })
+              : t.mutation(api.lib.enqueue, { ...item, config: {} }),
+          ).rejects.toThrow(/Validator error/);
+        }
         await t.run(async (ctx) => {
           expect(await ctx.db.query("work").collect()).toEqual([]);
           expect(await ctx.db.query("pendingStart").collect()).toEqual([]);

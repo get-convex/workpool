@@ -160,12 +160,31 @@ await pool.enqueueAction(ctx, internal.email.send, args, {
 ```
 
 `onFailure` runs after retries are exhausted, or immediately after a
-`NonRetryableError`. It is skipped for successful jobs and jobs canceled through
-the Workpool API. Canceling a scheduled function directly in the dashboard is
-treated as a failure and can trigger retries and `onFailure`. Like `onComplete`,
-it runs in a separate transaction from the work. A callback error does not retry
-the original work. Use `onComplete` when you also need success or cancellation
-notifications; specifying both options is an error.
+`NonRetryableError`. It is skipped for successful and canceled results.
+Canceling a scheduled function directly in the dashboard is treated as a failure
+and can trigger retries and `onFailure`. Like `onComplete`, it runs in a
+separate transaction from the work. A callback error does not retry the original
+work.
+
+Use `onCancel` to handle a `{ kind: "canceled" }` result when cancellation
+prevents work from starting or being retried. It accepts the same completion
+handler and context, and can be combined with `onFailure`. For example, to send
+both outcomes to the existing handler:
+
+```ts
+await pool.enqueueAction(ctx, internal.email.send, args, {
+  onFailure: internal.email.emailSent,
+  onCancel: internal.email.emailSent,
+  context: { emailType: args.emailType, userId: args.userId },
+  retry: false, // don't retry this action, as we can't guarantee idempotency.
+});
+```
+
+The two callbacks can also use different handlers. Both run in separate
+transactions from the work, and neither can be combined with `onComplete`.
+`onCancel` follows the final result, so requesting cancellation does not
+necessarily invoke it: in-progress work can still finish with success or
+failure.
 
 ### Idempotency
 
@@ -333,8 +352,11 @@ options include:
 - `onFailure`: A mutation to run after a terminal failure, using the same
   arguments as `onComplete`. Not called on success or cancellation. Cannot be
   combined with `onComplete`.
-- `context`: Any data you want to pass to the `onComplete` or `onFailure`
-  mutation.
+- `onCancel`: A mutation to run after a canceled result, using the same
+  arguments as `onComplete`. Can be combined with `onFailure`, but not
+  `onComplete`.
+- `context`: Any data you want to pass to the `onComplete`, `onFailure`, or
+  `onCancel` mutation.
 - `runAt` and `runAfter`: Similar to `ctx.scheduler.run*`, allows you to
   schedule the work to run later. By default it's immediate.
 
@@ -431,7 +453,11 @@ export const cancelWork = mutation({
 });
 ```
 
-This will avoid starting or retrying, but will not stop in-progress work.
+This will avoid starting or retrying, but will not stop in-progress work. If an
+in-progress attempt succeeds, its result is still success. Failures remain
+failures when retries are disabled or exhausted, or the error is a
+`NonRetryableError`. If cancellation prevents a retry, the final result is
+`canceled` and `onCancel` runs if provided.
 
 ## Monitoring the workpool
 

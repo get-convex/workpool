@@ -99,62 +99,74 @@ describe("recovery", () => {
     vi.useRealTimers();
   });
 
-  describe.each(["onComplete", "onFailure"] as const)(
+  describe.each(["onComplete", "onFailure", "onCancel"] as const)(
     "%s callbacks",
     (mode) => {
       it.each([
         ["missing", "Scheduled job not found"],
         ["failed", "Function execution failed"],
         ["canceled", "Canceled via scheduler"],
-      ] as const)("runs once for a %s scheduled job", async (state, error) => {
-        const job = await t.run(async (ctx) => {
-          const handle = await createFunctionHandle(callbackRef);
-          const workId = await makeDummyWork(ctx, {
-            onComplete:
-              mode === "onComplete"
-                ? { fnHandle: handle, context: { key: state } }
-                : {
-                    onStatusHandle: { failed: handle },
-                    context: { key: state },
-                  },
+      ] as const)(
+        "dispatches the appropriate callback for a %s scheduled job",
+        async (state, error) => {
+          const job = await t.run(async (ctx) => {
+            const handle = await createFunctionHandle(callbackRef);
+            const workId = await makeDummyWork(ctx, {
+              onComplete:
+                mode === "onComplete"
+                  ? { fnHandle: handle, context: { key: state } }
+                  : {
+                      onStatusHandle:
+                        mode === "onFailure"
+                          ? { failed: handle }
+                          : { canceled: handle },
+                      context: { key: state },
+                    },
+            });
+            const scheduledId = await makeDummyScheduledFunction(ctx, workId);
+            // Prevent the placeholder worker from running when callbacks are drained.
+            await ctx.scheduler.cancel(scheduledId);
+            return { workId, scheduledId, attempt: 0, started: Date.now() };
           });
-          const scheduledId = await makeDummyScheduledFunction(ctx, workId);
-          // Prevent the placeholder worker from running when callbacks are drained.
-          await ctx.scheduler.cancel(scheduledId);
-          return { workId, scheduledId, attempt: 0, started: Date.now() };
-        });
-        await t.run(async (ctx) => {
-          const scheduled = await ctx.db.system.get(
-            "_scheduled_functions",
-            job.scheduledId,
-          );
-          assert(scheduled);
-          // Only emulate the scheduler state; recovery and callback dispatch run
-          // normally, including scheduling and executing the callback mutation.
-          ctx.db.system.get = patchedSystemGet(ctx.db, {
-            [job.scheduledId]:
-              state === "missing"
-                ? null
-                : {
-                    ...scheduled,
-                    state:
-                      state === "failed"
-                        ? { kind: state, error }
-                        : { kind: state },
-                  },
+          await t.run(async (ctx) => {
+            const scheduled = await ctx.db.system.get(
+              "_scheduled_functions",
+              job.scheduledId,
+            );
+            assert(scheduled);
+            // Only emulate the scheduler state; recovery and callback dispatch run
+            // normally, including scheduling and executing the callback mutation.
+            ctx.db.system.get = patchedSystemGet(ctx.db, {
+              [job.scheduledId]:
+                state === "missing"
+                  ? null
+                  : {
+                      ...scheduled,
+                      state:
+                        state === "failed"
+                          ? { kind: state, error }
+                          : { kind: state },
+                    },
+            });
+            await recoveryHandler(ctx, { jobs: [job] });
           });
-          await recoveryHandler(ctx, { jobs: [job] });
-        });
-        // A repeated recovery scan must not dispatch the callback again.
-        await t.mutation(internal.recovery.recover, { jobs: [job] });
-        await t.finishAllScheduledFunctions(vi.runAllTimers);
-        expect(callback).toHaveBeenCalledExactlyOnceWith({
-          workId: job.workId,
-          context: { key: state },
-          result: { kind: "failed", error },
-        });
-        expect(await t.run((ctx) => ctx.db.get("work", job.workId))).toBeNull();
-      });
+          // A repeated recovery scan must not dispatch the callback again.
+          await t.mutation(internal.recovery.recover, { jobs: [job] });
+          await t.finishAllScheduledFunctions(vi.runAllTimers);
+          if (mode === "onCancel") {
+            expect(callback).not.toHaveBeenCalled();
+          } else {
+            expect(callback).toHaveBeenCalledExactlyOnceWith({
+              workId: job.workId,
+              context: { key: state },
+              result: { kind: "failed", error },
+            });
+          }
+          expect(
+            await t.run((ctx) => ctx.db.get("work", job.workId)),
+          ).toBeNull();
+        },
+      );
     },
   );
 

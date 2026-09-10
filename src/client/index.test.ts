@@ -81,6 +81,10 @@ const callback = vi.fn(
     return null;
   },
 );
+const optionalCallback = vi.fn((...args: Parameters<typeof callback>) =>
+  callback(...args),
+);
+let actionGate: Promise<void> | undefined;
 const fixtures = {
   attempt: internalMutationGeneric({
     args: { key: v.string() },
@@ -99,6 +103,7 @@ const fixtures = {
     returns: v.string(),
     handler: async (ctx, args): Promise<string> => {
       const attempt = await ctx.runMutation(refs.attempt, { key: args.key });
+      await actionGate;
       if (args.fail || attempt <= (args.failures ?? 0)) {
         if (args.nonRetryable) throw new NonRetryableError("work failed");
         throw new Error("work failed");
@@ -137,7 +142,7 @@ const fixtures = {
   optionalComplete: internalMutationGeneric({
     args: vOnCompleteArgs(),
     returns: v.null(),
-    handler: callback,
+    handler: optionalCallback,
   }),
 };
 const refs = (
@@ -153,7 +158,7 @@ const component = componentsGeneric().workpool as unknown as WorkpoolComponent;
 const pool = new Workpool(component, { maxParallelism: 3, logLevel: "ERROR" });
 const retries = { maxAttempts: 3, initialBackoffMs: 1, base: 2 };
 type Kind = "action" | "mutation" | "query";
-type Mode = "onComplete" | "onFailure";
+type Mode = "onComplete" | "onFailure" | "onCancel";
 
 describe("completion callbacks through the client and scheduler", () => {
   let t: ReturnType<typeof setup>;
@@ -165,6 +170,8 @@ describe("completion callbacks through the client and scheduler", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     callback.mockClear();
+    optionalCallback.mockClear();
+    actionGate = undefined;
     t = setup();
   });
   afterEach(async () => {
@@ -197,7 +204,9 @@ describe("completion callbacks through the client and scheduler", () => {
     const opts =
       mode === "onFailure"
         ? { onFailure: refs.complete, context, ...rest }
-        : { onComplete: refs.complete, context, ...rest };
+        : mode === "onCancel"
+          ? { onCancel: refs.complete, context, ...rest }
+          : { onComplete: refs.complete, context, ...rest };
     return t.mutation((ctx) => {
       switch (kind) {
         case "action":
@@ -287,7 +296,7 @@ describe("completion callbacks through the client and scheduler", () => {
     });
   });
 
-  test.each(["onComplete", "onFailure"] as const)(
+  test.each(["onComplete", "onFailure", "onCancel"] as const)(
     "%s preserves cancellation semantics",
     async (mode) => {
       const id = await enqueue(
@@ -312,6 +321,229 @@ describe("completion callbacks through the client and scheduler", () => {
       });
     },
   );
+
+  test.each(["action", "mutation", "query"] as const)(
+    "onCancel skips successful and failed %s work",
+    async (kind) => {
+      const ids = [
+        await enqueue(kind, { key: "success" }, { mode: "onCancel" }),
+        await enqueue(
+          kind,
+          { key: "failure", fail: true },
+          { mode: "onCancel", retry: retries },
+        ),
+      ];
+      await drain();
+      expect(callback).not.toHaveBeenCalled();
+      expect(await t.query((ctx) => pool.statusBatch(ctx, ids))).toEqual([
+        { state: "finished" },
+        { state: "finished" },
+      ]);
+      if (kind === "action") {
+        expect(await events("failure")).toHaveLength(3);
+      }
+    },
+  );
+
+  test("onCancel runs once when a job is canceled during retry backoff", async () => {
+    const id = await enqueue(
+      "action",
+      { key: "backoff", fail: true },
+      {
+        mode: "onCancel",
+        retry: { ...retries, initialBackoffMs: 60_000 },
+      },
+    );
+    await vi.waitFor(
+      async () => {
+        expect(await t.query((ctx) => pool.status(ctx, id))).toEqual({
+          state: "pending",
+          previousAttempts: 1,
+        });
+      },
+      { timeout: 10_000 },
+    );
+    expect(callback).not.toHaveBeenCalled();
+    await t.mutation((ctx) => pool.cancel(ctx, id));
+    await t.mutation((ctx) => pool.cancel(ctx, id));
+    await drain();
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect((await events("backoff")).map((e) => e.kind)).toEqual([
+      "attempt",
+      "callback",
+    ]);
+    expect((await events("backoff"))[1]).toMatchObject({
+      workId: id,
+      result: { kind: "canceled" },
+    });
+    expect(await t.query((ctx) => pool.status(ctx, id))).toEqual({
+      state: "finished",
+    });
+  });
+
+  test.each([
+    { name: "success", fail: false, retry: false, expected: "success" },
+    { name: "failure", fail: true, retry: false, expected: "failed" },
+    {
+      name: "prevented retry",
+      fail: true,
+      retry: retries,
+      expected: "canceled",
+    },
+    {
+      name: "non-retryable failure",
+      fail: true,
+      nonRetryable: true,
+      retry: retries,
+      expected: "failed",
+    },
+    {
+      name: "exhausted retries",
+      fail: true,
+      retry: { ...retries, maxAttempts: 1 },
+      expected: "failed",
+    },
+  ] as const)(
+    "canceling running work dispatches by its final result ($name)",
+    async ({ name, fail, retry, expected, ...args }) => {
+      let release!: () => void;
+      actionGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      try {
+        const id = await t.mutation((ctx) =>
+          pool.enqueueAction(
+            ctx,
+            refs.action,
+            { key: name, fail, ...args },
+            {
+              onFailure: refs.optionalComplete,
+              onCancel: refs.complete,
+              context: { key: name },
+              retry,
+            },
+          ),
+        );
+        await vi.waitFor(
+          async () => {
+            expect((await events(name)).map((e) => e.kind)).toEqual([
+              "attempt",
+            ]);
+          },
+          { timeout: 10_000 },
+        );
+        await t.mutation((ctx) => pool.cancel(ctx, id));
+        expect(await t.query((ctx) => pool.status(ctx, id))).toMatchObject({
+          state: "running",
+        });
+        expect(callback).not.toHaveBeenCalled();
+
+        release();
+        await drain();
+        expect(await t.query((ctx) => pool.status(ctx, id))).toEqual({
+          state: "finished",
+        });
+        const recorded = await events(name);
+        expect(recorded.filter((e) => e.kind === "attempt")).toHaveLength(1);
+        expect(recorded.filter((e) => e.kind === "callback")).toMatchObject(
+          expected === "success" ? [] : [{ result: { kind: expected } }],
+        );
+        expect(optionalCallback).toHaveBeenCalledTimes(
+          expected === "failed" ? 1 : 0,
+        );
+        if (expected === "success") {
+          expect(callback).not.toHaveBeenCalled();
+        } else {
+          expect(callback).toHaveBeenCalledTimes(1);
+          expect(recorded[1]).toMatchObject({
+            workId: id,
+            result: { kind: expected },
+          });
+        }
+      } finally {
+        release();
+      }
+    },
+  );
+
+  test.each(["action", "mutation", "query"] as const)(
+    "cancelAll invokes onCancel for each pending %s in a batch",
+    async (kind) => {
+      const args = [{ key: "first" }, { key: "second" }];
+      const options = {
+        onFailure: refs.optionalComplete,
+        onCancel: refs.complete,
+        context: { key: "batch-cancel" },
+        runAt: Date.now() + 60_000,
+      };
+      const ids = await t.mutation((ctx) => {
+        switch (kind) {
+          case "action":
+            return pool.enqueueActionBatch(ctx, refs.action, args, options);
+          case "mutation":
+            return pool.enqueueMutationBatch(ctx, refs.mutation, args, options);
+          case "query":
+            return pool.enqueueQueryBatch(ctx, refs.query, args, options);
+        }
+      });
+      // convex-test gives consecutive inserts fractional creation timestamps.
+      // Move beyond those timestamps before cancelAll takes its cutoff.
+      await vi.advanceTimersByTimeAsync(1);
+      await t.mutation((ctx) => pool.cancelAll(ctx));
+      await drain();
+      expect(optionalCallback).not.toHaveBeenCalled();
+      expect(callback).toHaveBeenCalledTimes(2);
+      const recorded = await events("batch-cancel");
+      expect(recorded.map((e) => e.workId).sort()).toEqual([...ids].sort());
+      expect(recorded.every((e) => e.result?.kind === "canceled")).toBe(true);
+      expect(await t.query((ctx) => pool.statusBatch(ctx, ids))).toEqual([
+        { state: "finished" },
+        { state: "finished" },
+      ]);
+      expect(await events("first")).toEqual([]);
+      expect(await events("second")).toEqual([]);
+    },
+  );
+
+  test.each([false, true])(
+    "onCancel restores large context (large arguments: %s)",
+    async (largeArgs) => {
+      const context = { key: "large-cancel", padding: "x".repeat(12_000) };
+      const id = await enqueue(
+        "action",
+        {
+          key: context.key,
+          ...(largeArgs ? { payload: context.padding } : {}),
+        },
+        { mode: "onCancel", context, runAt: Date.now() + 60_000 },
+      );
+      await t.mutation((ctx) => pool.cancel(ctx, id));
+      await drain();
+      expect(callback).toHaveBeenCalledTimes(1);
+      expect(await events(context.key)).toMatchObject([
+        { workId: id, context, result: { kind: "canceled" } },
+      ]);
+    },
+  );
+
+  test("a failing onCancel callback rolls back without starting the work", async () => {
+    const id = await enqueue(
+      "mutation",
+      { key: "broken-cancel" },
+      {
+        mode: "onCancel",
+        context: { key: "broken-cancel", throw: true },
+        runAt: Date.now() + 60_000,
+      },
+    );
+    await t.mutation((ctx) => pool.cancel(ctx, id));
+    await drain();
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(await events("broken-cancel")).toEqual([]);
+    expect(await t.query((ctx) => pool.status(ctx, id))).toEqual({
+      state: "finished",
+    });
+  });
 
   test.each(["action", "mutation", "query"] as const)(
     "onComplete still receives successful %s results",
@@ -357,23 +589,31 @@ describe("completion callbacks through the client and scheduler", () => {
     },
   );
 
-  test("onFailure supports omitted context", async () => {
-    const id = await t.mutation((ctx) =>
-      pool.enqueueMutation(
-        ctx,
-        refs.mutation,
-        { key: "default", fail: true },
-        { onFailure: refs.optionalComplete },
-      ),
-    );
-    await drain();
-    expect(callback).toHaveBeenCalledTimes(1);
-    expect((await events("default"))[0]).toMatchObject({
-      workId: id,
-      result: { kind: "failed" },
-    });
-    expect((await events("default"))[0].context).toBeUndefined();
-  });
+  test.each(["onFailure", "onCancel"] as const)(
+    "%s supports omitted context",
+    async (mode) => {
+      const id = await t.mutation((ctx) =>
+        pool.enqueueMutation(
+          ctx,
+          refs.mutation,
+          { key: "default", fail: true },
+          mode === "onFailure"
+            ? { onFailure: refs.optionalComplete }
+            : { onCancel: refs.optionalComplete, runAt: Date.now() + 60_000 },
+        ),
+      );
+      if (mode === "onCancel") {
+        await t.mutation((ctx) => pool.cancel(ctx, id));
+      }
+      await drain();
+      expect(callback).toHaveBeenCalledTimes(1);
+      expect((await events("default"))[0]).toMatchObject({
+        workId: id,
+        result: { kind: mode === "onFailure" ? "failed" : "canceled" },
+      });
+      expect((await events("default"))[0].context).toBeUndefined();
+    },
+  );
 
   test.each(["action", "mutation", "query"] as const)(
     "batch %s enqueue only calls back for failed items",
@@ -424,28 +664,34 @@ describe("completion callbacks through the client and scheduler", () => {
     "rejects mixed completion options at runtime (batch: %s)",
     async (batch) => {
       // JavaScript callers can bypass TypeScript's mutually exclusive options.
-      const opts = {
-        onComplete: refs.complete,
-        onFailure: refs.complete,
-        context: { key: "invalid" },
-      } as unknown as EnqueueOptions<Context>;
-      await expect(
-        t.mutation((ctx) =>
-          batch
-            ? pool.enqueueMutationBatch(
-                ctx,
-                refs.mutation,
-                [{ key: "invalid" }],
-                opts,
-              )
-            : pool.enqueueMutation(
-                ctx,
-                refs.mutation,
-                { key: "invalid" },
-                opts,
-              ),
-        ),
-      ).rejects.toThrow("Cannot define both onComplete and onFailure");
+      for (const outcomeCallbacks of [
+        { onFailure: refs.complete },
+        { onCancel: refs.complete },
+        { onFailure: refs.complete, onCancel: refs.complete },
+      ]) {
+        const opts = {
+          onComplete: refs.complete,
+          ...outcomeCallbacks,
+          context: { key: "invalid" },
+        } as unknown as EnqueueOptions<Context>;
+        await expect(
+          t.mutation((ctx) =>
+            batch
+              ? pool.enqueueMutationBatch(
+                  ctx,
+                  refs.mutation,
+                  [{ key: "invalid" }],
+                  opts,
+                )
+              : pool.enqueueMutation(
+                  ctx,
+                  refs.mutation,
+                  { key: "invalid" },
+                  opts,
+                ),
+          ),
+        ).rejects.toThrow("Cannot define both onComplete and onFailure");
+      }
       await drain();
       expect(await events("invalid")).toEqual([]);
       expect(callback).not.toHaveBeenCalled();
@@ -508,35 +754,46 @@ test("runAt and runAfter are mutually exclusive", () => {
   expectTypeOf(options).toMatchTypeOf<EnqueueOptions>();
 });
 
-test("onFailure accepts existing onComplete handlers on all enqueue methods", () => {
-  const options = { onFailure: onComplete, context: { label: "job" } };
-  const mutation = makeFunctionReference<"mutation", { value: number }, number>(
-    "work:mutation",
-  );
-  const query = makeFunctionReference<"query", { value: number }, number>(
-    "work:query",
-  );
-  expectTypeOf((pool: Workpool, ctx: MutationCtx) =>
-    pool.enqueueAction(ctx, action, { value: 1 }, options),
-  ).returns.toEqualTypeOf<Promise<WorkId>>();
-  expectTypeOf((pool: Workpool, ctx: MutationCtx) =>
-    pool.enqueueMutation(ctx, mutation, { value: 1 }, options),
-  ).returns.toEqualTypeOf<Promise<WorkId>>();
-  expectTypeOf((pool: Workpool, ctx: MutationCtx) =>
-    pool.enqueueQuery(ctx, query, { value: 1 }, options),
-  ).returns.toEqualTypeOf<Promise<WorkId>>();
-  expectTypeOf((pool: Workpool, ctx: MutationCtx) =>
-    pool.enqueueActionBatch(ctx, action, [{ value: 1 }], options),
-  ).returns.toEqualTypeOf<Promise<WorkId[]>>();
-  expectTypeOf((pool: Workpool, ctx: MutationCtx) =>
-    pool.enqueueMutationBatch(ctx, mutation, [{ value: 1 }], options),
-  ).returns.toEqualTypeOf<Promise<WorkId[]>>();
-  expectTypeOf((pool: Workpool, ctx: MutationCtx) =>
-    pool.enqueueQueryBatch(ctx, query, [{ value: 1 }], options),
-  ).returns.toEqualTypeOf<Promise<WorkId[]>>();
-});
+test.each(["onFailure", "onCancel", "both"] as const)(
+  "%s accepts existing onComplete handlers on all enqueue methods",
+  (mode) => {
+    const callbacks =
+      mode === "onFailure"
+        ? { onFailure: onComplete }
+        : mode === "onCancel"
+          ? { onCancel: onComplete }
+          : { onFailure: onComplete, onCancel: onComplete };
+    const options = { ...callbacks, context: { label: "job" } };
+    const mutation = makeFunctionReference<
+      "mutation",
+      { value: number },
+      number
+    >("work:mutation");
+    const query = makeFunctionReference<"query", { value: number }, number>(
+      "work:query",
+    );
+    expectTypeOf((pool: Workpool, ctx: MutationCtx) =>
+      pool.enqueueAction(ctx, action, { value: 1 }, options),
+    ).returns.toEqualTypeOf<Promise<WorkId>>();
+    expectTypeOf((pool: Workpool, ctx: MutationCtx) =>
+      pool.enqueueMutation(ctx, mutation, { value: 1 }, options),
+    ).returns.toEqualTypeOf<Promise<WorkId>>();
+    expectTypeOf((pool: Workpool, ctx: MutationCtx) =>
+      pool.enqueueQuery(ctx, query, { value: 1 }, options),
+    ).returns.toEqualTypeOf<Promise<WorkId>>();
+    expectTypeOf((pool: Workpool, ctx: MutationCtx) =>
+      pool.enqueueActionBatch(ctx, action, [{ value: 1 }], options),
+    ).returns.toEqualTypeOf<Promise<WorkId[]>>();
+    expectTypeOf((pool: Workpool, ctx: MutationCtx) =>
+      pool.enqueueMutationBatch(ctx, mutation, [{ value: 1 }], options),
+    ).returns.toEqualTypeOf<Promise<WorkId[]>>();
+    expectTypeOf((pool: Workpool, ctx: MutationCtx) =>
+      pool.enqueueQueryBatch(ctx, query, [{ value: 1 }], options),
+    ).returns.toEqualTypeOf<Promise<WorkId[]>>();
+  },
+);
 
-test("onFailure preserves context typing", () => {
+test("outcome callbacks preserve context typing", () => {
   expectTypeOf((pool: Workpool, ctx: MutationCtx) => {
     void pool.enqueueAction(
       ctx,
@@ -548,18 +805,36 @@ test("onFailure preserves context typing", () => {
         context: { label: 1 },
       },
     );
+    void pool.enqueueAction(
+      ctx,
+      action,
+      { value: 1 },
+      {
+        onCancel: onComplete,
+        // @ts-expect-error The reused completion handler requires a string label.
+        context: { label: 1 },
+      },
+    );
   }).returns.toBeVoid();
 });
 
-test("onComplete and onFailure are mutually exclusive", () => {
+test("onComplete and outcome callbacks are mutually exclusive", () => {
   // @ts-expect-error The completion options cannot be combined.
   const options: EnqueueOptions = { onComplete, onFailure: onComplete };
   expectTypeOf(options).toMatchTypeOf<EnqueueOptions>();
+  // @ts-expect-error The completion options cannot be combined.
+  const cancelOptions: EnqueueOptions = { onComplete, onCancel: onComplete };
+  expectTypeOf(cancelOptions).toMatchTypeOf<EnqueueOptions>();
 });
 
 test("callback options can each be disabled with null", () => {
   expectTypeOf({ onComplete: null }).toMatchTypeOf<EnqueueOptions>();
   expectTypeOf({ onFailure: null }).toMatchTypeOf<EnqueueOptions>();
+  expectTypeOf({ onCancel: null }).toMatchTypeOf<EnqueueOptions>();
+  expectTypeOf({
+    onFailure: null,
+    onCancel: null,
+  }).toMatchTypeOf<EnqueueOptions>();
 });
 
 test("generated enqueue types match the component validators", () => {

@@ -117,7 +117,10 @@ export const vOnCompleteFnContext = v.union(
     context: v.optional(v.any()),
   }),
   v.object({
-    onStatusHandle: v.object({ failed: v.string() }), // mutations
+    onStatusHandle: v.object({
+      failed: v.optional(v.string()), // mutation
+      canceled: v.optional(v.string()), // mutation
+    }),
     context: v.optional(v.any()),
   }),
 );
