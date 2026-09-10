@@ -697,6 +697,28 @@ describe("completion callbacks through the client and scheduler", () => {
       expect(callback).not.toHaveBeenCalled();
     },
   );
+
+  test.each([false, true])(
+    "omits callback metadata when outcome handlers are disabled (batch: %s)",
+    async (batch) => {
+      for (const [index, options] of [
+        {},
+        { onFailure: null, onCancel: null },
+      ].entries()) {
+        const key = `disabled-${index}`;
+        await t.mutation((ctx) =>
+          batch
+            ? pool.enqueueMutationBatch(ctx, refs.mutation, [{ key }], options)
+            : pool.enqueueMutation(ctx, refs.mutation, { key }, options),
+        );
+        await drain();
+        expect((await events(key)).map((event) => event.kind)).toEqual([
+          "work",
+        ]);
+      }
+      expect(callback).not.toHaveBeenCalled();
+    },
+  );
 });
 
 type MutationCtx = GenericMutationCtx<GenericDataModel>;

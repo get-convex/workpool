@@ -43,6 +43,21 @@ const itemArgs = {
   onComplete: v.optional(vOnCompleteFnContext),
   retryBehavior: v.optional(retryBehavior),
 };
+
+function validateOnComplete(
+  onComplete: ObjectType<typeof itemArgs>["onComplete"],
+) {
+  if (
+    onComplete &&
+    "onStatusHandle" in onComplete &&
+    !Object.values(onComplete.onStatusHandle).some(Boolean)
+  ) {
+    throw new Error(
+      "onStatusHandle must contain at least one callback handle.",
+    );
+  }
+}
+
 const enqueueArgs = {
   ...itemArgs,
   config: vConfig.partial(),
@@ -51,6 +66,7 @@ export const enqueue = mutation({
   args: enqueueArgs,
   returns: v.id("work"),
   handler: async (ctx, { config, ...itemArgs }) => {
+    validateOnComplete(itemArgs.onComplete);
     const globals = await getOrUpdateGlobals(ctx, config);
     const console = createLogger(globals.logLevel);
     await kickMainLoop(ctx, "enqueue");
@@ -127,6 +143,10 @@ export const enqueueBatch = mutation({
   },
   returns: v.array(v.id("work")),
   handler: async (ctx, { config, items }) => {
+    // Validate the entire batch before enqueueing any of its work.
+    for (const item of items) {
+      validateOnComplete(item.onComplete);
+    }
     const globals = await getOrUpdateGlobals(ctx, config);
     const console = createLogger(globals.logLevel);
     await kickMainLoop(ctx, "enqueue");

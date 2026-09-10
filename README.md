@@ -456,8 +456,8 @@ export const cancelWork = mutation({
 This will avoid starting or retrying, but will not stop in-progress work. If an
 in-progress attempt succeeds, its result is still success. Failures remain
 failures when retries are disabled or exhausted, or the error is a
-`NonRetryableError`. If cancellation prevents a retry, the final result is
-`canceled` and `onCancel` runs if provided.
+`NonRetryableError`. If cancellation prevents work from starting or being
+retried, the final result is `canceled` and `onCancel` runs if provided.
 
 ## Monitoring the workpool
 

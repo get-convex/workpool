@@ -115,6 +115,46 @@ describe("lib", () => {
       },
     );
 
+    it.each([false, true])(
+      "rejects empty outcome callbacks without enqueueing work (batch: %s)",
+      async (batch) => {
+        const item = {
+          fnHandle: "workHandle",
+          fnName: "work",
+          fnArgs: { payload: "x".repeat(10_000) },
+          fnType: "mutation" as const,
+          runAt: Date.now(),
+        };
+        for (const onStatusHandle of [{}, { failed: "", canceled: "" }]) {
+          const invalid = { ...item, onComplete: { onStatusHandle } };
+          await expect(
+            batch
+              ? t.mutation(api.lib.enqueueBatch, {
+                  items: [
+                    {
+                      ...item,
+                      onComplete: {
+                        onStatusHandle: { failed: "failureHandle" },
+                      },
+                    },
+                    invalid,
+                  ],
+                  config: {},
+                })
+              : t.mutation(api.lib.enqueue, { ...invalid, config: {} }),
+          ).rejects.toThrow(
+            "onStatusHandle must contain at least one callback handle",
+          );
+          await t.run(async (ctx) => {
+            expect(await ctx.db.query("work").collect()).toEqual([]);
+            expect(await ctx.db.query("pendingStart").collect()).toEqual([]);
+            expect(await ctx.db.query("payload").collect()).toEqual([]);
+            expect(await ctx.db.query("globals").collect()).toEqual([]);
+          });
+        }
+      },
+    );
+
     it("should successfully enqueue a work item", async () => {
       const id = await t.mutation(api.lib.enqueue, {
         fnHandle: "testHandle",
