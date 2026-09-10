@@ -4,11 +4,12 @@ import argparse
 import datetime
 import hashlib
 import json
-import os
 import shutil
 import subprocess
 import time
 from pathlib import Path
+
+from environment import check_environment
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--checkout", type=Path, required=True)
@@ -37,13 +38,33 @@ if (
 CLI = STAGE / "node_modules/convex/dist/cli.bundle.cjs"
 DEPLOYMENT = META["deployment"]
 VARIANTS = META["variants"]
+check_environment((STAGE / ".env.local").read_text(), DEPLOYMENT)
+WORKLOADS = {kind: settings.copy() for kind, settings in META["workloads"].items()}
+if set(WORKLOADS) != {"mutation", "action"}:
+    raise RuntimeError("Expected mutation and action workloads")
+if WORKLOADS["mutation"].pop("artificialWork", None) is not None:
+    raise RuntimeError("The mutation workload does not support artificial work")
+for kind, settings in WORKLOADS.items():
+    fields = {"taskCount", "batchSize", "interBatchMs", "maxParallelism"}
+    if kind == "action":
+        fields.add("taskDurationMs")
+    if set(settings) != fields:
+        raise RuntimeError(f"Unsupported or missing settings for {kind}")
+    for name, value in settings.items():
+        minimum = 0 if name in {"interBatchMs", "taskDurationMs"} else 1
+        if type(value) is not int or value < minimum:
+            raise RuntimeError(f"{kind}.{name} must be an integer >= {minimum}")
 if (
-    os.environ.get("CONVEX_DEPLOY_KEY")
-    or "CONVEX_DEPLOY_KEY=" in (STAGE / ".env.local").read_text()
+    type(META["validation"]["tasksPerVariant"]) is not int
+    or META["validation"]["tasksPerVariant"] < 1
 ):
-    raise RuntimeError(
-        "Remove the deploy-key override before using the recorded dev target"
-    )
+    raise RuntimeError("validation.tasksPerVariant must be a positive integer")
+if (
+    META["validation"]["variants"] != len(VARIANTS)
+    or META["validation"]["allSuccessful"] is not True
+    or META["validation"]["executionErrors"] != 0
+):
+    raise RuntimeError("Validation must cover every variant with no failed executions")
 for name, info in VARIANTS.items():
     source = STAGE / "benchmark-components" / name / "src/component"
     for path, expected in info["sourceHashes"].items():
@@ -72,6 +93,12 @@ for (const table of ["work", "pendingStart", "pendingCompletion", "pendingCancel
 const state = await ctx.db.query("internalState").first();
 counts.running = state?.running.length ?? 0;
 return counts;"""
+LOGGER = None
+
+
+def check_logger():
+    if LOGGER is None or LOGGER.poll() is not None:
+        raise RuntimeError("Runtime logging stopped; see runtime.stderr")
 
 
 def call(
@@ -83,6 +110,7 @@ def call(
     label=None,
     allow_empty=False,
 ):
+    check_logger()
     cmd = [NODE, str(CLI), "run", "--deployment", DEPLOYMENT]
     if component:
         cmd += ["--component", component]
@@ -93,6 +121,7 @@ def call(
     if label:
         (OUT / f"{label}.stdout").write_text(result.stdout)
         (OUT / f"{label}.stderr").write_text(result.stderr)
+    check_logger()
     if result.returncode:
         raise RuntimeError(f"{function or component}: {result.stderr[-3000:]}")
     if not result.stdout.strip():
@@ -129,23 +158,21 @@ def cleanup():
         time.sleep(1)
 
 
-def measure(kind, variant, phase, rep, task_count):
+def measure(kind, variant, phase, rep):
     label = f"{kind}-{phase}-{rep}-{variant}"
     if (OUT / f"{label}.json").exists():
         print(f"ALREADY RECORDED {label}", flush=True)
         return
     cleanup()
     args = {
-        "taskCount": task_count,
-        "batchSize": 100,
-        "interBatchMs": 50,
-        "maxParallelism": 200,
+        **WORKLOADS[kind],
         "taskType": kind,
         "pollTimeoutMs": 180_000,
         "pool": variant,
     }
-    if kind == "action":
-        args["taskDurationMs"] = 20
+    if phase == "smoke":
+        args["taskCount"] = META["validation"]["tasksPerVariant"]
+    task_count = args["taskCount"]
     print(f"START {label} target=dev:{DEPLOYMENT}", flush=True)
     began = datetime.datetime.now(datetime.timezone.utc).isoformat()
     result = call("test/scenarios/throughput:default", args, label=label)
@@ -157,10 +184,10 @@ def measure(kind, variant, phase, rep, task_count):
     ):
         raise RuntimeError(f"Invalid completion: {label}: {result}")
     evidence = call(
-        query="""const run = await ctx.db.query("runs").order("desc").first();
-const tasks = await ctx.db.query("tasks").withIndex("runId", q => q.eq("runId", run._id)).take(6001);
-const outcomes = {}; for (const t of tasks) outcomes[t.resultKind ?? "unknown"] = (outcomes[t.resultKind ?? "unknown"] ?? 0) + 1;
-return {run, observedAt: Date.now(), outcomes, uniqueWorkIds: new Set(tasks.map(t => t.workId)).size};""",
+        query=f"""const run = await ctx.db.query("runs").order("desc").first();
+const tasks = await ctx.db.query("tasks").withIndex("runId", q => q.eq("runId", run._id)).take({task_count + 1});
+const outcomes = {{}}; for (const t of tasks) outcomes[t.resultKind ?? "unknown"] = (outcomes[t.resultKind ?? "unknown"] ?? 0) + 1;
+return {{run, observedAt: Date.now(), outcomes, uniqueWorkIds: new Set(tasks.map(t => t.workId)).size}};""",
         label=f"{label}-evidence",
     )
     if (
@@ -182,6 +209,7 @@ return {run, observedAt: Date.now(), outcomes, uniqueWorkIds: new Set(tasks.map(
         "evidence": evidence,
         "drained": drained,
     }
+    check_logger()
     (OUT / f"{label}.json").write_text(json.dumps(record, indent=2) + "\n")
     with (OUT / "runs.jsonl").open("a") as f:
         f.write(json.dumps(record) + "\n")
@@ -199,9 +227,10 @@ return {run, observedAt: Date.now(), outcomes, uniqueWorkIds: new Set(tasks.map(
 
 
 def main():
+    global LOGGER
     logs = (OUT / "runtime.jsonl").open("a")
     errors = (OUT / "runtime.stderr").open("a")
-    logger = subprocess.Popen(
+    LOGGER = subprocess.Popen(
         [
             NODE,
             str(CLI),
@@ -226,30 +255,34 @@ def main():
         for variant, info in VARIANTS.items():
             call(
                 "config:update",
-                {"maxParallelism": 200, "logLevel": "REPORT"},
+                {
+                    "maxParallelism": WORKLOADS["mutation"]["maxParallelism"],
+                    "logLevel": "REPORT",
+                },
                 component=info["component"],
                 allow_empty=True,
             )
         for variant in VARIANTS:
-            measure("mutation", variant, "smoke", 1, 1000)
+            measure("mutation", variant, "smoke", 1)
         if not ARGS.smoke:
             for kind in ["mutation", "action"]:
                 for rep, order in enumerate(META["warmupOrders"], 1):
                     for variant in order:
-                        measure(kind, variant, "warmup", rep, 5000)
+                        measure(kind, variant, "warmup", rep)
                 for rep, order in enumerate(META["measuredOrders"], 1):
                     for variant in order:
-                        measure(kind, variant, "measured", rep, 5000)
+                        measure(kind, variant, "measured", rep)
         cleanup()
+        time.sleep(2)
+        check_logger()
         print("COMPLETE", flush=True)
     finally:
-        time.sleep(2)
-        logger.terminate()
+        LOGGER.terminate()
         try:
-            logger.wait(timeout=10)
+            LOGGER.wait(timeout=10)
         except subprocess.TimeoutExpired:
-            logger.kill()
-            logger.wait()
+            LOGGER.kill()
+            LOGGER.wait()
         logs.close()
         errors.close()
 

@@ -3,11 +3,12 @@
 import argparse
 import io
 import json
-import os
 import shutil
 import subprocess
 import tarfile
 from pathlib import Path
+
+from environment import check_environment
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--checkout", type=Path, required=True)
@@ -21,21 +22,7 @@ metadata = json.loads((record / "metadata.json").read_text())
 stage = args.checkout.resolve()
 if stage.exists():
     raise RuntimeError(f"Checkout already exists: {stage}")
-env = args.env_file.read_text()
-deployment = next(
-    (
-        line.split("=", 1)[1].split("#", 1)[0].strip().strip("\"'")
-        for line in env.splitlines()
-        if line.startswith("CONVEX_DEPLOYMENT=")
-    ),
-    None,
-)
-if (
-    deployment != f"dev:{metadata['deployment']}"
-    or "CONVEX_DEPLOY_KEY=" in env
-    or os.environ.get("CONVEX_DEPLOY_KEY")
-):
-    raise RuntimeError("Use the recorded dev deployment without a deploy-key override")
+check_environment(args.env_file.read_text(), metadata["deployment"])
 for name, version in metadata["dependencies"].items():
     installed = json.loads((root / "node_modules" / name / "package.json").read_text())[
         "version"
