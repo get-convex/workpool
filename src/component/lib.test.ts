@@ -37,38 +37,33 @@ describe("lib", () => {
   });
 
   describe("enqueue", () => {
-    describe.each(["action", "query"] as const)(
-      "transactional %s",
-      (fnType) => {
-        it.each([false, true])(
-          "rejects before enqueueing work (batch: %s)",
-          async (batch) => {
-            const item = {
-              fnHandle: "workHandle",
-              fnName: "work",
-              fnArgs: { padding: "x".repeat(10_000) },
-              fnType,
-              runAt: Date.now(),
-              completeTransactionally: true,
-            };
-            await expect(
-              batch
-                ? t.mutation(api.lib.enqueueBatch, {
-                    items: [{ ...item, fnType: "mutation" }, item],
-                    config: {},
-                  })
-                : t.mutation(api.lib.enqueue, { ...item, config: {} }),
-            ).rejects.toThrow(
-              "completeTransactionally is only supported for mutations",
-            );
-            await t.run(async (ctx) => {
-              expect(await ctx.db.query("work").collect()).toEqual([]);
-              expect(await ctx.db.query("pendingStart").collect()).toEqual([]);
-              expect(await ctx.db.query("payload").collect()).toEqual([]);
-              expect(await ctx.db.query("globals").collect()).toEqual([]);
-            });
-          },
+    it.each([false, true])(
+      "rejects transactional actions before enqueueing work (batch: %s)",
+      async (batch) => {
+        const item = {
+          fnHandle: "workHandle",
+          fnName: "work",
+          fnArgs: { padding: "x".repeat(10_000) },
+          fnType: "action" as const,
+          runAt: Date.now(),
+          completeTransactionally: true,
+        };
+        await expect(
+          batch
+            ? t.mutation(api.lib.enqueueBatch, {
+                items: [{ ...item, fnType: "mutation" }, item],
+                config: {},
+              })
+            : t.mutation(api.lib.enqueue, { ...item, config: {} }),
+        ).rejects.toThrow(
+          "completeTransactionally is only supported for mutations and queries",
         );
+        await t.run(async (ctx) => {
+          expect(await ctx.db.query("work").collect()).toEqual([]);
+          expect(await ctx.db.query("pendingStart").collect()).toEqual([]);
+          expect(await ctx.db.query("payload").collect()).toEqual([]);
+          expect(await ctx.db.query("globals").collect()).toEqual([]);
+        });
       },
     );
 

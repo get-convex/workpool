@@ -220,8 +220,9 @@ export class Workpool {
   /**
    * Enqueues a query to be run.
    * Usually not what you want, but it can be useful during workflows.
-   * The query is run in a mutation and the result is returned to the caller,
-   * so it can conflict if other mutations are writing the value.
+   * By default, the query runs in its own snapshot. With completeTransactionally,
+   * it runs in the same transaction as the success callback and can conflict
+   * with mutations writing the data it reads.
    *
    * @param ctx - The mutation or action context that can call ctx.runMutation.
    * @param fn - The query to run, like `internal.example.myQuery`.
@@ -238,9 +239,7 @@ export class Workpool {
       NoInfer<ReturnType>
     >,
     fnArgs: Args,
-    options?: EnqueueOptions<Context, ReturnType> & {
-      completeTransactionally?: never;
-    },
+    options?: TransactionalEnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId> {
     return enqueue(this.component, ctx, "query", fn, fnArgs, {
       ...this.options,
@@ -272,9 +271,7 @@ export class Workpool {
       NoInfer<ReturnType>
     >,
     argsArray: Array<Args>,
-    options?: EnqueueOptions<Context, ReturnType> & {
-      completeTransactionally?: never;
-    },
+    options?: TransactionalEnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId[]> {
     return enqueueBatch(this.component, ctx, "query", fn, argsArray, {
       ...this.options,
@@ -542,7 +539,8 @@ export type TransactionalEnqueueOptions<
    * errors roll back the work; recovery later reports the job as failed.
    * The work and callback share transaction limits, with headroom reserved for
    * bookkeeping. Failure and cancellation callbacks keep their usual behavior.
-   * Only supported for mutations.
+   * Supported by mutation and query enqueue methods. For a query, its reads and
+   * the success callback's writes share one transaction and conflict detection.
    */
   completeTransactionally?: boolean;
 };
@@ -659,10 +657,12 @@ export async function enqueueBatch<
     retryBehavior?: RetryBehavior;
     maxParallelism?: number;
     logLevel?: LogLevel;
-    /** Mutations only; see {@link TransactionalEnqueueOptions}. */
+    /** Mutations and queries only; see {@link TransactionalEnqueueOptions}. */
     // Wrapped in a tuple so a union FnType is checked as a whole rather than
     // distributed, which would admit action-capable calls.
-    completeTransactionally?: [FnType] extends ["mutation"] ? boolean : never;
+    completeTransactionally?: [FnType] extends ["mutation" | "query"]
+      ? boolean
+      : never;
   },
 ): Promise<WorkId[]> {
   const { config, ...defaults } = await enqueueArgs(fn, options);
@@ -726,10 +726,12 @@ export async function enqueue<
     retryBehavior?: RetryBehavior;
     maxParallelism?: number;
     logLevel?: LogLevel;
-    /** Mutations only; see {@link TransactionalEnqueueOptions}. */
+    /** Mutations and queries only; see {@link TransactionalEnqueueOptions}. */
     // Wrapped in a tuple so a union FnType is checked as a whole rather than
     // distributed, which would admit action-capable calls.
-    completeTransactionally?: [FnType] extends ["mutation"] ? boolean : never;
+    completeTransactionally?: [FnType] extends ["mutation" | "query"]
+      ? boolean
+      : never;
   },
 ): Promise<WorkId> {
   const id = await ctx.runMutation(component.lib.enqueue, {

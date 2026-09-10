@@ -9,7 +9,7 @@ import {
 import { v } from "convex/values";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { internal } from "./_generated/api.js";
-import { internalMutation } from "./_generated/server.js";
+import { internalMutation, internalQuery } from "./_generated/server.js";
 import type { Id } from "./_generated/dataModel.js";
 import { recoveryHandler } from "./recovery.js";
 import schema from "./schema.js";
@@ -31,11 +31,27 @@ const fixtures = {
       return id;
     },
   }),
+  query: internalQuery({
+    args: {
+      fail: v.boolean(),
+      padding: v.optional(v.string()),
+      sourceId: v.id("payload"),
+    },
+    returns: v.id("payload"),
+    handler: async (ctx, { fail, sourceId }) => {
+      calls("query");
+      const source = await ctx.db.get("payload", sourceId);
+      expect(source?.args?.input).toBe(true);
+      if (fail) throw new Error("query failed");
+      return sourceId;
+    },
+  }),
   callback: internalMutation({
     args: {
       workId: v.id("work"),
       context: v.object({
         failOnSuccess: v.boolean(),
+        query: v.optional(v.boolean()),
         padding: v.optional(v.string()),
       }),
       result: vResult,
@@ -49,7 +65,9 @@ const fixtures = {
           "payload",
           result.returnValue as Id<"payload">,
         );
-        expect(effect?.args?.effect).toBe("work");
+        expect(effect?.args).toMatchObject(
+          context.query ? { input: true } : { effect: "work" },
+        );
       }
       await ctx.db.insert("payload", { args: { effect: result.kind } });
       if (context.failOnSuccess && result.kind === "success") {
@@ -63,7 +81,7 @@ const refs = (
   anyApi as unknown as ApiFromModules<{ workerFixtures: typeof fixtures }>
 ).workerFixtures;
 
-describe("transactional mutation completion", () => {
+describe("transactional completion", () => {
   function setup() {
     const t = convexTest({
       schema,
@@ -98,6 +116,7 @@ describe("transactional mutation completion", () => {
     callback = true,
     excludeKinds,
     largePayload = false,
+    fnType = "mutation",
   }: {
     transactional?: boolean;
     failWork?: boolean;
@@ -105,15 +124,24 @@ describe("transactional mutation completion", () => {
     callback?: boolean;
     excludeKinds?: RunResult["kind"][];
     largePayload?: boolean;
+    fnType?: "mutation" | "query";
   } = {}) {
     return t.run(async (ctx) => {
-      const fnHandle = await createFunctionHandle(refs.work);
+      const fnHandle = await createFunctionHandle(
+        fnType === "query" ? refs.query : refs.work,
+      );
+      const sourceId =
+        fnType === "query"
+          ? await ctx.db.insert("payload", { args: { input: true } })
+          : undefined;
       const fnArgs = {
         fail: failWork,
         ...(largePayload ? { padding: "a".repeat(12_000) } : {}),
+        ...(sourceId ? { sourceId } : {}),
       };
       const context = {
         failOnSuccess: failCallback,
+        query: fnType === "query",
         ...(largePayload ? { padding: "c".repeat(12_000) } : {}),
       };
       const payloadId = largePayload
@@ -122,7 +150,7 @@ describe("transactional mutation completion", () => {
       const workId = await ctx.db.insert("work", {
         fnHandle,
         fnName: "work",
-        fnType: "mutation",
+        fnType,
         attempts: 0,
         fnArgs: largePayload ? undefined : fnArgs,
         payloadId,
@@ -141,7 +169,7 @@ describe("transactional mutation completion", () => {
         fnHandle,
         fnArgs: largePayload ? undefined : fnArgs,
         payloadId,
-        fnType: "mutation",
+        fnType,
         attempt: 0,
         logLevel: "ERROR",
         completeTransactionally: transactional,
@@ -319,6 +347,82 @@ describe("transactional mutation completion", () => {
     await t.mutation(internal.worker.runMutationWrapper, job.args);
     expect(await effects()).toEqual(["work", "success"]);
     expect(calls.mock.calls.flat()).toEqual(["work", "success"]);
+  });
+
+  test.each([false, true])(
+    "query success commits its callback and cleanup (large payload: %s)",
+    async (largePayload) => {
+      const job = await start({ fnType: "query", largePayload });
+      await drain();
+      expect(await effects()).toEqual(["success"]);
+      expect(calls.mock.calls.flat()).toEqual(["query", "success"]);
+      await expectFinished(job);
+      await t.run(async (ctx) => {
+        const scheduled = await ctx.db.system
+          .query("_scheduled_functions")
+          .collect();
+        expect(
+          scheduled.some(
+            (s) =>
+              s.name === "complete:complete" ||
+              s.name === "workerFixtures:callback",
+          ),
+        ).toBe(false);
+      });
+    },
+  );
+
+  test.each(["callback", "bookkeeping"] as const)(
+    "query %s failure rolls back completion and recovers once",
+    async (failure) => {
+      const job = await start({
+        fnType: "query",
+        failCallback: failure === "callback",
+        largePayload: true,
+      });
+      if (failure === "bookkeeping")
+        vi.spyOn(kick, "kickMainLoop").mockRejectedValueOnce(
+          new Error("bookkeeping failed"),
+        );
+      await drain();
+      expect(await effects()).toEqual([]);
+      await t.run(async (ctx) => {
+        expect(await ctx.db.get("work", job.workId)).toMatchObject({
+          attempts: 0,
+        });
+        expect(await ctx.db.get("payload", job.payloadId!)).not.toBeNull();
+        expect(await ctx.db.query("pendingCompletion").collect()).toEqual([]);
+      });
+      vi.restoreAllMocks();
+      await recover(job, `${failure} failed`);
+      expect(await effects()).toEqual(["failed"]);
+      expect(calls.mock.calls.flat()).toEqual(["query", "success", "failed"]);
+      await expectFinished(job);
+    },
+  );
+
+  test.each([
+    { excludeKinds: ["success", "failed", "canceled"] },
+    { excludeKinds: ["success", "canceled"] },
+  ] satisfies {
+    excludeKinds: RunResult["kind"][];
+  }[])(
+    "finishes a transactional query with success excluded ($excludeKinds)",
+    async ({ excludeKinds }) => {
+      const job = await start({ fnType: "query", excludeKinds });
+      await drain();
+      expect(await effects()).toEqual([]);
+      expect(calls.mock.calls.flat()).toEqual(["query"]);
+      await expectFinished(job);
+    },
+  );
+
+  test("query errors preserve normal failure handling", async () => {
+    const job = await start({ fnType: "query", failWork: true });
+    await drain();
+    expect(await effects()).toEqual(["failed"]);
+    expect(calls.mock.calls.flat()).toEqual(["query", "failed"]);
+    await expectFinished(job);
   });
 
   test("nested budgets use remaining capacity after earlier writes", async () => {
