@@ -65,6 +65,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             logLevel?: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
             maxParallelism?: number;
           };
+          completeTransactionally?: boolean;
           fnArgs: any;
           fnHandle: string;
           fnName: string;
@@ -93,6 +94,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             maxParallelism?: number;
           };
           items: Array<{
+            completeTransactionally?: boolean;
             fnArgs: any;
             fnHandle: string;
             fnName: string;

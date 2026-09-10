@@ -28,6 +28,7 @@ import workpool from "../test.js";
 import type { api } from "../component/_generated/api.js";
 import {
   type EnqueueOptions,
+  type MutationEnqueueOptions,
   NonRetryableError,
   type OnCompleteArgs,
   type RetryOption,
@@ -195,6 +196,72 @@ describe("completion callbacks through the client and scheduler", () => {
         .withIndex("key", (q) => q.eq("key", key))
         .collect(),
     );
+
+  test.each([false, true])(
+    "transactional success works through mutation enqueue (batch: %s)",
+    async (batch) => {
+      const args = [
+        { key: "atomic-success" },
+        { key: "atomic-failure", fail: true },
+      ];
+      const options = {
+        completeTransactionally: true,
+        onComplete: refs.complete,
+        context: { key: "atomic-callbacks" },
+      };
+      const ids = await t.mutation(async (ctx) =>
+        batch
+          ? pool.enqueueMutationBatch(ctx, refs.mutation, args, options)
+          : Promise.all(
+              args.map((args) =>
+                pool.enqueueMutation(ctx, refs.mutation, args, options),
+              ),
+            ),
+      );
+      await drain();
+      expect((await events("atomic-success")).map((e) => e.kind)).toEqual([
+        "work",
+      ]);
+      expect(await events("atomic-failure")).toEqual([]);
+      const results = await events("atomic-callbacks");
+      expect(results).toHaveLength(2);
+      expect(results.find((e) => e.workId === ids[0])?.result).toEqual({
+        kind: "success",
+        returnValue: "mutation result",
+      });
+      expect(results.find((e) => e.workId === ids[1])?.result).toEqual({
+        kind: "failed",
+        error: "work failed",
+      });
+      expect(await t.query((ctx) => pool.statusBatch(ctx, ids))).toEqual([
+        { state: "finished" },
+        { state: "finished" },
+      ]);
+    },
+  );
+
+  test("canceling pending transactional work preserves the cancellation callback", async () => {
+    const id = await t.mutation((ctx) =>
+      pool.enqueueMutation(
+        ctx,
+        refs.mutation,
+        { key: "atomic-cancel" },
+        {
+          completeTransactionally: true,
+          onComplete: refs.complete,
+          onCompleteStatuses: ["canceled"],
+          context: { key: "atomic-cancel" },
+          runAt: Date.now() + 60_000,
+        },
+      ),
+    );
+    await t.mutation((ctx) => pool.cancel(ctx, id));
+    await drain();
+    expect(await events("atomic-cancel")).toMatchObject([
+      { kind: "callback", result: { kind: "canceled" } },
+    ]);
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
 
   describe.each(excludeFilters.map((excludeKinds) => ({ excludeKinds })))(
     "exclude filter $excludeKinds",
@@ -860,6 +927,35 @@ test("exclude filters only accept terminal result kinds", () => {
     onComplete: null,
     onCompleteExcludeKinds: [],
   }).toMatchTypeOf<EnqueueOptions>();
+});
+
+test("transactional completion is only exposed for mutations", () => {
+  const options = {
+    onComplete,
+    onCompleteStatuses: ["success"] as const,
+    context: { label: "job" },
+    completeTransactionally: true,
+  } satisfies MutationEnqueueOptions<{ label: string }, number>;
+  const mutation = makeFunctionReference<"mutation", { value: number }, number>(
+    "work:mutation",
+  );
+  const query = makeFunctionReference<"query", { value: number }, number>(
+    "work:query",
+  );
+  expectTypeOf((pool: Workpool, ctx: MutationCtx) => {
+    // @ts-expect-error Actions cannot opt into transactional completion.
+    void pool.enqueueAction(ctx, action, { value: 1 }, options);
+    // @ts-expect-error Batched actions cannot opt into transactional completion.
+    void pool.enqueueActionBatch(ctx, action, [{ value: 1 }], options);
+    // @ts-expect-error Queries cannot opt into transactional completion.
+    void pool.enqueueQuery(ctx, query, { value: 1 }, options);
+    // @ts-expect-error Batched queries cannot opt into transactional completion.
+    void pool.enqueueQueryBatch(ctx, query, [{ value: 1 }], options);
+    return pool.enqueueMutation(ctx, mutation, { value: 1 }, options);
+  }).returns.toEqualTypeOf<Promise<WorkId>>();
+  expectTypeOf((pool: Workpool, ctx: MutationCtx) =>
+    pool.enqueueMutationBatch(ctx, mutation, [{ value: 1 }], options),
+  ).returns.toEqualTypeOf<Promise<WorkId[]>>();
 });
 
 test("generated enqueue types match the component validators", () => {
