@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useAction, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
+import baselinePackage from "@convex-dev/workpool-old/package.json";
 import {
   Area,
   AreaChart,
@@ -129,7 +130,9 @@ function App() {
         </div>
         <div className="legend-pills" aria-label="Comparison legend">
           <span className="legend-pill current">Current branch</span>
-          <span className="legend-pill old">Workpool 0.4.7</span>
+          <span className="legend-pill old">
+            Workpool {baselinePackage.version}
+          </span>
         </div>
       </header>
 
@@ -359,6 +362,7 @@ type RunSummary = {
   _id: RunId;
   scenario: string;
   pool?: string;
+  poolVersion?: string;
   startTime: number;
   taskCount?: number;
   scheduledFunctions?: number;
@@ -590,7 +594,13 @@ function Comparison({ ids }: { ids: CompareIds }) {
       )}
       <OutcomeSummary baseline={oldRun} current={currentRun} />
       <MetricGrid baseline={oldRun} current={currentRun} />
-      <RunCharts throughputData={throughputData} cdfData={cdfData} />
+      <RunCharts
+        throughputData={throughputData}
+        cdfData={cdfData}
+        baselineLabel={
+          oldRun.poolVersion ? `${oldRun.poolVersion} baseline` : "Baseline"
+        }
+      />
 
       <details className="run-details">
         <summary>Run details and parameters</summary>
@@ -747,6 +757,7 @@ function RunCharts({
   throughputData,
   cdfData,
   showBaseline = true,
+  baselineLabel = "Baseline",
 }: {
   throughputData: Array<{
     tMs: number;
@@ -755,6 +766,7 @@ function RunCharts({
   }>;
   cdfData: Array<{ ms: number; baseline: number; current: number }>;
   showBaseline?: boolean;
+  baselineLabel?: string;
 }) {
   return (
     <div className="chart-grid">
@@ -800,7 +812,7 @@ function RunCharts({
               <Line
                 type="monotone"
                 dataKey="baseline"
-                name="0.4.7 baseline"
+                name={baselineLabel}
                 stroke={OLD_COLOR}
                 strokeWidth={2}
                 strokeDasharray="5 4"
@@ -850,7 +862,7 @@ function RunCharts({
               <Line
                 type="stepAfter"
                 dataKey="baseline"
-                name="0.4.7 baseline"
+                name={baselineLabel}
                 stroke={OLD_COLOR}
                 strokeWidth={2}
                 strokeDasharray="5 4"
@@ -950,7 +962,7 @@ function RunHistory({
                     <span
                       className={`implementation-badge ${isOld ? "old" : "current"}`}
                     >
-                      {isOld ? "0.4.7" : "Current"}
+                      {isOld ? (run.poolVersion ?? "Baseline") : "Current"}
                     </span>
                   </td>
                   <td>{run.scenario}</td>

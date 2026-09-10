@@ -371,7 +371,6 @@ export const pairs = internalAction({
     await ctx.runMutation(internal.test.latency.resetCell, { cell: args.cell });
 
     for (let pairId = 0; pairId < args.count; pairId++) {
-      const t0 = Date.now();
       const ids = await ctx.runMutation(internal.test.latency.enqueuePair, {
         cell: args.cell,
         pool: args.pool,
@@ -385,7 +384,6 @@ export const pairs = internalAction({
         ids,
         committedAt,
       });
-      void t0;
       if (args.gapMs) await new Promise((r) => setTimeout(r, args.gapMs));
     }
 
@@ -411,46 +409,6 @@ export const pairs = internalAction({
       missing: rows.filter((r: any) => r.startedAt === undefined).length,
       rows,
     };
-  },
-});
-
-/**
- * Enqueue `count` tasks all due `delayMs` out in a SINGLE transaction, the way
- * `enqueueBatch` does. They therefore share one commit stamp, which is what
- * makes them interesting: the sweep's cursor is inclusive, so a backlog sharing
- * a stamp is re-read rather than passed.
- */
-export const bulkScheduled = internalMutation({
-  args: {
-    cell: v.string(),
-    pool: vPoolKind,
-    count: v.number(),
-    delayMs: v.number(),
-    maxParallelism: v.number(),
-  },
-  returns: v.number(),
-  handler: async (ctx, args) => {
-    const pool = makePool(args.pool as PoolKind, {
-      maxParallelism: args.maxParallelism,
-    });
-    const enqueuedAt = Date.now();
-    for (let i = 0; i < args.count; i++) {
-      const taskId = await ctx.db.insert("latencyTasks", {
-        cell: args.cell,
-        pool: args.pool,
-        delayMs: args.delayMs,
-        seq: 10_000 + i,
-        enqueuedAt,
-        runAt: enqueuedAt + args.delayMs,
-      });
-      await pool.enqueueMutation(
-        ctx,
-        internal.test.latency.probe,
-        { taskId },
-        { runAfter: args.delayMs },
-      );
-    }
-    return args.count;
   },
 });
 
@@ -531,10 +489,7 @@ export const backlog = internalAction({
 });
 
 /**
- * The same bulk, but through the batch enqueue API — one component call
- * carrying every item, which is how an app actually queues thousands at once.
- * All of them land in one transaction under one commit stamp, packed 256 to a
- * document, which is the configuration that can exceed SWEEP_BATCH.
+ * Enqueue scheduled work through the batch API in one transaction.
  */
 export const bulkScheduledBatch = internalMutation({
   args: {
