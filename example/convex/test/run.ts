@@ -7,6 +7,8 @@ import { v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import { assert } from "convex-helpers";
 import { getComponent } from "./pool";
+import currentPackage from "@convex-dev/workpool/package.json";
+import baselinePackage from "@convex-dev/workpool-old/package.json";
 
 export async function runStatus(
   ctx: QueryCtx,
@@ -68,6 +70,8 @@ export const start = internalMutation({
       parameters: args.parameters,
       taskCount: args.parameters.taskCount,
       pool: args.pool ?? "new",
+      poolVersion:
+        args.pool === "old" ? baselinePackage.version : currentPackage.version,
     });
 
     return runId;
