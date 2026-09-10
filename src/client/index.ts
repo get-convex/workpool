@@ -29,8 +29,11 @@ import {
   type RunResult,
   type OnCompleteArgs as SharedOnCompleteArgs,
   type Status,
+  vCancelResult,
+  vFailureResult,
   vResult,
   vRunResult,
+  vSuccessResult,
 } from "../component/shared.js";
 import {
   type ActionCtx,
@@ -412,6 +415,78 @@ export function vOnCompleteArgs<
   });
 }
 
+/**
+ * Returns a validator to use for the onSuccess mutation.
+ * To be used like:
+ * ```ts
+ * export const myOnSuccess = internalMutation({
+ *   args: vOnSuccessArgs(v.string()),
+ *   handler: async (ctx, {workId, context, result}) => {
+ *     // context has been validated as a string
+ *     // result is a successful result
+ *   },
+ * });
+ * @param context - The context validator. If not provided, it will be `v.any()`.
+ * @returns The validator for the onSuccess mutation.
+ */
+export function vOnSuccessArgs<
+  V extends Validator<any, "required", any> = VAny,
+>(context?: V) {
+  return v.object({
+    workId: vWorkId,
+    context: (context ?? v.optional(v.any())) as V,
+    result: vSuccessResult,
+  });
+}
+
+/**
+ * Returns a validator to use for the onFailure mutation.
+ * To be used like:
+ * ```ts
+ * export const myOnFailure = internalMutation({
+ *   args: vOnFailureArgs(v.string()),
+ *   handler: async (ctx, {workId, context, result}) => {
+ *     // context has been validated as a string
+ *     // result is a failure result
+ *   },
+ * });
+ * @param context - The context validator. If not provided, it will be `v.any()`.
+ * @returns The validator for the onFailure mutation.
+ */
+export function vOnFailureArgs<
+  V extends Validator<any, "required", any> = VAny,
+>(context?: V) {
+  return v.object({
+    workId: vWorkId,
+    context: (context ?? v.optional(v.any())) as V,
+    result: vFailureResult,
+  });
+}
+
+/**
+ * Returns a validator to use for the onCancel mutation.
+ * To be used like:
+ * ```ts
+ * export const myOnCancel = internalMutation({
+ *   args: vOnCancelArgs(v.string()),
+ *   handler: async (ctx, {workId, context, result}) => {
+ *     // context has been validated as a string
+ *     // result is a cancellation result
+ *   },
+ * });
+ * @param context - The context validator. If not provided, it will be `v.any()`.
+ * @returns The validator for the onCancel mutation.
+ */
+export function vOnCancelArgs<V extends Validator<any, "required", any> = VAny>(
+  context?: V,
+) {
+  return v.object({
+    workId: vWorkId,
+    context: (context ?? v.optional(v.any())) as V,
+    result: vCancelResult,
+  });
+}
+
 export type RetryOption = {
   /** Whether to retry the action if it fails.
    * If false, the action won’t be retried.
@@ -462,35 +537,6 @@ export type EnqueueOptions<Context = unknown, ReturnValue = unknown> = {
    */
   name?: string;
   /**
-   * A mutation to run after the function succeeds, fails, or is canceled.
-   * The context type is for your use, feel free to provide a validator for it.
-   * e.g.
-   * ```ts
-   * export const completion = workpool.defineOnComplete({
-   *   context: v.string(),
-   *   handler: async (ctx, {workId, context, result}) => {
-   *     // context has been validated as a string
-   *     // ... do something with the result
-   *   },
-   * });
-   * ```
-   * or more manually:
-   * ```ts
-   * export const completion = internalMutation({
-   *  args: vOnCompleteArgs(v.string()),
-   *  handler: async (ctx, args) => {
-   *    console.log(args.result, "Got Context back -> ", args.context, Date.now() - args.context);
-   *  },
-   * });
-   * ```
-   */
-  onComplete?: FunctionReference<
-    "mutation",
-    FunctionVisibility,
-    OnCompleteArgs<Context, ReturnValue>
-  > | null;
-
-  /**
    * A context object to pass to the `onComplete` mutation.
    * Useful for passing data from the enqueue site to the onComplete site.
    */
@@ -516,7 +562,114 @@ export type EnqueueOptions<Context = unknown, ReturnValue = unknown> = {
 
       runAt?: never;
     }
-);
+) &
+  (
+    | {
+        /**
+         * A mutation to run when the work item successfully completes.
+         * Cannot be used together with `onComplete`.
+         * The context type is for your use, feel free to provide a validator for it.
+         * e.g.
+         * ```ts
+         * export const success = workpool.defineOnSuccess({
+         *   context: v.string(),
+         *   handler: async (ctx, {workId, context, result}) => {
+         *     // context has been validated as a string
+         *     // ... do something with the result
+         *   },
+         * });
+         * ```
+         *
+         * Note that your onSuccess callback will run in the same transaction
+         * as your work item. If your onSuccess callback risks exceeding
+         * function transaction limits, consider using onComplete instead.
+         */
+        onSuccess?: FunctionReference<
+          "mutation",
+          FunctionVisibility,
+          OnCompleteArgs<Context, ReturnValue>
+        > | null;
+
+        /**
+         * A mutation to run after the work item errors.
+         * Cannot be used together with `onComplete`.
+         * The context type is for your use, feel free to provide a validator for it.
+         * e.g.
+         * ```ts
+         * export const failure = workpool.defineOnFailure({
+         *   context: v.string(),
+         *   handler: async (ctx, {workId, context, result}) => {
+         *     // context has been validated as a string
+         *     // ... do something with the result
+         *   },
+         * });
+         * ```
+         */
+        onFailure?: FunctionReference<
+          "mutation",
+          FunctionVisibility,
+          OnCompleteArgs<Context, ReturnValue>
+        > | null;
+
+        /**
+         * A mutation to run after the work item is canceled.
+         * Cannot be used together with `onComplete`.
+         * The context type is for your use, feel free to provide a validator for it.
+         * e.g.
+         * ```ts
+         * export const cancel = workpool.defineOnCancel({
+         *   context: v.string(),
+         *   handler: async (ctx, {workId, context, result}) => {
+         *     // context has been validated as a string
+         *     // ... do something with the result
+         *   },
+         * });
+         * ```
+         */
+        onCancel?: FunctionReference<
+          "mutation",
+          FunctionVisibility,
+          OnCompleteArgs<Context, ReturnValue>
+        > | null;
+
+        onComplete?: never;
+      }
+    | {
+        /**
+         * A mutation to run after the function succeeds, fails, or is canceled.
+         * Cannot be used together with `onSuccess`, `onFailure`, or `onCancel`.
+         * The context type is for your use, feel free to provide a validator for it.
+         * e.g.
+         * ```ts
+         * export const completion = workpool.defineOnComplete({
+         *   context: v.string(),
+         *   handler: async (ctx, {workId, context, result}) => {
+         *     // context has been validated as a string
+         *     // ... do something with the result
+         *   },
+         * });
+         * ```
+         * or more manually:
+         * ```ts
+         * export const completion = internalMutation({
+         *  args: vOnCompleteArgs(v.string()),
+         *  handler: async (ctx, args) => {
+         *    console.log(args.result, "Got Context back -> ", args.context, Date.now() - args.context);
+         *  },
+         * });
+         * ```
+         */
+        onComplete?: FunctionReference<
+          "mutation",
+          FunctionVisibility,
+          OnCompleteArgs<Context, ReturnValue>
+        > | null;
+
+        onSuccess?: never;
+        onFailure?: never;
+        onCancel?: never;
+      }
+  );
 
 export type OnCompleteArgs<Context = unknown, Returns = unknown> = {
   /**
@@ -570,15 +723,55 @@ async function enqueueArgs<Context, ReturnType>(
     typeof fn === "string" && fn.startsWith("function://")
       ? [fn, opts?.name ?? fn]
       : [await createFunctionHandle(fn), opts?.name ?? safeFunctionName(fn)];
+  let onComplete:
+    | {
+        kind?: "all";
+        fnHandle: string;
+        context?: unknown;
+      }
+    | {
+        kind: "byOutcome";
+        onSuccessHandle?: string;
+        onFailureHandle?: string;
+        onCancelHandle?: string;
+        context?: unknown;
+      }
+    | undefined;
+
+  if (
+    opts?.onComplete &&
+    (opts?.onSuccess || opts?.onFailure || opts?.onCancel)
+  ) {
+    throw new Error(
+      "Cannot define both an onComplete handler and onSuccess/onFailure/onCancel handlers. Either define one onComplete handler, or define onSuccess/onFailure/onCancel handlers.",
+    );
+  }
+
+  if (opts?.onComplete) {
+    onComplete = {
+      fnHandle: await createFunctionHandle(opts.onComplete),
+      context: opts.context,
+    };
+  } else if (opts?.onSuccess || opts?.onFailure || opts?.onCancel) {
+    onComplete = {
+      kind: "byOutcome" as const,
+      onSuccessHandle: opts.onSuccess
+        ? await createFunctionHandle(opts.onSuccess)
+        : undefined,
+      onFailureHandle: opts.onFailure
+        ? await createFunctionHandle(opts.onFailure)
+        : undefined,
+      onCancelHandle: opts.onCancel
+        ? await createFunctionHandle(opts.onCancel)
+        : undefined,
+      context: opts.context,
+    };
+  }
+
   return {
     fnHandle,
     fnName,
-    onComplete: opts?.onComplete
-      ? {
-          fnHandle: await createFunctionHandle(opts.onComplete),
-          context: opts.context,
-        }
-      : undefined,
+    onComplete,
     runAt: getRunAt(opts),
     retryBehavior: opts?.retryBehavior,
     config: {

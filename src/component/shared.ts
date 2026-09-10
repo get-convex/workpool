@@ -72,6 +72,20 @@ export const DEFAULT_RETRY_BEHAVIOR: RetryBehavior = {
 // This ensures that the type satisfies the schema.
 const _ = {} as RetryBehavior satisfies Infer<typeof retryBehavior>;
 
+export const vSuccessResult = v.object({
+  kind: v.literal("success"),
+  returnValue: v.any(),
+});
+
+export const vFailureResult = v.object({
+  kind: v.literal("failed"),
+  error: v.string(),
+});
+
+export const vCancelResult = v.object({
+  kind: v.literal("canceled"),
+});
+
 export const vResult = vRunResult(v.any());
 export function vRunResult<RV extends Validator<any, any, any> = VAny>(
   returnValue: RV,
@@ -81,13 +95,8 @@ export function vRunResult<RV extends Validator<any, any, any> = VAny>(
       kind: v.literal("success"),
       returnValue,
     }),
-    v.object({
-      kind: v.literal("failed"),
-      error: v.string(),
-    }),
-    v.object({
-      kind: v.literal("canceled"),
-    }),
+    vFailureResult,
+    vCancelResult,
   );
 }
 export type RunResult<Returns = unknown> =
@@ -109,10 +118,20 @@ export type RunResult<Returns = unknown> =
       kind: "canceled";
     };
 
-export const vOnCompleteFnContext = v.object({
-  fnHandle: v.string(), // mutation
-  context: v.optional(v.any()),
-});
+export const vOnCompleteFnContext = v.union(
+  v.object({
+    kind: v.optional(v.literal("all")), // optional for backwards compat
+    fnHandle: v.string(), // mutation
+    context: v.optional(v.any()),
+  }),
+  v.object({
+    kind: v.literal("byOutcome"),
+    onSuccessHandle: v.optional(v.string()),
+    onFailureHandle: v.optional(v.string()),
+    onCancelHandle: v.optional(v.string()),
+    context: v.optional(v.any()),
+  }),
+);
 
 export type OnCompleteArgs = {
   /**
