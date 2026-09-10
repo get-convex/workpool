@@ -1080,10 +1080,25 @@ describe("loop", () => {
           fnType: "action" as const,
           fnHandle: "test_handle",
           fnName: `fn${i}`,
-          fnArgs: {},
+          fnArgs: i === 0 ? { data: "x".repeat(9_000) } : {},
           runAt: i < 4 ? Date.now() : runAt,
         })),
         config: {},
+      });
+
+      // A payload write must not change the returned ID order.
+      await t.run(async (ctx) => {
+        const works = await Promise.all(
+          ids.map((id) => ctx.db.get("work", id)),
+        );
+        expect(works.map((work) => work?.fnName)).toEqual([
+          "fn0",
+          "fn1",
+          "fn2",
+          "fn3",
+          "fn4",
+        ]);
+        expect(works[0]?.payloadId).toBeDefined();
       });
 
       // One document for the four ready entries, one for the scheduled one.

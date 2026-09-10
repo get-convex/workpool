@@ -213,10 +213,9 @@ export const enqueueBatch = mutation({
     const globals = await getOrUpdateGlobals(ctx, config);
     const console = createLogger(globals.logLevel);
     await kickMainLoop(ctx, "enqueue");
-    const created = [];
-    for (const item of items) {
-      created.push(await createWork(ctx, console, item));
-    }
+    const created = await Promise.all(
+      items.map((item) => createWork(ctx, console, item)),
+    );
     await insertPendingStarts(ctx, created);
     return created.map((c) => c.workId);
   },
