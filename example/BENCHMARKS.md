@@ -1,6 +1,8 @@
 # Benchmarking the workpool
 
-Recorded results: [2026-09-08, revision `8186121`](./benchmarks/2026-09-08.md).
+Recorded results:
+[2026-09-09, ordering vs. packed starts](./benchmarks/2026-09-09.md) and
+[2026-09-08, revision `8186121` vs. 0.4.9](./benchmarks/2026-09-08.md).
 
 Harnesses in `example/convex/test/`, all driving a real deployment:
 
@@ -17,8 +19,9 @@ Harnesses in `example/convex/test/`, all driving a real deployment:
 | `test/cleanup:start` / `:counts`       | clear app bookkeeping; does not drain workpools | shared    |
 
 `"pool": "new"` is this checkout's `testWorkpool`; `"pool": "old"` is the
-published package mounted as `oldWorkpool`. Check the installed baseline rather
-than relying on dashboard labels or previous reports:
+published package mounted as `oldWorkpool`. New runs record the installed
+package version for dashboard labels; historical runs without it display
+“Baseline”. Check the installed baseline with:
 
 ```sh
 node -p 'require("./node_modules/@convex-dev/workpool-old/package.json").version'
@@ -27,10 +30,8 @@ npm run build:codegen && npx convex dev --once
 
 Run commands from the repo root against a dedicated dev deployment. The example
 imports the component through its `dist` exports, so **build before deploying**.
-A failed deploy means the previous design is still running. In particular,
-pre-snapshot experimental deployments can retain the removed `lastCommitTs`
-field in `internalState`, causing schema validation to fail. Resolve that state
-compatibility issue before measuring; do not treat a failed push as a new build.
+A failed deploy leaves the previous design running; resolve schema compatibility
+errors before measuring a new build.
 
 Archive the commit, any source diff, dependency versions, deployment, exact
 arguments, raw outputs, and run order. Paired runs on one deployment help
@@ -57,10 +58,11 @@ Discard warmups, then measure at least three pairs, alternating `old,new`,
 between arms. Save JSON before cleanup. Report individual runs, per-pair ratios,
 and the spread, not just the fastest run.
 
-`completedCount` currently counts terminal callbacks, including failures and
-cancelations: `markTaskCompleted` does not save `result.kind`. Check runtime
-errors as well as `timedOut`, `status`, and the exact expected count. A CLI exit
-code of zero alone does not establish that a benchmark finished successfully.
+`completedCount` counts terminal callbacks, including failures and cancelations.
+The recorder stores each task's `resultKind`: require the expected number of
+unique work IDs with successful outcomes, a completed status, and no timeout.
+Check runtime errors too; a CLI exit code of zero alone does not establish
+success.
 
 ## Start latency and ordering
 
@@ -137,17 +139,38 @@ the previous work.
 
 ## Comparing a code change against itself
 
-Use the same component for both variants, with a build and successful deploy for
-each source change, discarded warmups, cleanup, and balanced run order. Keep
-edits in isolated checkouts so restoring a variant cannot overwrite other work.
-Do not change constants during a comparison of the current design against the
-published baseline.
+The [September 9 experiment](./benchmarks/2026-09-09.md) compares pinned
+baseline, timestamp-ordering, and packed-start revisions using three fresh
+component mounts and one harness. Its checked-in driver verifies outcomes,
+drains pools, archives every run, and balances warmup and measured order. With
+Node 24+ and Python 3.12+ installed, prepare and run it from the repository
+root:
 
-Historical `.context/bench-commitTs.sh`, `.context/exp-consts.py`, and
-experiment reports are workspace artifacts, not tracked tooling available in a
-fresh clone. They are not the authoritative procedure: their warmup counts/order
-differ from their comments, and restoring with `git checkout` can erase
-concurrent edits.
+```sh
+python3 example/benchmarks/2026-09-09/prepare.py \
+  --checkout .context/stack-benchmark --env-file .env.local
+cd .context/stack-benchmark
+npm run build && npx convex dev --once --typecheck enable
+cd ../..
+python3 example/benchmarks/2026-09-09/run.py \
+  --checkout .context/stack-benchmark --output .context/stack-results
+python3 example/benchmarks/2026-09-09/analyze.py .context/stack-results
+```
+
+This dated experiment targets `dev:precious-raven-853` and clears shared example
+bookkeeping between runs. Use it only on that dedicated deployment without
+concurrent traffic. Preparation rejects a different target or dependency
+versions. After archiving results and confirming the pools drained, build and
+deploy the normal checkout to remove the temporary mounts, then remove the
+isolated checkout so its tests are not discovered by the repository test runner.
+Keep the output directory. A new experiment should record its own revisions,
+target, dependencies, and arguments.
+
+Use the same component for both variants, with a build and successful deploy for
+each source change, to further control component storage differences. Discard
+warmups, clean up, and balance run order. Keep edits in isolated checkouts so
+restoring a variant cannot overwrite other work. Do not change constants during
+a comparison of the current design against the published baseline.
 
 ## Getting numbers you can trust
 
