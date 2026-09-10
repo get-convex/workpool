@@ -154,53 +154,65 @@ async function insertPendingStarts(
   // Beyond this, a start time provably can't commit behind the loop's cursor
   // (no commit takes five minutes), so the sweep needn't watch it.
   const scanCutoff = toTimestamp(now + 5 * MINUTE);
-  for (const [key, workIds] of groups) {
-    // Separate calls within one transaction share a commit stamp; append to
-    // the document this transaction already wrote for this key, if any.
-    const existing =
-      key === "now"
-        ? await ctx.db
-            .query("pendingStart")
-            .withIndex("segment", (q) => q.eq("segment", ctx.db.vars.commitTs))
-            .order("desc")
-            .first()
-        : await ctx.db
-            .query("pendingStart")
-            .withIndex("scanTs", (q) =>
-              q.eq("scanTs", ctx.db.vars.commitTs).eq("segment", key),
-            )
-            .order("desc")
-            .first();
-    let remaining = workIds;
-    if (existing) {
-      const members = existing.workIds ?? [];
-      const filling = remaining.slice(0, MAX_PACKED - members.length);
-      if (filling.length > 0) {
-        await ctx.db.patch("pendingStart", existing._id, {
-          workIds: [...members, ...filling],
-        });
-        await Promise.all(
-          filling.map((workId) =>
-            ctx.db.patch("work", workId, { pendingStartId: existing._id }),
-          ),
-        );
-        remaining = remaining.slice(filling.length);
+  await Promise.all(
+    [...groups].map(async ([key, workIds]) => {
+      // Append to this transaction's existing document for the key, if any.
+      const existing =
+        key === "now"
+          ? await ctx.db
+              .query("pendingStart")
+              .withIndex("segment", (q) =>
+                q.eq("segment", ctx.db.vars.commitTs),
+              )
+              .order("desc")
+              .first()
+          : await ctx.db
+              .query("pendingStart")
+              .withIndex("scanTs", (q) =>
+                q.eq("scanTs", ctx.db.vars.commitTs).eq("segment", key),
+              )
+              .order("desc")
+              .first();
+      const writes: Promise<unknown>[] = [];
+      let remaining = workIds;
+      if (existing) {
+        const members = existing.workIds ?? [];
+        const filling = remaining.slice(0, MAX_PACKED - members.length);
+        if (filling.length > 0) {
+          writes.push(
+            ctx.db.patch("pendingStart", existing._id, {
+              workIds: [...members, ...filling],
+            }),
+            ...filling.map((workId) =>
+              ctx.db.patch("work", workId, { pendingStartId: existing._id }),
+            ),
+          );
+          remaining = remaining.slice(filling.length);
+        }
       }
-    }
-    for (let i = 0; i < remaining.length; i += MAX_PACKED) {
-      const chunk = remaining.slice(i, i + MAX_PACKED);
-      const pendingStartId = await ctx.db.insert("pendingStart", {
-        workIds: chunk,
-        segment: key === "now" ? ctx.db.vars.commitTs : key,
-        ...(key !== "now" && key <= scanCutoff
-          ? { scanTs: ctx.db.vars.commitTs }
-          : {}),
-      });
-      await Promise.all(
-        chunk.map((workId) => ctx.db.patch("work", workId, { pendingStartId })),
-      );
-    }
-  }
+      for (let i = 0; i < remaining.length; i += MAX_PACKED) {
+        const chunk = remaining.slice(i, i + MAX_PACKED);
+        writes.push(
+          ctx.db
+            .insert("pendingStart", {
+              workIds: chunk,
+              segment: key === "now" ? ctx.db.vars.commitTs : key,
+              ...(key !== "now" && key <= scanCutoff
+                ? { scanTs: ctx.db.vars.commitTs }
+                : {}),
+            })
+            .then((pendingStartId) =>
+              Promise.all(
+                chunk.map((workId) =>
+                  ctx.db.patch("work", workId, { pendingStartId }),
+                ),
+              ),
+            ),
+        );
+      }
+      await Promise.all(writes);
+    }),
+  );
 }
 
 export const enqueueBatch = mutation({
