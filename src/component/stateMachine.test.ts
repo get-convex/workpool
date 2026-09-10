@@ -11,10 +11,13 @@ import {
 import { api, internal } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import type { MutationCtx } from "./_generated/server.js";
+import { RECOVERY_PERIOD_NS } from "./loop.js";
 import {
   DEFAULT_MAX_PARALLELISM,
   fromSegment,
+  fromTimestamp,
   getCurrentSegment,
+  toSegment,
   toTimestamp,
   SECOND,
   WORKER_NAME,
@@ -167,7 +170,7 @@ const S12_CANCELED_AWAITING_COMPLETE: CompositeState = {
 
 const ACTION_RECOVERY_THRESHOLD_MS = 5 * 60 * 1000;
 /** One recovery period in the 100ms buckets `runLoop` picks times with. */
-const RECOVERY_PERIOD_SEGMENTS = 600n;
+const RECOVERY_PERIOD_SEGMENTS = toSegment(fromTimestamp(RECOVERY_PERIOD_NS));
 
 /** The bucket after the current one, as older versions computed it. */
 function getNextSegment(): bigint {
@@ -266,7 +269,7 @@ describe("state machine", () => {
 
       // Set up internalState
       const lastRecovery = opts?.oldForRecovery
-        ? toTimestamp(Date.now() - 61 * SECOND)
+        ? toTimestamp(Date.now() - SECOND) - RECOVERY_PERIOD_NS
         : toTimestamp(Date.now());
       await ctx.db.insert("internalState", {
         segmentCursors: {
