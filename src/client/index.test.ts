@@ -240,6 +240,43 @@ describe("completion callbacks through the client and scheduler", () => {
     },
   );
 
+  test.each([false, true])(
+    "transactional mutation enqueue rolls back work when the callback fails (batch: %s)",
+    async (batch) => {
+      const args = [{ key: "rollback-first" }, { key: "rollback-second" }];
+      const options = {
+        completeTransactionally: true,
+        onComplete: refs.complete,
+        context: { key: "rollback-callback", throw: true },
+      };
+      try {
+        const ids = await t.mutation(async (ctx) =>
+          batch
+            ? pool.enqueueMutationBatch(ctx, refs.mutation, args, options)
+            : Promise.all(
+                args.map((args) =>
+                  pool.enqueueMutation(ctx, refs.mutation, args, options),
+                ),
+              ),
+        );
+        await vi.waitFor(() => expect(callback).toHaveBeenCalledTimes(2), {
+          timeout: 10_000,
+        });
+        await t.finishInProgressScheduledFunctions();
+        for (const { key } of args) expect(await events(key)).toEqual([]);
+        expect(await events("rollback-callback")).toEqual([]);
+        expect(
+          await t.query((ctx) => pool.statusBatch(ctx, ids)),
+        ).toMatchObject([{ state: "running" }, { state: "running" }]);
+      } finally {
+        // Inspect rollback before periodic recovery. worker.test.ts covers
+        // recovery with convex-test's missing scheduled-error text supplied.
+        await t.finishInProgressScheduledFunctions();
+        vi.clearAllTimers();
+      }
+    },
+  );
+
   test("canceling pending transactional work preserves the cancellation callback", async () => {
     const id = await t.mutation((ctx) =>
       pool.enqueueMutation(
