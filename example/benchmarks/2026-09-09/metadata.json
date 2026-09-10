@@ -1,0 +1,115 @@
+{
+  "harnessRevision": "95d074c5019c262d99e5e32682d53752aa40c74b",
+  "deployment": "precious-raven-853",
+  "variants": {
+    "baseline": {
+      "revision": "9a64c831b2a4bf3ce565f1a364e59007df4354bb",
+      "ref": "main",
+      "component": "benchBaseline0909",
+      "sourceHashes": {
+        "README.md": "f9c721a8c664976d120cbb40fa45f9d1969aba1af8500a737eb009ff9cd5943b",
+        "complete.ts": "f5564e078420eac14a6aa9ac74ae9d2dcb2c189521217a9181b54082969a6364",
+        "config.ts": "ee66976f43f4c1d2b9e2ee421a3acc467d3bcc8515db3f9db46f8fb36ceac7e9",
+        "convex.config.ts": "2ea59a7cfc1dfa20c1ce5745cac1ff5af8c3248efcf9728a89d329ce2c143b9c",
+        "danger.ts": "ff5b3fbd55da13609f4c726589f09d879cb1884cff9ff941979abaca16270e40",
+        "errors.ts": "c677629a6c52dabdde240051bd3e04618c456bd9f3fcd3f1d2e5e66fb1142f4a",
+        "future.ts": "e829cfdea8d13ab691fe3e07926d5a8c61b4bb97bc59bd37e7c1b298ff29ff9c",
+        "kick.ts": "d93a625ad33d08dbe3f30db8375f0a0bbfbad343723ad5a003df6874c53dd3a1",
+        "lib.ts": "a9acbc26710c061c9da57e4a98b91444d17926ec303bbf73892b9aa3b84b16a7",
+        "logging.ts": "47b5efd66076a0f1f76551e552bbb811bc243a51c8d60a1cb425b68b1b47e274",
+        "loop.ts": "7fdd28ac32dd614bc36d48aca8042b523c3366066bf28546be2e4b7814b17ae4",
+        "recovery.ts": "92e9ef5fbb1c7fce1b2feab215d31c99773b9c9658f4f95f4e0a70ef2fd1aecc",
+        "schema.ts": "e27b79cce087238dbb315ec57539158f0835026ad4cc152593c3045b6cf360a9",
+        "shared.ts": "fc295186c876a04bcebab2d7833390d5e43737e4272a42d82838c7de9801c620",
+        "stats.ts": "9b9ca4a977ddde02c078943e322a0a82b799567184f9e50ea6456cef7ca3a82f",
+        "worker.ts": "fe53abaed84bf19a9af3ec413fb97cc4c9808a6504cd9230abcd94fa64202040"
+      }
+    },
+    "ordering": {
+      "revision": "0b0b60e63a580b3897112097a6e5d3746cc3427f",
+      "ref": "ian/use-commit-ts",
+      "component": "benchOrdering0909",
+      "sourceHashes": {
+        "README.md": "a87d03fc62b64fd862b45fd1deb77c6a16b04a413b6df4a69fd7278cb0207ff5",
+        "complete.ts": "964843a6e025ad24ea3fbbb6da8251281ba06252db94c56c1f8a73f10b3531ff",
+        "config.ts": "ee66976f43f4c1d2b9e2ee421a3acc467d3bcc8515db3f9db46f8fb36ceac7e9",
+        "convex.config.ts": "2ea59a7cfc1dfa20c1ce5745cac1ff5af8c3248efcf9728a89d329ce2c143b9c",
+        "danger.ts": "4caf8bd4d33aa4a45e88cb0ee308ace2c1e9d7d7b46954afa24afeb57dccf5c6",
+        "errors.ts": "c677629a6c52dabdde240051bd3e04618c456bd9f3fcd3f1d2e5e66fb1142f4a",
+        "future.ts": "e829cfdea8d13ab691fe3e07926d5a8c61b4bb97bc59bd37e7c1b298ff29ff9c",
+        "kick.ts": "d93a625ad33d08dbe3f30db8375f0a0bbfbad343723ad5a003df6874c53dd3a1",
+        "lib.ts": "5e1eafde3527aca80cb8a8f07b11b18c2c018697e04cb344e9e6992e1eb791f3",
+        "logging.ts": "47b5efd66076a0f1f76551e552bbb811bc243a51c8d60a1cb425b68b1b47e274",
+        "loop.ts": "e7ce0fd5bed9853dda1aef7b8b58e055e1e0c1b9b5b478dd4656d246792880f1",
+        "pendingStart.ts": "ff93ba12ce6705e00911ecf25a4234b53340f395954bde117a834ebc8de13861",
+        "recovery.ts": "92e9ef5fbb1c7fce1b2feab215d31c99773b9c9658f4f95f4e0a70ef2fd1aecc",
+        "schema.ts": "e6e7a4628a270bbff5225bea546ad370cb40981f0099217b996f7dc7c6c905d1",
+        "shared.ts": "6ce8d96801fb716fb4a504a145ed53428cad4728ab58e28dfc4a6f352587f411",
+        "stats.ts": "7da861b6ffca4d3757ff27509a62dfd5c5137245eacc33a41b25f5ef410d9962",
+        "worker.ts": "fe53abaed84bf19a9af3ec413fb97cc4c9808a6504cd9230abcd94fa64202040"
+      }
+    },
+    "packed": {
+      "revision": "387a3ae8990f883da48751ea68c104d6e46e5418",
+      "ref": "ian/shared-start-documents",
+      "component": "benchPacked0909",
+      "sourceHashes": {
+        "README.md": "1ae5af85b1dff525b3498af5de10943772a1b811275e72f3ca41bee021be8c7d",
+        "complete.ts": "964843a6e025ad24ea3fbbb6da8251281ba06252db94c56c1f8a73f10b3531ff",
+        "config.ts": "ee66976f43f4c1d2b9e2ee421a3acc467d3bcc8515db3f9db46f8fb36ceac7e9",
+        "convex.config.ts": "2ea59a7cfc1dfa20c1ce5745cac1ff5af8c3248efcf9728a89d329ce2c143b9c",
+        "danger.ts": "d8d97d6b8fc0fdd8ed69b29b0a5d201466058024cbcd0603cba4e59d6d457662",
+        "errors.ts": "c677629a6c52dabdde240051bd3e04618c456bd9f3fcd3f1d2e5e66fb1142f4a",
+        "future.ts": "e829cfdea8d13ab691fe3e07926d5a8c61b4bb97bc59bd37e7c1b298ff29ff9c",
+        "kick.ts": "d93a625ad33d08dbe3f30db8375f0a0bbfbad343723ad5a003df6874c53dd3a1",
+        "lib.ts": "b85a2a316f766c2abb89695f95a6bc102558a9cd24fdadcd8a1e6dd1839130a6",
+        "logging.ts": "47b5efd66076a0f1f76551e552bbb811bc243a51c8d60a1cb425b68b1b47e274",
+        "loop.ts": "ad836b9b65a75014676de4618d92be2c72eda18837f5c39218e1cc09f6ab8290",
+        "pendingStart.ts": "ee89a014b166664d11ee164da297e19261cfa6b8d740075b2a668df58b28f2b9",
+        "recovery.ts": "92e9ef5fbb1c7fce1b2feab215d31c99773b9c9658f4f95f4e0a70ef2fd1aecc",
+        "schema.ts": "6e658b94c49a7341b8f6571f79a3b2f7128a2d608a1789064225035359c7f4ba",
+        "shared.ts": "6ce8d96801fb716fb4a504a145ed53428cad4728ab58e28dfc4a6f352587f411",
+        "stats.ts": "7da861b6ffca4d3757ff27509a62dfd5c5137245eacc33a41b25f5ef410d9962",
+        "worker.ts": "fe53abaed84bf19a9af3ec413fb97cc4c9808a6504cd9230abcd94fa64202040"
+      }
+    }
+  },
+  "nodeVersion": "v24.20.0",
+  "dependencies": {
+    "convex": "1.43.0",
+    "@convex-dev/batch-worker": "0.2.2",
+    "convex-helpers": "0.1.111"
+  },
+  "warmupOrders": [
+    ["baseline", "ordering", "packed"],
+    ["ordering", "packed", "baseline"],
+    ["packed", "baseline", "ordering"]
+  ],
+  "measuredOrders": [
+    ["packed", "ordering", "baseline"],
+    ["ordering", "baseline", "packed"],
+    ["baseline", "packed", "ordering"]
+  ],
+  "validation": {
+    "tasksPerVariant": 1000,
+    "variants": 3,
+    "allSuccessful": true,
+    "executionErrors": 0
+  },
+  "workloads": {
+    "mutation": {
+      "taskCount": 5000,
+      "batchSize": 100,
+      "interBatchMs": 50,
+      "maxParallelism": 200,
+      "artificialWork": null
+    },
+    "action": {
+      "taskCount": 5000,
+      "batchSize": 100,
+      "interBatchMs": 50,
+      "maxParallelism": 200,
+      "taskDurationMs": 20
+    }
+  }
+}
