@@ -126,7 +126,11 @@ export async function completeHandler(
         work.attempts < maxAttempts;
       if (!retry) {
         let scheduledId = undefined;
-        if (work.onComplete) {
+        if (
+          work.onComplete &&
+          (work.onComplete.statuses === undefined ||
+            work.onComplete.statuses.includes(job.runResult.kind))
+        ) {
           try {
             // Retrieve large context if stored separately
             let context = work.onComplete.context;
