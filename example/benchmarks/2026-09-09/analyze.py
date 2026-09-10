@@ -9,8 +9,12 @@ from pathlib import Path
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("output", type=Path, help="Directory produced by run.py")
 OUT = parser.parse_args().output
+analysis_file = OUT / "analysis.json"
+analysis_file.unlink(missing_ok=True)
 metadata = json.loads((OUT / "metadata.json").read_text())
 runs = [json.loads(line) for line in (OUT / "runs.jsonl").read_text().splitlines()]
+if not runs:
+    raise RuntimeError("No completed benchmark runs to analyze")
 windows = collections.defaultdict(list)
 for run in runs:
     run["runtime"] = {}
@@ -104,6 +108,16 @@ for line in (OUT / "runtime.jsonl").open():
             stats[target] += usage[source]
         break
 
+for run in runs:
+    count = run["args"]["taskCount"]
+    batch_size = run["args"]["batchSize"]
+    expected = (count + batch_size - 1) // batch_size
+    actual = run["runtime"].get("enqueue", {}).get("executions", 0)
+    if actual != expected:
+        raise RuntimeError(
+            f"{run['label']}: expected {expected} lib:enqueueBatch completions, found {actual}"
+        )
+
 summary = {}
 for workload in ["mutation", "action"]:
     summary[workload] = {}
@@ -135,7 +149,7 @@ for workload in ["mutation", "action"]:
 
 comparisons = []
 for workload in ["mutation", "action"]:
-    for rep in [1, 2, 3]:
+    for rep in range(1, len(metadata["measuredOrders"]) + 1):
         group = {
             r["variant"]: r
             for r in runs
@@ -171,7 +185,7 @@ result = {
 incident = OUT / "cleanup-incident.json"
 if incident.exists():
     result["cleanupIncident"] = json.loads(incident.read_text())
-(OUT / "analysis.json").write_text(json.dumps(result, indent=2) + "\n")
+analysis_file.write_text(json.dumps(result, indent=2) + "\n")
 print(
     json.dumps(
         {
