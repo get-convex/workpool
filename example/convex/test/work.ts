@@ -87,6 +87,7 @@ export const markTaskCompleted = internalMutation({
       endTime: Date.now(),
       enqueuedAt: args.context.enqueuedAt,
       wave: args.context.wave,
+      resultKind: args.result.kind,
     });
   },
 });
