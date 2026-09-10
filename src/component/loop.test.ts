@@ -1072,6 +1072,50 @@ describe("loop", () => {
   // ────────────────────────────────────────────────────────────────────
 
   describe("packed enqueues", () => {
+    it("fills existing documents and packs overflow across ordering keys", async () => {
+      const expected = await t.run(async (ctx) => {
+        const runAts = [Date.now(), Date.now() + SECOND];
+        const groups: Id<"work">[][] = [[], []];
+        for (const count of [250, 270, 1]) {
+          const ids = await ctx.runMutation(api.lib.enqueueBatch, {
+            items: runAts.flatMap((runAt) =>
+              Array.from({ length: count }, () => ({
+                fnType: "action" as const,
+                fnHandle: "test_handle",
+                fnName: "test_handle",
+                fnArgs: {},
+                runAt,
+              })),
+            ),
+            config: {},
+          });
+          for (let i = 0; i < groups.length; i++) {
+            groups[i].push(...ids.slice(i * count, (i + 1) * count));
+          }
+        }
+        return groups.flat();
+      });
+
+      await t.run(async (ctx) => {
+        const docs = await ctx.db
+          .query("pendingStart")
+          .withIndex("segment")
+          .collect();
+        expect(docs.map((doc) => doc.workIds?.length)).toEqual([
+          256, 256, 9, 256, 256, 9,
+        ]);
+        expect(docs.flatMap((doc) => doc.workIds ?? [])).toEqual(expected);
+        await Promise.all(
+          docs.flatMap((doc) =>
+            doc.workIds!.map(async (workId) => {
+              const work = await ctx.db.get("work", workId);
+              expect(work?.pendingStartId).toBe(doc._id);
+            }),
+          ),
+        );
+      });
+    });
+
     it("packs a batch enqueue into one document and drains it", async () => {
       await initialize({ maxParallelism: 3 });
       const runAt = Date.now() + 100 * SECOND;
