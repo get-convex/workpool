@@ -17,7 +17,11 @@ describe("benchmark cleanup", () => {
         t.mutation(internal.test.cleanup.start, { limit }),
       ).rejects.toThrow("limit must be an integer between 1 and 1000");
       await expect(
-        t.mutation(internal.test.cleanup.step, { index: 0, after: 0, limit }),
+        t.mutation(internal.test.cleanup.step, {
+          index: 0,
+          cursor: null,
+          limit,
+        }),
       ).rejects.toThrow("limit must be an integer between 1 and 1000");
       await t.run(async (ctx) => {
         expect(
@@ -47,5 +51,18 @@ describe("benchmark cleanup", () => {
       schedulingProbes: 0,
       data: 0,
     });
+  });
+
+  it("clears rows sharing a creation time across page boundaries", async () => {
+    // At this clock, convex-test's 0.001 ms creation-time increment rounds away.
+    vi.setSystemTime(2 ** 44);
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 3; i++) await ctx.db.insert("data", { data: i });
+      const rows = await ctx.db.query("data").collect();
+      expect(new Set(rows.map((row) => row._creationTime)).size).toBe(1);
+    });
+    await t.mutation(internal.test.cleanup.start, { limit: 1 });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect((await t.query(internal.test.cleanup.counts)).data).toBe(0);
   });
 });
