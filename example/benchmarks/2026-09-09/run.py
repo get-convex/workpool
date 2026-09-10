@@ -248,32 +248,36 @@ def main():
         start_new_session=True,
     )
     try:
-        for component in ["testWorkpool", "oldWorkpool"]:
-            counts = call(component=component, query=COUNT_QUERY)
-            if any(counts.values()):
-                raise RuntimeError(f"Unrelated pool is active: {component}: {counts}")
-        for variant, info in VARIANTS.items():
-            call(
-                "config:update",
-                {
-                    "maxParallelism": WORKLOADS["mutation"]["maxParallelism"],
-                    "logLevel": "REPORT",
-                },
-                component=info["component"],
-                allow_empty=True,
-            )
-        for variant in VARIANTS:
-            measure("mutation", variant, "smoke", 1)
-        if not ARGS.smoke:
-            for kind in ["mutation", "action"]:
-                for rep, order in enumerate(META["warmupOrders"], 1):
-                    for variant in order:
-                        measure(kind, variant, "warmup", rep)
-                for rep, order in enumerate(META["measuredOrders"], 1):
-                    for variant in order:
-                        measure(kind, variant, "measured", rep)
-        cleanup()
-        time.sleep(2)
+        try:
+            for component in ["testWorkpool", "oldWorkpool"]:
+                counts = call(component=component, query=COUNT_QUERY)
+                if any(counts.values()):
+                    raise RuntimeError(
+                        f"Unrelated pool is active: {component}: {counts}"
+                    )
+            for variant, info in VARIANTS.items():
+                call(
+                    "config:update",
+                    {
+                        "maxParallelism": WORKLOADS["mutation"]["maxParallelism"],
+                        "logLevel": "REPORT",
+                    },
+                    component=info["component"],
+                    allow_empty=True,
+                )
+            for variant in VARIANTS:
+                measure("mutation", variant, "smoke", 1)
+            if not ARGS.smoke:
+                for kind in ["mutation", "action"]:
+                    for rep, order in enumerate(META["warmupOrders"], 1):
+                        for variant in order:
+                            measure(kind, variant, "warmup", rep)
+                    for rep, order in enumerate(META["measuredOrders"], 1):
+                        for variant in order:
+                            measure(kind, variant, "measured", rep)
+            cleanup()
+        finally:
+            time.sleep(2)
         check_logger()
         print("COMPLETE", flush=True)
     finally:
