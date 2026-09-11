@@ -27,6 +27,9 @@ import schema from "./schema.js";
 import { modules } from "./setup.test.js";
 import { type OnCompleteArgs, vResult } from "./shared.js";
 
+// "none" matches no kind, so it filters to all three: exclude everything.
+const ALL_KINDS = ["success", "failed", "canceled"] as const;
+
 describe("recovery", () => {
   const callback = vi.fn<(args: OnCompleteArgs) => void>();
   const callbackRef = makeFunctionReference<"mutation", OnCompleteArgs>(
@@ -115,8 +118,10 @@ describe("recovery", () => {
               onComplete: {
                 fnHandle: handle,
                 context: { key: state },
-                statuses:
-                  mode === "all" ? undefined : mode === "none" ? [] : [mode],
+                excludeKinds:
+                  mode === "all"
+                    ? undefined
+                    : ALL_KINDS.filter((k) => k !== mode),
               },
             });
             const scheduledId = await makeDummyScheduledFunction(ctx, workId);

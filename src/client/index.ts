@@ -491,11 +491,11 @@ export type EnqueueOptions<Context = unknown, ReturnValue = unknown> = {
   > | null;
 
   /**
-   * Only invoke `onComplete` for these terminal result kinds. Omit to handle
-   * every result, or pass an empty array to disable the callback. Intermediate
-   * failed attempts that will be retried never invoke the callback.
+   * Do not invoke `onComplete` for these terminal result kinds. Omit it (or
+   * pass an empty array) to handle every result. Intermediate failed attempts
+   * that will be retried never invoke the callback.
    */
-  onCompleteStatuses?: readonly RunResult["kind"][];
+  onCompleteExcludeKinds?: readonly RunResult["kind"][];
 
   /**
    * A context object to pass to the `onComplete` mutation.
@@ -584,8 +584,8 @@ async function enqueueArgs<Context, ReturnType>(
       ? {
           fnHandle: await createFunctionHandle(opts.onComplete),
           context: opts.context,
-          statuses: opts.onCompleteStatuses
-            ? [...opts.onCompleteStatuses]
+          excludeKinds: opts.onCompleteExcludeKinds
+            ? [...opts.onCompleteExcludeKinds]
             : undefined,
         }
       : undefined,

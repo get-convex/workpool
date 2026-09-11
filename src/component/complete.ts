@@ -128,8 +128,7 @@ export async function completeHandler(
         let scheduledId = undefined;
         if (
           work.onComplete &&
-          (work.onComplete.statuses === undefined ||
-            work.onComplete.statuses.includes(job.runResult.kind))
+          !work.onComplete.excludeKinds?.includes(job.runResult.kind)
         ) {
           try {
             // Retrieve large context if stored separately

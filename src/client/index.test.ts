@@ -156,7 +156,8 @@ const pool = new Workpool(component, { maxParallelism: 3, logLevel: "ERROR" });
 const retries = { maxAttempts: 3, initialBackoffMs: 1, base: 2 };
 type Kind = "action" | "mutation" | "query";
 type Mode = "all" | "failed" | "canceled";
-const statusFilters = [
+const ALL_KINDS = ["success", "failed", "canceled"] as const;
+const excludeFilters = [
   undefined,
   [],
   ["success"],
@@ -195,9 +196,9 @@ describe("completion callbacks through the client and scheduler", () => {
         .collect(),
     );
 
-  describe.each(statusFilters.map((statuses) => ({ statuses })))(
-    "status filter $statuses",
-    ({ statuses }) => {
+  describe.each(excludeFilters.map((excludeKinds) => ({ excludeKinds })))(
+    "exclude filter $excludeKinds",
+    ({ excludeKinds }) => {
       test.each(["success", "failed", "canceled"] as const)(
         "dispatches a %s result at most once and finishes the job",
         async (result) => {
@@ -208,7 +209,7 @@ describe("completion callbacks through the client and scheduler", () => {
               { key: "filtered", fail: result === "failed" },
               {
                 onComplete: refs.complete,
-                onCompleteStatuses: statuses,
+                onCompleteExcludeKinds: excludeKinds,
                 context: { key: "filtered" },
                 runAt: result === "canceled" ? Date.now() + 60_000 : undefined,
               },
@@ -217,9 +218,9 @@ describe("completion callbacks through the client and scheduler", () => {
           if (result === "canceled")
             await t.mutation((ctx) => pool.cancel(ctx, id));
           await drain();
-          const selected =
-            statuses === undefined ||
-            (statuses as readonly string[]).includes(result);
+          const selected = !(
+            excludeKinds as readonly string[] | undefined
+          )?.includes(result);
           expect(callback).toHaveBeenCalledTimes(selected ? 1 : 0);
           const recorded = (await events("filtered")).filter(
             (e) => e.kind === "callback",
@@ -248,7 +249,8 @@ describe("completion callbacks through the client and scheduler", () => {
     const { mode = "failed", context = { key: args.key }, ...rest } = options;
     const opts = {
       onComplete: refs.complete,
-      onCompleteStatuses: mode === "all" ? undefined : [mode],
+      onCompleteExcludeKinds:
+        mode === "all" ? undefined : ALL_KINDS.filter((k) => k !== mode),
       context,
       ...rest,
     };
@@ -463,7 +465,7 @@ describe("completion callbacks through the client and scheduler", () => {
             { key: name, fail, ...args },
             {
               onComplete: refs.complete,
-              onCompleteStatuses: ["failed", "canceled"],
+              onCompleteExcludeKinds: ["success"],
               context: { key: name },
               retry,
             },
@@ -514,7 +516,7 @@ describe("completion callbacks through the client and scheduler", () => {
       const args = [{ key: "first" }, { key: "second" }];
       const options = {
         onComplete: refs.complete,
-        onCompleteStatuses: ["failed", "canceled"] as const,
+        onCompleteExcludeKinds: ["success"] as const,
         context: { key: "batch-cancel" },
         runAt: Date.now() + 60_000,
       };
@@ -641,11 +643,11 @@ describe("completion callbacks through the client and scheduler", () => {
           mode === "failed"
             ? {
                 onComplete: refs.optionalComplete,
-                onCompleteStatuses: ["failed"],
+                onCompleteExcludeKinds: ["success", "canceled"],
               }
             : {
                 onComplete: refs.optionalComplete,
-                onCompleteStatuses: ["canceled"],
+                onCompleteExcludeKinds: ["success", "failed"],
                 runAt: Date.now() + 60_000,
               },
         ),
@@ -669,7 +671,7 @@ describe("completion callbacks through the client and scheduler", () => {
       const args = [{ key: "success" }, { key: "failure", fail: true }];
       const opts = {
         onComplete: refs.complete,
-        onCompleteStatuses: ["failed"] as const,
+        onCompleteExcludeKinds: ["success", "canceled"] as const,
         context: { key: "batch" },
       };
       const ids = await t.mutation((ctx) => {
@@ -713,11 +715,11 @@ describe("completion callbacks through the client and scheduler", () => {
   });
 
   test.each([false, true])(
-    "rejects invalid status filters at runtime (batch: %s)",
+    "rejects invalid result kinds at runtime (batch: %s)",
     async (batch) => {
       const opts = {
         onComplete: refs.complete,
-        onCompleteStatuses: ["running"],
+        onCompleteExcludeKinds: ["running"],
         context: { key: "invalid" },
       } as unknown as EnqueueOptions<Context>;
       await expect(
@@ -818,10 +820,10 @@ test("runAt and runAfter are mutually exclusive", () => {
   expectTypeOf(options).toMatchTypeOf<EnqueueOptions>();
 });
 
-test("status filters accept existing handlers on all enqueue methods", () => {
+test("exclude filters accept existing handlers on all enqueue methods", () => {
   const options = {
     onComplete,
-    onCompleteStatuses: ["success", "failed", "canceled"] as const,
+    onCompleteExcludeKinds: ["success"] as const,
     context: { label: "job" },
   };
   const mutation = makeFunctionReference<"mutation", { value: number }, number>(
@@ -850,13 +852,13 @@ test("status filters accept existing handlers on all enqueue methods", () => {
   ).returns.toEqualTypeOf<Promise<WorkId[]>>();
 });
 
-test("status filters only accept terminal result kinds", () => {
+test("exclude filters only accept terminal result kinds", () => {
   // @ts-expect-error A running job has no terminal result.
-  const options: EnqueueOptions = { onCompleteStatuses: ["running"] };
+  const options: EnqueueOptions = { onCompleteExcludeKinds: ["running"] };
   expectTypeOf(options).toMatchTypeOf<EnqueueOptions>();
   expectTypeOf({
     onComplete: null,
-    onCompleteStatuses: [],
+    onCompleteExcludeKinds: [],
   }).toMatchTypeOf<EnqueueOptions>();
 });
 

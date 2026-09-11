@@ -38,15 +38,18 @@ describe("lib", () => {
 
   describe("enqueue", () => {
     it.each([false, true])(
-      "accepts legacy, empty, and selected callback statuses (batch: %s)",
+      "accepts legacy, empty, and populated callback exclusions (batch: %s)",
       async (batch) => {
         const callbacks = [
           { fnHandle: "callback", context: { key: "legacy" } },
-          { fnHandle: "callback", statuses: [] },
-          { fnHandle: "callback", statuses: ["failed", "canceled"] as const },
+          { fnHandle: "callback", excludeKinds: [] },
+          {
+            fnHandle: "callback",
+            excludeKinds: ["failed", "canceled"] as const,
+          },
         ].map((callback) => ({
           ...callback,
-          statuses: callback.statuses && [...callback.statuses],
+          excludeKinds: callback.excludeKinds && [...callback.excludeKinds],
         }));
         const items = callbacks.map((onComplete) => ({
           fnHandle: "workHandle",
@@ -87,8 +90,8 @@ describe("lib", () => {
           ...item,
           onComplete: {
             fnHandle: "callback",
-            // @ts-expect-error JavaScript callers can send an invalid status.
-            statuses: ["running"] as ("success" | "failed" | "canceled")[],
+            // @ts-expect-error JavaScript callers can send an invalid kind.
+            excludeKinds: ["running"] as ("success" | "failed" | "canceled")[],
           },
         };
         await expect(

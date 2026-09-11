@@ -112,7 +112,7 @@ export type RunResult<Returns = unknown> =
 export const vOnCompleteFnContext = v.object({
   fnHandle: v.string(), // mutation
   context: v.optional(v.any()),
-  statuses: v.optional(
+  excludeKinds: v.optional(
     v.array(
       v.union(v.literal("success"), v.literal("failed"), v.literal("canceled")),
     ),

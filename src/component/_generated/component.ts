@@ -71,8 +71,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           fnType: "action" | "mutation" | "query";
           onComplete?: {
             context?: any;
+            excludeKinds?: Array<"success" | "failed" | "canceled">;
             fnHandle: string;
-            statuses?: Array<"success" | "failed" | "canceled">;
           };
           retryBehavior?: {
             base: number;
@@ -99,8 +99,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             fnType: "action" | "mutation" | "query";
             onComplete?: {
               context?: any;
+              excludeKinds?: Array<"success" | "failed" | "canceled">;
               fnHandle: string;
-              statuses?: Array<"success" | "failed" | "canceled">;
             };
             retryBehavior?: {
               base: number;
