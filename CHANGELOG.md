@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.12
+
+- Adds onCompleteExcludeKinds to filter callbacks by result kind (#237). Use
+  this to avoid callbacks on success or canceled results if you don't care about
+  those cases.
+
 ## 0.4.11
 
 - Bump Batch Worker dependency to prevent OCC conflicts on enqueue.
