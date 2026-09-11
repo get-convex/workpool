@@ -179,7 +179,7 @@ and workpool completion bookkeeping together:
 ```ts
 await pool.enqueueMutation(ctx, internal.tasks.process, args, {
   onComplete: internal.tasks.handleResult,
-  onCompleteStatuses: ["success", "failed"],
+  onCompleteExcludeKinds: ["canceled"],
   completeTransactionally: true,
 });
 ```
@@ -187,14 +187,14 @@ await pool.enqueueMutation(ctx, internal.tasks.process, args, {
 The callback can read the mutation's writes. If the success callback or
 completion bookkeeping throws, the scheduled mutation fails and all those writes
 roll back. Workpool's periodic recovery then marks the work as failed and
-invokes the callback for `"failed"`, if selected. Until recovery runs, the job
-remains running and occupies a concurrency slot. There is no separate fallback
-execution of the success callback.
+invokes the callback for `"failed"`, unless excluded. Until recovery runs, the
+job remains running and occupies a concurrency slot. There is no separate
+fallback execution of the success callback.
 
 Ordinary work errors still use the existing failure-completion path. Failure and
-cancellation callbacks keep their usual transaction behavior. An empty status
-list or absent callback still allows transactional bookkeeping, avoiding the
-separately scheduled completion mutation. Jobs in a batch remain independent
+cancellation callbacks keep their usual transaction behavior. Excluding every
+kind, or omitting the callback, still allows transactional bookkeeping, avoiding
+the separately scheduled completion mutation. Jobs in a batch remain independent
 transactions. Actions and queries do not support this option.
 
 This option requires Convex 1.41 or newer. The work and callback share one

@@ -28,7 +28,7 @@ import workpool from "../test.js";
 import type { api } from "../component/_generated/api.js";
 import {
   type EnqueueOptions,
-  type MutationEnqueueOptions,
+  type TransactionalEnqueueOptions,
   NonRetryableError,
   type OnCompleteArgs,
   type RetryOption,
@@ -38,6 +38,8 @@ import {
   vOnCompleteArgs,
   vResult,
   vWorkId,
+  enqueue,
+  enqueueBatch,
 } from "./index.js";
 
 const schema = defineSchema({
@@ -286,7 +288,7 @@ describe("completion callbacks through the client and scheduler", () => {
         {
           completeTransactionally: true,
           onComplete: refs.complete,
-          onCompleteStatuses: ["canceled"],
+          onCompleteExcludeKinds: ["success", "failed"],
           context: { key: "atomic-cancel" },
           runAt: Date.now() + 60_000,
         },
@@ -969,10 +971,10 @@ test("exclude filters only accept terminal result kinds", () => {
 test("transactional completion is only exposed for mutations", () => {
   const options = {
     onComplete,
-    onCompleteStatuses: ["success"] as const,
+    onCompleteExcludeKinds: ["failed", "canceled"] as const,
     context: { label: "job" },
     completeTransactionally: true,
-  } satisfies MutationEnqueueOptions<{ label: string }, number>;
+  } satisfies TransactionalEnqueueOptions<{ label: string }, number>;
   const mutation = makeFunctionReference<"mutation", { value: number }, number>(
     "work:mutation",
   );
@@ -992,6 +994,36 @@ test("transactional completion is only exposed for mutations", () => {
   }).returns.toEqualTypeOf<Promise<WorkId>>();
   expectTypeOf((pool: Workpool, ctx: MutationCtx) =>
     pool.enqueueMutationBatch(ctx, mutation, [{ value: 1 }], options),
+  ).returns.toEqualTypeOf<Promise<WorkId[]>>();
+});
+
+test("standalone enqueue gates transactional completion on fnType", () => {
+  const options = {
+    onComplete,
+    context: { label: "job" },
+    completeTransactionally: true,
+  };
+  const mutation = makeFunctionReference<"mutation", { value: number }, number>(
+    "work:mutation",
+  );
+  const query = makeFunctionReference<"query", { value: number }, number>(
+    "work:query",
+  );
+  const arg = { value: 1 };
+  const batch = [arg];
+  expectTypeOf((c: WorkpoolComponent, ctx: MutationCtx) => {
+    // @ts-expect-error Actions cannot opt into transactional completion.
+    void enqueue(c, ctx, "action", action, arg, options);
+    // @ts-expect-error Queries cannot opt into transactional completion.
+    void enqueue(c, ctx, "query", query, arg, options);
+    // @ts-expect-error Batched actions cannot opt into transactional completion.
+    void enqueueBatch(c, ctx, "action", action, batch, options);
+    // @ts-expect-error Batched queries cannot opt into transactional completion.
+    void enqueueBatch(c, ctx, "query", query, batch, options);
+    return enqueue(c, ctx, "mutation", mutation, arg, options);
+  }).returns.toEqualTypeOf<Promise<WorkId>>();
+  expectTypeOf((c: WorkpoolComponent, ctx: MutationCtx) =>
+    enqueueBatch(c, ctx, "mutation", mutation, batch, options),
   ).returns.toEqualTypeOf<Promise<WorkId[]>>();
 });
 

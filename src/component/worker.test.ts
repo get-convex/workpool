@@ -96,14 +96,14 @@ describe("transactional mutation completion", () => {
     failWork = false,
     failCallback = false,
     callback = true,
-    statuses,
+    excludeKinds,
     largePayload = false,
   }: {
     transactional?: boolean;
     failWork?: boolean;
     failCallback?: boolean;
     callback?: boolean;
-    statuses?: RunResult["kind"][];
+    excludeKinds?: RunResult["kind"][];
     largePayload?: boolean;
   } = {}) {
     return t.run(async (ctx) => {
@@ -132,7 +132,7 @@ describe("transactional mutation completion", () => {
           ? {
               fnHandle: await createFunctionHandle(refs.callback),
               context: largePayload ? undefined : context,
-              statuses,
+              excludeKinds,
             }
           : undefined,
       });
@@ -239,19 +239,20 @@ describe("transactional mutation completion", () => {
     },
   );
 
-  test.each([{}, { statuses: ["failed"] as const }, { statuses: [] as const }])(
-    "finishes without a success callback ($statuses)",
-    async (options) => {
-      const job = await start({
-        callback: "statuses" in options,
-        statuses: options.statuses && [...options.statuses],
-      });
-      await drain();
-      expect(await effects()).toEqual(["work"]);
-      expect(calls.mock.calls.flat()).toEqual(["work"]);
-      await expectFinished(job);
-    },
-  );
+  test.each([
+    {},
+    { excludeKinds: ["success", "canceled"] as const },
+    { excludeKinds: ["success", "failed", "canceled"] as const },
+  ])("finishes without a success callback ($excludeKinds)", async (options) => {
+    const job = await start({
+      callback: "excludeKinds" in options,
+      excludeKinds: options.excludeKinds && [...options.excludeKinds],
+    });
+    await drain();
+    expect(await effects()).toEqual(["work"]);
+    expect(calls.mock.calls.flat()).toEqual(["work"]);
+    await expectFinished(job);
+  });
 
   test.each(["callback", "bookkeeping"] as const)(
     "%s failure rolls back all writes, then recovery records failure once",
@@ -285,7 +286,10 @@ describe("transactional mutation completion", () => {
   );
 
   test("recovery respects a success-only filter after rollback", async () => {
-    const job = await start({ failCallback: true, statuses: ["success"] });
+    const job = await start({
+      failCallback: true,
+      excludeKinds: ["failed", "canceled"],
+    });
     await drain();
     await recover(job, "callback failed");
     expect(await effects()).toEqual([]);

@@ -178,7 +178,7 @@ export class Workpool {
       NoInfer<ReturnType>
     >,
     fnArgs: Args,
-    options?: MutationEnqueueOptions<Context, ReturnType>,
+    options?: TransactionalEnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId> {
     return enqueue(this.component, ctx, "mutation", fn, fnArgs, {
       ...this.options,
@@ -209,7 +209,7 @@ export class Workpool {
       NoInfer<ReturnType>
     >,
     argsArray: Array<Args>,
-    options?: MutationEnqueueOptions<Context, ReturnType>,
+    options?: TransactionalEnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId[]> {
     return enqueueBatch(this.component, ctx, "mutation", fn, argsArray, {
       ...this.options,
@@ -531,8 +531,8 @@ export type EnqueueOptions<Context = unknown, ReturnValue = unknown> = {
     }
 );
 
-/** Options for a mutation and its completion. */
-export type MutationEnqueueOptions<
+/** Options for work that can complete in the enqueuing transaction. */
+export type TransactionalEnqueueOptions<
   Context = unknown,
   ReturnValue = unknown,
 > = EnqueueOptions<Context, ReturnValue> & {
@@ -542,7 +542,7 @@ export type MutationEnqueueOptions<
    * errors roll back the work; recovery later reports the job as failed.
    * The work and callback share transaction limits, with headroom reserved for
    * bookkeeping. Failure and cancellation callbacks keep their usual behavior.
-   * Only supported by enqueueMutation and enqueueMutationBatch.
+   * Only supported for mutations.
    */
   completeTransactionally?: boolean;
 };
@@ -591,7 +591,7 @@ async function enqueueArgs<Context, ReturnType>(
     | FunctionReference<FunctionType, FunctionVisibility>
     | FunctionHandle<FunctionType, DefaultFunctionArgs>,
   opts:
-    | (MutationEnqueueOptions<Context, ReturnType> &
+    | (TransactionalEnqueueOptions<Context, ReturnType> &
         Partial<Config> & { retryBehavior?: RetryBehavior })
     | undefined,
 ) {
@@ -655,10 +655,12 @@ export async function enqueueBatch<
   fnType: FnType,
   fn: FunctionReference<FnType, FunctionVisibility, Args, NoInfer<ReturnType>>,
   fnArgsArray: Array<Args>,
-  options: MutationEnqueueOptions<Context, ReturnType> & {
+  options: EnqueueOptions<Context, ReturnType> & {
     retryBehavior?: RetryBehavior;
     maxParallelism?: number;
     logLevel?: LogLevel;
+    /** Mutations only; see {@link TransactionalEnqueueOptions}. */
+    completeTransactionally?: FnType extends "mutation" ? boolean : never;
   },
 ): Promise<WorkId[]> {
   const { config, ...defaults } = await enqueueArgs(fn, options);
@@ -718,10 +720,12 @@ export async function enqueue<
   fnType: FnType,
   fn: FunctionReference<FnType, FunctionVisibility, Args, NoInfer<ReturnType>>,
   fnArgs: Args,
-  options: MutationEnqueueOptions<Context, ReturnType> & {
+  options: EnqueueOptions<Context, ReturnType> & {
     retryBehavior?: RetryBehavior;
     maxParallelism?: number;
     logLevel?: LogLevel;
+    /** Mutations only; see {@link TransactionalEnqueueOptions}. */
+    completeTransactionally?: FnType extends "mutation" ? boolean : never;
   },
 ): Promise<WorkId> {
   const id = await ctx.runMutation(component.lib.enqueue, {
