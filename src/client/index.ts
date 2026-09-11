@@ -220,9 +220,9 @@ export class Workpool {
   /**
    * Enqueues a query to be run.
    * Usually not what you want, but it can be useful during workflows.
-   * By default, the query runs in its own snapshot. With completeTransactionally,
-   * it runs in the same transaction as the success callback and can conflict
-   * with mutations writing the data it reads.
+   * The query always runs in its own snapshot. With completeTransactionally,
+   * its success callback and completion bookkeeping commit together, without
+   * adding the query's reads to that transaction's conflict detection.
    *
    * @param ctx - The mutation or action context that can call ctx.runMutation.
    * @param fn - The query to run, like `internal.example.myQuery`.
@@ -426,7 +426,7 @@ export type RetryOption = {
 };
 
 export type WorkpoolOptions = {
-  /** How many actions/mutations can be running at once within this pool.
+  /** How many actions, mutations, and queries can run at once within this pool.
    * Suggested max: 100 on Pro, 20 on free plan.
    * If set to 0, no new work will be started.
    */
@@ -539,8 +539,8 @@ export type TransactionalEnqueueOptions<
    * errors roll back the work; recovery later reports the job as failed.
    * The work and callback share transaction limits, with headroom reserved for
    * bookkeeping. Failure and cancellation callbacks keep their usual behavior.
-   * Supported by mutation and query enqueue methods. For a query, its reads and
-   * the success callback's writes share one transaction and conflict detection.
+   * Supported by mutation and query enqueue methods. Queries use an independent
+   * snapshot without adding read dependencies to the completion transaction.
    */
   completeTransactionally?: boolean;
 };

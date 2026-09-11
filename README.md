@@ -186,11 +186,12 @@ await pool.enqueueMutation(ctx, internal.tasks.process, args, {
 });
 ```
 
-For queries, the query's reads and the success callback's writes share a single
-transaction. This lets the callback act on the query result with the same
-consistent snapshot and conflict detection. A concurrent change to data the
-query reads can cause Convex to rerun the query and callback together. Without
-this option, queries run in their own snapshot through the action batch worker.
+Queries always read an independent snapshot. With this option, the success
+callback and completion bookkeeping commit together, but the query's reads do
+not create dependencies that cause that transaction to retry on concurrent
+writes. The query result may be stale when the callback commits; read any data
+that must still be current within the callback. Without this option, queries run
+through the action batch worker.
 
 Each opted-in query is scheduled in its own mutation wrapper, including queries
 enqueued in a batch. For example:
@@ -217,7 +218,7 @@ kind, or omitting the callback, still allows transactional bookkeeping, without
 a separate completion invocation. Jobs in a batch remain independent
 transactions. Actions do not support this option.
 
-This option requires Convex 1.41 or newer. The work and callback share one
+This option requires Convex 1.42 or newer. The work and callback share one
 transaction budget. Workpool uses nested transaction limits to reserve space for
 completion bookkeeping; work that fits by itself may exceed the combined budget.
 Limit overruns or execution failures can still fail the transaction, in which
@@ -360,9 +361,9 @@ See example usage in [example.ts](./example/convex/example.ts).
 
 Check out the [docstrings](./src/client/index.ts), but notable options include:
 
-- `maxParallelism`: How many actions/mutations can run at once within this pool.
-  Avoid exceeding 100 on Pro, 20 on the free plan, across all workpools and
-  workflows.
+- `maxParallelism`: How many actions, mutations, and queries can run at once
+  within this pool. Avoid exceeding 100 on Pro, 20 on the free plan, across all
+  workpools and workflows.
 - `retryActionsByDefault`: Whether to retry actions that fail by default.
 - `defaultRetryBehavior`: The default retry behavior for enqueued actions.
 

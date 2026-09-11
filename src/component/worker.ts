@@ -66,11 +66,10 @@ export const runMutationWrapper = internalMutation({
         ? { transactionLimits: await completionTransactionLimits(ctx) }
         : undefined;
       returnValue = await (args.fnType === "query"
-        ? ctx.runQuery(
-            args.fnHandle as FunctionHandle<"query">,
-            fnArgs,
-            runOptions,
-          )
+        ? ctx.runQuery(args.fnHandle as FunctionHandle<"query">, fnArgs, {
+            ...runOptions,
+            useStaleSnapshot: true,
+          })
         : ctx.runMutation(
             args.fnHandle as FunctionHandle<"mutation">,
             fnArgs,

@@ -20,6 +20,7 @@ import { completionTransactionLimits } from "./limits.js";
 const modules = import.meta.glob("./**/*.ts");
 
 const calls = vi.fn<(kind: string) => void>();
+const queryInputs = vi.fn<(input: unknown) => void>();
 const fixtures = {
   work: internalMutation({
     args: { fail: v.boolean(), padding: v.optional(v.string()) },
@@ -41,6 +42,7 @@ const fixtures = {
     handler: async (ctx, { fail, sourceId }) => {
       calls("query");
       const source = await ctx.db.get("payload", sourceId);
+      queryInputs(source?.args?.input);
       expect(source?.args?.input).toBe(true);
       if (fail) throw new Error("query failed");
       return sourceId;
@@ -95,6 +97,7 @@ describe("transactional completion", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     calls.mockClear();
+    queryInputs.mockClear();
     t = setup();
   });
   afterEach(async () => {
@@ -201,6 +204,7 @@ describe("transactional completion", () => {
         attempt: 0,
         started: Date.now(),
         payloadId,
+        sourceId,
         args,
       };
     });
@@ -369,6 +373,33 @@ describe("transactional completion", () => {
           ),
         ).toBe(false);
       });
+    },
+  );
+
+  test.each([true, false, undefined])(
+    "queries read committed snapshots regardless of transactional completion (%s)",
+    async (completeTransactionally) => {
+      const job = await start({
+        fnType: "query",
+        transactional: completeTransactionally ?? false,
+        callback: false,
+      });
+      await t.run(async (ctx) => {
+        // Invoke the wrapper inside a transaction with uncommitted changes.
+        // The query fixture succeeds only if it still sees the committed input.
+        await ctx.scheduler.cancel(job.scheduledId);
+        await ctx.db.patch("payload", job.sourceId!, {
+          args: { input: false },
+        });
+        await ctx.runMutation(internal.worker.runMutationWrapper, {
+          ...job.args,
+          completeTransactionally,
+        });
+      });
+      await drain();
+      expect(calls.mock.calls.flat()).toEqual(["query"]);
+      expect(queryInputs).toHaveBeenCalledExactlyOnceWith(true);
+      await expectFinished(job);
     },
   );
 
