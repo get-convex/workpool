@@ -37,6 +37,80 @@ describe("lib", () => {
   });
 
   describe("enqueue", () => {
+    it.each([false, true])(
+      "accepts legacy, empty, and populated callback exclusions (batch: %s)",
+      async (batch) => {
+        const callbacks = [
+          { fnHandle: "callback", context: { key: "legacy" } },
+          { fnHandle: "callback", excludeKinds: [] },
+          {
+            fnHandle: "callback",
+            excludeKinds: ["failed", "canceled"] as const,
+          },
+        ].map((callback) => ({
+          ...callback,
+          excludeKinds: callback.excludeKinds && [...callback.excludeKinds],
+        }));
+        const items = callbacks.map((onComplete) => ({
+          fnHandle: "workHandle",
+          fnName: "work",
+          fnArgs: {},
+          fnType: "mutation" as const,
+          runAt: Date.now(),
+          onComplete,
+        }));
+        const ids = batch
+          ? await t.mutation(api.lib.enqueueBatch, { items, config: {} })
+          : await Promise.all(
+              items.map((item) =>
+                t.mutation(api.lib.enqueue, { ...item, config: {} }),
+              ),
+            );
+        expect(
+          await t.run(async (ctx) =>
+            Promise.all(
+              ids.map(async (id) => (await ctx.db.get("work", id))?.onComplete),
+            ),
+          ),
+        ).toEqual(callbacks);
+      },
+    );
+
+    it.each([false, true])(
+      "rejects invalid status filters before writing any work (batch: %s)",
+      async (batch) => {
+        const item = {
+          fnHandle: "workHandle",
+          fnName: "work",
+          fnArgs: { payload: "x".repeat(10_000) },
+          fnType: "mutation" as const,
+          runAt: Date.now(),
+        };
+        const invalid = {
+          ...item,
+          onComplete: {
+            fnHandle: "callback",
+            // @ts-expect-error JavaScript callers can send an invalid kind.
+            excludeKinds: ["running"] as ("success" | "failed" | "canceled")[],
+          },
+        };
+        await expect(
+          batch
+            ? t.mutation(api.lib.enqueueBatch, {
+                items: [item, invalid],
+                config: {},
+              })
+            : t.mutation(api.lib.enqueue, { ...invalid, config: {} }),
+        ).rejects.toThrow(/Validator error/);
+        await t.run(async (ctx) => {
+          expect(await ctx.db.query("work").collect()).toEqual([]);
+          expect(await ctx.db.query("pendingStart").collect()).toEqual([]);
+          expect(await ctx.db.query("payload").collect()).toEqual([]);
+          expect(await ctx.db.query("globals").collect()).toEqual([]);
+        });
+      },
+    );
+
     it("should successfully enqueue a work item", async () => {
       const id = await t.mutation(api.lib.enqueue, {
         fnHandle: "testHandle",

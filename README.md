@@ -147,6 +147,28 @@ export const emailSent = pool.defineOnComplete<DataModel>({
 });
 ```
 
+To skip some outcomes, add `onCompleteExcludeKinds`. For example, the same
+handler can handle failures and cancellations without being invoked on success:
+
+```ts
+await pool.enqueueAction(ctx, internal.email.send, args, {
+  onComplete: internal.email.emailSent,
+  onCompleteExcludeKinds: ["success"],
+  context: { emailType: args.emailType, userId: args.userId },
+});
+```
+
+The options are `"success"`, `"failed"`, and `"canceled"`.
+
+Filtering applies to the final result. Failed attempts that will be retried do
+not invoke the callback. A terminal failure, including a `NonRetryableError`,
+invokes it unless `"failed"` is excluded. Cancelation through the workpool
+yields `"canceled"` when it lands before the work starts or before a retry is
+scheduled; an attempt already in progress runs to its own outcome, so a race
+with `cancel` can still report `"success"` or a terminal `"failed"`. Direct
+scheduler cancelation (for example, from the dashboard) is treated as a failure
+and can trigger retries instead.
+
 ### Idempotency
 
 Idempotent actions are actions that can be run multiple times safely. This
@@ -310,6 +332,9 @@ options include:
   set to `true`, it will use the `defaultRetryBehavior`. If it's set to a custom
   config, it will use that (and do retries).
 - `onComplete`: A mutation to run after the function finishes.
+- `onCompleteExcludeKinds`: Optional list of result kinds to skip: `"success"`,
+  `"failed"`, and `"canceled"`. Defaults to excluding none, so every outcome
+  invokes the callback.
 - `context`: Any data you want to pass to the `onComplete` mutation.
 - `runAt` and `runAfter`: Similar to `ctx.scheduler.run*`, allows you to
   schedule the work to run later. By default it's immediate.
@@ -331,8 +356,8 @@ You can override the retry behavior per-call with the `retry` option.
 
 If an action has retries enabled but hits a terminal failure, throw a
 `NonRetryableError`. Workpool will treat the attempt as failed, call
-`onComplete` with the normal `{ kind: "failed", error }` result, and skip any
-remaining retries.
+`onComplete` with the normal `{ kind: "failed", error }` result unless
+`"failed"` is excluded, and skip any remaining retries.
 
 ```ts
 import { NonRetryableError } from "@convex-dev/workpool";
@@ -407,7 +432,12 @@ export const cancelWork = mutation({
 });
 ```
 
-This will avoid starting or retrying, but will not stop in-progress work.
+This will avoid starting or retrying, but will not stop in-progress work. If an
+in-progress attempt succeeds, its result is still success. Failures remain
+failures when retries are disabled or exhausted, or the error is a
+`NonRetryableError`. If cancellation prevents work from starting or being
+retried, the final result is `canceled`. The callback runs unless that final
+result is listed in `onCompleteExcludeKinds`.
 
 ## Monitoring the workpool
 
