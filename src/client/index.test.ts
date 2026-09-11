@@ -1009,6 +1009,11 @@ test("standalone enqueue gates transactional completion on fnType", () => {
   const query = makeFunctionReference<"query", { value: number }, number>(
     "work:query",
   );
+  const mixedFn = makeFunctionReference<
+    "mutation" | "action",
+    { value: number },
+    number
+  >("work:mixed");
   const arg = { value: 1 };
   const batch = [arg];
   expectTypeOf((c: WorkpoolComponent, ctx: MutationCtx) => {
@@ -1020,6 +1025,13 @@ test("standalone enqueue gates transactional completion on fnType", () => {
     void enqueueBatch(c, ctx, "action", action, batch, options);
     // @ts-expect-error Batched queries cannot opt into transactional completion.
     void enqueueBatch(c, ctx, "query", query, batch, options);
+    // A union that includes a mutation must still be rejected as a whole: a
+    // distributive conditional would collapse this to boolean and let it through.
+    const mixed = "mutation" as "mutation" | "action";
+    // @ts-expect-error An action-capable union cannot opt in.
+    void enqueue(c, ctx, mixed, mixedFn, arg, options);
+    // @ts-expect-error A batched action-capable union cannot opt in.
+    void enqueueBatch(c, ctx, mixed, mixedFn, batch, options);
     return enqueue(c, ctx, "mutation", mutation, arg, options);
   }).returns.toEqualTypeOf<Promise<WorkId>>();
   expectTypeOf((c: WorkpoolComponent, ctx: MutationCtx) =>

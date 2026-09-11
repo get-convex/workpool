@@ -660,7 +660,9 @@ export async function enqueueBatch<
     maxParallelism?: number;
     logLevel?: LogLevel;
     /** Mutations only; see {@link TransactionalEnqueueOptions}. */
-    completeTransactionally?: FnType extends "mutation" ? boolean : never;
+    // Wrapped in a tuple so a union FnType is checked as a whole rather than
+    // distributed, which would admit action-capable calls.
+    completeTransactionally?: [FnType] extends ["mutation"] ? boolean : never;
   },
 ): Promise<WorkId[]> {
   const { config, ...defaults } = await enqueueArgs(fn, options);
@@ -725,7 +727,9 @@ export async function enqueue<
     maxParallelism?: number;
     logLevel?: LogLevel;
     /** Mutations only; see {@link TransactionalEnqueueOptions}. */
-    completeTransactionally?: FnType extends "mutation" ? boolean : never;
+    // Wrapped in a tuple so a union FnType is checked as a whole rather than
+    // distributed, which would admit action-capable calls.
+    completeTransactionally?: [FnType] extends ["mutation"] ? boolean : never;
   },
 ): Promise<WorkId> {
   const id = await ctx.runMutation(component.lib.enqueue, {
