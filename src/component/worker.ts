@@ -48,10 +48,6 @@ export const runMutationWrapper = internalMutation({
     const console = createLogger(args.logLevel);
 
     if (args.completeTransactionally) {
-      assert(
-        args.fnType === "mutation",
-        "Only mutations can complete transactionally",
-      );
       const work = await ctx.db.get("work", workId);
       if (!work || work.attempts !== attempt) return;
     }
@@ -66,14 +62,18 @@ export const runMutationWrapper = internalMutation({
 
     let returnValue;
     try {
+      const runOptions = args.completeTransactionally
+        ? { transactionLimits: await completionTransactionLimits(ctx) }
+        : undefined;
       returnValue = await (args.fnType === "query"
-        ? ctx.runQuery(args.fnHandle as FunctionHandle<"query">, fnArgs)
+        ? ctx.runQuery(args.fnHandle as FunctionHandle<"query">, fnArgs, {
+            ...runOptions,
+            useStaleSnapshot: true,
+          })
         : ctx.runMutation(
             args.fnHandle as FunctionHandle<"mutation">,
             fnArgs,
-            args.completeTransactionally
-              ? { transactionLimits: await completionTransactionLimits(ctx) }
-              : undefined,
+            runOptions,
           ));
       if (!args.completeTransactionally) {
         // Keep the default completion in a separate transaction.

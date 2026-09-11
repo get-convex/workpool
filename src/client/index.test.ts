@@ -279,6 +279,84 @@ describe("completion callbacks through the client and scheduler", () => {
     },
   );
 
+  test.each([false, true])(
+    "transactional success works through query enqueue (batch: %s)",
+    async (batch) => {
+      const args = [
+        { key: "atomic-success" },
+        { key: "atomic-failure", fail: true },
+      ];
+      const options = {
+        completeTransactionally: true,
+        onComplete: refs.complete,
+        context: { key: "atomic-callbacks" },
+      };
+      const ids = await t.mutation(async (ctx) =>
+        batch
+          ? pool.enqueueQueryBatch(ctx, refs.query, args, options)
+          : Promise.all(
+              args.map((args) =>
+                pool.enqueueQuery(ctx, refs.query, args, options),
+              ),
+            ),
+      );
+      await drain();
+      expect((await events("atomic-success")).map((e) => e.kind)).toEqual([]);
+      expect(await events("atomic-failure")).toEqual([]);
+      const results = await events("atomic-callbacks");
+      expect(results).toHaveLength(2);
+      expect(results.find((e) => e.workId === ids[0])?.result).toEqual({
+        kind: "success",
+        returnValue: "query result",
+      });
+      expect(results.find((e) => e.workId === ids[1])?.result).toEqual({
+        kind: "failed",
+        error: "work failed",
+      });
+      expect(await t.query((ctx) => pool.statusBatch(ctx, ids))).toEqual([
+        { state: "finished" },
+        { state: "finished" },
+      ]);
+    },
+  );
+
+  test.each([false, true])(
+    "transactional query enqueue rolls back completion when the callback fails (batch: %s)",
+    async (batch) => {
+      const args = [{ key: "rollback-first" }, { key: "rollback-second" }];
+      const options = {
+        completeTransactionally: true,
+        onComplete: refs.complete,
+        context: { key: "rollback-callback", throw: true },
+      };
+      try {
+        const ids = await t.mutation(async (ctx) =>
+          batch
+            ? pool.enqueueQueryBatch(ctx, refs.query, args, options)
+            : Promise.all(
+                args.map((args) =>
+                  pool.enqueueQuery(ctx, refs.query, args, options),
+                ),
+              ),
+        );
+        await vi.waitFor(() => expect(callback).toHaveBeenCalledTimes(2), {
+          timeout: 10_000,
+        });
+        await t.finishInProgressScheduledFunctions();
+        for (const { key } of args) expect(await events(key)).toEqual([]);
+        expect(await events("rollback-callback")).toEqual([]);
+        expect(
+          await t.query((ctx) => pool.statusBatch(ctx, ids)),
+        ).toMatchObject([{ state: "running" }, { state: "running" }]);
+      } finally {
+        // Inspect rollback before periodic recovery. worker.test.ts covers
+        // recovery with convex-test's missing scheduled-error text supplied.
+        await t.finishInProgressScheduledFunctions();
+        vi.clearAllTimers();
+      }
+    },
+  );
+
   test("canceling pending transactional work preserves the cancellation callback", async () => {
     const id = await t.mutation((ctx) =>
       pool.enqueueMutation(
@@ -968,7 +1046,7 @@ test("exclude filters only accept terminal result kinds", () => {
   }).toMatchTypeOf<EnqueueOptions>();
 });
 
-test("transactional completion is only exposed for mutations", () => {
+test("transactional completion is exposed for mutations and queries", () => {
   const options = {
     onComplete,
     onCompleteExcludeKinds: ["failed", "canceled"] as const,
@@ -978,18 +1056,11 @@ test("transactional completion is only exposed for mutations", () => {
   const mutation = makeFunctionReference<"mutation", { value: number }, number>(
     "work:mutation",
   );
-  const query = makeFunctionReference<"query", { value: number }, number>(
-    "work:query",
-  );
   expectTypeOf((pool: Workpool, ctx: MutationCtx) => {
     // @ts-expect-error Actions cannot opt into transactional completion.
     void pool.enqueueAction(ctx, action, { value: 1 }, options);
     // @ts-expect-error Batched actions cannot opt into transactional completion.
     void pool.enqueueActionBatch(ctx, action, [{ value: 1 }], options);
-    // @ts-expect-error Queries cannot opt into transactional completion.
-    void pool.enqueueQuery(ctx, query, { value: 1 }, options);
-    // @ts-expect-error Batched queries cannot opt into transactional completion.
-    void pool.enqueueQueryBatch(ctx, query, [{ value: 1 }], options);
     return pool.enqueueMutation(ctx, mutation, { value: 1 }, options);
   }).returns.toEqualTypeOf<Promise<WorkId>>();
   expectTypeOf((pool: Workpool, ctx: MutationCtx) =>
@@ -1014,16 +1085,19 @@ test("standalone enqueue gates transactional completion on fnType", () => {
     { value: number },
     number
   >("work:mixed");
+  const txFn = makeFunctionReference<
+    "mutation" | "query",
+    { value: number },
+    number
+  >("work:tx");
   const arg = { value: 1 };
   const batch = [arg];
   expectTypeOf((c: WorkpoolComponent, ctx: MutationCtx) => {
     // @ts-expect-error Actions cannot opt into transactional completion.
     void enqueue(c, ctx, "action", action, arg, options);
-    // @ts-expect-error Queries cannot opt into transactional completion.
-    void enqueue(c, ctx, "query", query, arg, options);
     // @ts-expect-error Batched actions cannot opt into transactional completion.
     void enqueueBatch(c, ctx, "action", action, batch, options);
-    // @ts-expect-error Batched queries cannot opt into transactional completion.
+    void enqueue(c, ctx, "query", query, arg, options);
     void enqueueBatch(c, ctx, "query", query, batch, options);
     // A union that includes a mutation must still be rejected as a whole: a
     // distributive conditional would collapse this to boolean and let it through.
@@ -1032,10 +1106,49 @@ test("standalone enqueue gates transactional completion on fnType", () => {
     void enqueue(c, ctx, mixed, mixedFn, arg, options);
     // @ts-expect-error A batched action-capable union cannot opt in.
     void enqueueBatch(c, ctx, mixed, mixedFn, batch, options);
+    // Every member of this union supports the option, so it is accepted.
+    const tx = "mutation" as "mutation" | "query";
+    void enqueue(c, ctx, tx, txFn, arg, options);
+    void enqueueBatch(c, ctx, tx, txFn, batch, options);
     return enqueue(c, ctx, "mutation", mutation, arg, options);
   }).returns.toEqualTypeOf<Promise<WorkId>>();
   expectTypeOf((c: WorkpoolComponent, ctx: MutationCtx) =>
     enqueueBatch(c, ctx, "mutation", mutation, batch, options),
+  ).returns.toEqualTypeOf<Promise<WorkId[]>>();
+});
+
+test("transactional query options retain result and context types", () => {
+  const query = makeFunctionReference<"query", { value: number }, number>(
+    "work:query",
+  );
+  const options = {
+    onComplete,
+    onCompleteExcludeKinds: ["failed", "canceled"] as const,
+    context: { label: "query" },
+    completeTransactionally: true,
+  } satisfies TransactionalEnqueueOptions<{ label: string }, number>;
+  expectTypeOf((pool: Workpool, ctx: MutationCtx) => {
+    void pool.enqueueQuery(
+      ctx,
+      query,
+      { value: 1 },
+      {
+        ...options,
+        // @ts-expect-error The callback requires a string label.
+        context: { label: 123 },
+      },
+    );
+    const stringQuery = makeFunctionReference<
+      "query",
+      { value: number },
+      string
+    >("work:stringQuery");
+    // @ts-expect-error The callback expects a numeric query result.
+    void pool.enqueueQuery(ctx, stringQuery, { value: 1 }, options);
+    return pool.enqueueQuery(ctx, query, { value: 1 }, options);
+  }).returns.toEqualTypeOf<Promise<WorkId>>();
+  expectTypeOf((pool: Workpool, ctx: MutationCtx) =>
+    pool.enqueueQueryBatch(ctx, query, [{ value: 1 }], options),
   ).returns.toEqualTypeOf<Promise<WorkId[]>>();
 });
 

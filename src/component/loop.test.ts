@@ -251,6 +251,41 @@ describe("loop", () => {
       expect(mutationRunning.scheduledId).not.toBe(actionRunning.scheduledId);
     });
 
+    it("runs transactional queries in individual mutation wrappers", async () => {
+      await initialize({ maxParallelism: 5 });
+      const actionId = await enqueueWork({ fnType: "action" });
+      const queryId = await enqueueWork({
+        fnType: "query",
+        completeTransactionally: false,
+      });
+      const transactionalIds = [
+        await enqueueWork({ fnType: "query", completeTransactionally: true }),
+        await enqueueWork({ fnType: "query", completeTransactionally: true }),
+      ];
+      await runLoop();
+      const { running } = await observe();
+      const action = running.find((r) => r.workId === actionId)!;
+      expect(running.find((r) => r.workId === queryId)?.scheduledId).toBe(
+        action.scheduledId,
+      );
+      const scheduled = await t.run(async (ctx) =>
+        Promise.all(
+          transactionalIds.map(async (id) => {
+            const { scheduledId } = running.find((r) => r.workId === id)!;
+            expect(scheduledId).not.toBe(action.scheduledId);
+            return ctx.db.system.get("_scheduled_functions", scheduledId);
+          }),
+        ),
+      );
+      expect(new Set(scheduled.map((s) => s?._id)).size).toBe(2);
+      for (const job of scheduled) {
+        expect(job).toMatchObject({
+          name: "worker:runMutationWrapper",
+          args: [{ fnType: "query", completeTransactionally: true }],
+        });
+      }
+    });
+
     it("chunks action and query starts into batches of 32", async () => {
       await initialize({ maxParallelism: 64 });
       for (let i = 0; i < 33; i++) {

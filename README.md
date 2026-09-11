@@ -131,10 +131,11 @@ export const emailSent = internalMutation({
 ```
 
 By default, the `onComplete` handler runs in a different transaction than the
-enqueued job. For mutations, `completeTransactionally: true` makes successful
-work and its selected callback commit together, as described below. You can also
-do that work at the end of the enqueued function, before returning, which avoids
-another function call and preserves the result's type directly.
+enqueued job. For mutations and queries, `completeTransactionally: true` makes
+successful work and its selected callback complete in one transaction, as
+described below. For mutations, you can also do callback work at the end of the
+enqueued function, before returning, which avoids another function call and
+preserves the result's type directly.
 
 You can also use this equivalent helper to define an `onComplete` mutation. Note
 the `DataModel` type parameter, if you want ctx.db to be type safe.
@@ -170,11 +171,12 @@ with `cancel` can still report `"success"` or a terminal `"failed"`. Direct
 scheduler cancelation (for example, from the dashboard) is treated as a failure
 and can trigger retries instead.
 
-### Transactional success for mutations
+### Transactional success for mutations and queries
 
 Use `completeTransactionally: true` with `enqueueMutation` or
 `enqueueMutationBatch` to commit each mutation, its selected success callback,
-and workpool completion bookkeeping together:
+and workpool completion bookkeeping together. `enqueueQuery` and
+`enqueueQueryBatch` support the same option:
 
 ```ts
 await pool.enqueueMutation(ctx, internal.tasks.process, args, {
@@ -184,20 +186,39 @@ await pool.enqueueMutation(ctx, internal.tasks.process, args, {
 });
 ```
 
-The callback can read the mutation's writes. If the success callback or
-completion bookkeeping throws, the scheduled mutation fails and all those writes
-roll back. Workpool's periodic recovery then marks the work as failed and
-invokes the callback for `"failed"`, unless excluded. Until recovery runs, the
-job remains running and occupies a concurrency slot. There is no separate
-fallback execution of the success callback.
+Queries always read an independent snapshot. With this option, the success
+callback and completion bookkeeping commit together, but the query's reads do
+not create dependencies that cause that transaction to retry on concurrent
+writes. The query result may be stale when the callback commits; read any data
+that must still be current within the callback. Without this option, queries run
+through the action batch worker.
+
+Each opted-in query is scheduled in its own mutation wrapper, including queries
+enqueued in a batch. For example:
+
+```ts
+await pool.enqueueQuery(ctx, internal.tasks.findPending, args, {
+  onComplete: internal.tasks.handlePending,
+  onCompleteExcludeKinds: ["canceled"],
+  completeTransactionally: true,
+});
+```
+
+For mutations, the callback can read the mutation's writes. For either function
+type, if the success callback or completion bookkeeping throws, the scheduled
+wrapper fails and all its writes roll back. Workpool's periodic recovery then
+marks the work as failed and invokes the callback for `"failed"`, unless
+excluded. Until recovery runs, the job remains running and occupies a
+concurrency slot. There is no separate fallback execution of the success
+callback.
 
 Ordinary work errors still use the existing failure-completion path. Failure and
 cancellation callbacks keep their usual transaction behavior. Excluding every
-kind, or omitting the callback, still allows transactional bookkeeping, avoiding
-the separately scheduled completion mutation. Jobs in a batch remain independent
-transactions. Actions and queries do not support this option.
+kind, or omitting the callback, still allows transactional bookkeeping, without
+a separate completion invocation. Jobs in a batch remain independent
+transactions. Actions do not support this option.
 
-This option requires Convex 1.41 or newer. The work and callback share one
+This option requires Convex 1.42 or newer. The work and callback share one
 transaction budget. Workpool uses nested transaction limits to reserve space for
 completion bookkeeping; work that fits by itself may exceed the combined budget.
 Limit overruns or execution failures can still fail the transaction, in which
@@ -340,9 +361,9 @@ See example usage in [example.ts](./example/convex/example.ts).
 
 Check out the [docstrings](./src/client/index.ts), but notable options include:
 
-- `maxParallelism`: How many actions/mutations can run at once within this pool.
-  Avoid exceeding 100 on Pro, 20 on the free plan, across all workpools and
-  workflows.
+- `maxParallelism`: How many actions, mutations, and queries can run at once
+  within this pool. Avoid exceeding 100 on Pro, 20 on the free plan, across all
+  workpools and workflows.
 - `retryActionsByDefault`: Whether to retry actions that fail by default.
 - `defaultRetryBehavior`: The default retry behavior for enqueued actions.
 
@@ -369,8 +390,9 @@ options include:
 - `onCompleteExcludeKinds`: Optional list of result kinds to skip: `"success"`,
   `"failed"`, and `"canceled"`. Defaults to excluding none, so every outcome
   invokes the callback.
-- `completeTransactionally`: Mutation-only option to commit successful work, its
-  selected callback, and completion bookkeeping together. Defaults to false.
+- `completeTransactionally`: Mutation and query option to complete successful
+  work, its selected callback, and completion bookkeeping together. Defaults to
+  false.
 - `context`: Any data you want to pass to the `onComplete` mutation.
 - `runAt` and `runAfter`: Similar to `ctx.scheduler.run*`, allows you to
   schedule the work to run later. By default it's immediate.

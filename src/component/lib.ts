@@ -46,8 +46,10 @@ const itemArgs = {
 };
 
 function validateCompletionMode(item: ObjectType<typeof itemArgs>) {
-  if (item.completeTransactionally && item.fnType !== "mutation") {
-    throw new Error("completeTransactionally is only supported for mutations.");
+  if (item.completeTransactionally && item.fnType === "action") {
+    throw new Error(
+      "completeTransactionally is only supported for mutations and queries.",
+    );
   }
 }
 const enqueueArgs = {
