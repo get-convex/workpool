@@ -635,6 +635,7 @@ async function beginWorkBatch(
         logLevel,
         attempt: work.attempts,
         fnType: "mutation",
+        completeTransactionally: work.completeTransactionally,
       },
     );
     recordStarted(console, work, lagMs, scheduledId);
