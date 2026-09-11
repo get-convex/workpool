@@ -167,9 +167,11 @@ the same arguments and transaction behavior as an unfiltered `onComplete`.
 Filtering applies to the final result. Failed attempts that will be retried do
 not invoke the callback. A terminal failure, including a `NonRetryableError`,
 invokes it only if `"failed"` is selected. Cancellation through the workpool
-prevents starting or retrying work and yields `"canceled"`. Direct scheduler
-cancellation (for example, from the dashboard) is treated as a failure and can
-trigger retries instead.
+yields `"canceled"` when it lands before the work starts or before a retry is
+scheduled; an attempt already in progress runs to its own outcome, so a race
+with `cancel` can still report `"success"` or a terminal `"failed"`. Direct
+scheduler cancellation (for example, from the dashboard) is treated as a failure
+and can trigger retries instead.
 
 ### Idempotency
 
