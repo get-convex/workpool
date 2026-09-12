@@ -63,6 +63,17 @@ export const enqueue = mutation({
 export async function enqueueHandler(
   ctx: MutationCtx,
   console: Logger,
+  item: ObjectType<typeof itemArgs>,
+) {
+  const created = await createWork(ctx, console, item);
+  await insertPendingStarts(ctx, [created]);
+  return created.workId;
+}
+
+/** Create the work document (and any payload), but not its queue entry. */
+async function createWork(
+  ctx: MutationCtx,
+  console: Logger,
   { runAt, ...workArgs }: ObjectType<typeof itemArgs>,
 ) {
   runAt = boundScheduledTime(runAt, console);
@@ -114,23 +125,94 @@ export async function enqueueHandler(
 
   // Store the work item
   const workId = await ctx.db.insert("work", workItem);
-  const now = Date.now();
-  const scheduled = runAt > now;
-  // Scheduled keys stay at or above the snapshot, which bounds the cursor.
-  const segment = scheduled
-    ? maxBigint(toTimestamp(runAt), snapshotTs())
-    : ctx.db.vars.commitTs;
-  const pendingStartId = await ctx.db.insert("pendingStart", {
-    workId,
-    segment,
-    // Only near-term starts can commit behind the cursor.
-    ...(scheduled && (segment as bigint) <= toTimestamp(now + 5 * MINUTE)
-      ? { scanTs: ctx.db.vars.commitTs }
-      : {}),
-  });
-  await ctx.db.patch("work", workId, { pendingStartId });
   recordEnqueued(console, { workId, fnName: workArgs.fnName, runAt });
-  return workId;
+  return { workId, runAt };
+}
+
+// Bound document size while packing batch enqueues.
+const MAX_PACKED = 256;
+
+/**
+ * Pack work sharing an ordering key. Immediate work uses the commit timestamp;
+ * scheduled work uses the later of its start time and the snapshot timestamp.
+ * Near-term starts also carry scanTs so the sweep can find enqueues that commit
+ * behind the cursor.
+ */
+async function insertPendingStarts(
+  ctx: MutationCtx,
+  entries: { workId: Id<"work">; runAt: number }[],
+) {
+  const now = Date.now();
+  const floor = snapshotTs();
+  const groups = new Map<bigint | "now", Id<"work">[]>();
+  for (const { workId, runAt } of entries) {
+    const key = runAt > now ? maxBigint(toTimestamp(runAt), floor) : "now";
+    const group = groups.get(key);
+    if (group) group.push(workId);
+    else groups.set(key, [workId]);
+  }
+  // Beyond this, a start time provably can't commit behind the loop's cursor
+  // (no commit takes five minutes), so the sweep needn't watch it.
+  const scanCutoff = toTimestamp(now + 5 * MINUTE);
+  await Promise.all(
+    [...groups].map(async ([key, workIds]) => {
+      // Append to this transaction's existing document for the key, if any.
+      const existing =
+        key === "now"
+          ? await ctx.db
+              .query("pendingStart")
+              .withIndex("segment", (q) =>
+                q.eq("segment", ctx.db.vars.commitTs),
+              )
+              .order("desc")
+              .first()
+          : await ctx.db
+              .query("pendingStart")
+              .withIndex("scanTs", (q) =>
+                q.eq("scanTs", ctx.db.vars.commitTs).eq("segment", key),
+              )
+              .order("desc")
+              .first();
+      const writes: Promise<unknown>[] = [];
+      let remaining = workIds;
+      if (existing) {
+        const members = existing.workIds ?? [];
+        const filling = remaining.slice(0, MAX_PACKED - members.length);
+        if (filling.length > 0) {
+          writes.push(
+            ctx.db.patch("pendingStart", existing._id, {
+              workIds: [...members, ...filling],
+            }),
+            ...filling.map((workId) =>
+              ctx.db.patch("work", workId, { pendingStartId: existing._id }),
+            ),
+          );
+          remaining = remaining.slice(filling.length);
+        }
+      }
+      for (let i = 0; i < remaining.length; i += MAX_PACKED) {
+        const chunk = remaining.slice(i, i + MAX_PACKED);
+        writes.push(
+          ctx.db
+            .insert("pendingStart", {
+              workIds: chunk,
+              segment: key === "now" ? ctx.db.vars.commitTs : key,
+              ...(key !== "now" && key <= scanCutoff
+                ? { scanTs: ctx.db.vars.commitTs }
+                : {}),
+            })
+            .then((pendingStartId) =>
+              Promise.all(
+                chunk.map((workId) =>
+                  ctx.db.patch("work", workId, { pendingStartId }),
+                ),
+              ),
+            ),
+        );
+      }
+      await Promise.all(writes);
+    }),
+  );
 }
 
 export const enqueueBatch = mutation({
@@ -143,7 +225,11 @@ export const enqueueBatch = mutation({
     const globals = await getOrUpdateGlobals(ctx, config);
     const console = createLogger(globals.logLevel);
     await kickMainLoop(ctx, "enqueue");
-    return Promise.all(items.map((item) => enqueueHandler(ctx, console, item)));
+    const created = await Promise.all(
+      items.map((item) => createWork(ctx, console, item)),
+    );
+    await insertPendingStarts(ctx, created);
+    return created.map((c) => c.workId);
   },
 });
 
