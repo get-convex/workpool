@@ -43,3 +43,5 @@ jobs:
           npm run typecheck
           npm run lint
           npm run format:check
+      - name: Test benchmark tooling
+        run: python3 -B -m unittest discover -s example/benchmarks/2026-09-09
