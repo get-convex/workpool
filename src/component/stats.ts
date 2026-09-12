@@ -8,8 +8,8 @@ import {
 import {
   type Config,
   DEFAULT_MAX_PARALLELISM,
-  getCurrentSegment,
   WORKER_NAME,
+  toTimestamp,
 } from "./shared.js";
 import { createLogger, type Logger, logLevel, shouldLog } from "./logging.js";
 import { components, internal } from "./_generated/api.js";
@@ -77,7 +77,7 @@ export async function generateReport(
     // Don't waste time if we're not going to log.
     return;
   }
-  const currentSegment = getCurrentSegment();
+  const currentSegment = toTimestamp(Date.now());
   const pendingStart = await paginator(ctx.db, schema)
     .query("pendingStart")
     .withIndex("segment", (q) =>
@@ -107,24 +107,27 @@ export async function generateReport(
   }
 }
 
+/** Count large backlogs outside the main loop. */
 export const calculateBacklogAndReport = internalMutation({
   args: {
-    startSegment: v.int64(),
-    endSegment: v.int64(),
+    // @deprecated Unused; accepted so in-flight calls from older versions
+    // still validate.
+    startSegment: v.optional(v.int64()),
+    endSegment: v.optional(v.int64()),
     cursor: v.string(),
     report: schema.tables.internalState.validator.fields.report,
     running: v.number(),
     logLevel,
   },
+  returns: v.null(),
   handler: async (ctx, args) => {
-    const pendingStart = await (ctx.db.query("pendingStart") as any).count();
-
     const console = createLogger(args.logLevel);
     recordReport(console, {
       ...args.report,
       running: args.running,
-      backlog: pendingStart,
+      backlog: await (ctx.db.query("pendingStart") as any).count(),
     });
+    return null;
   },
 });
 
@@ -159,7 +162,10 @@ export const running = internalQuery({
     }),
   ),
   handler: async (ctx) => {
-    const internalState = await ctx.db.query("internalState").unique();
+    const internalState = await ctx.db
+      .query("internalState")
+      .order("desc")
+      .first();
     if (!internalState) return [];
     return Promise.all(
       internalState.running.map(async ({ workId, scheduledId, started }) => {
@@ -185,7 +191,10 @@ export const diagnostics = internalQuery({
   returns: v.any(),
   handler: async (ctx) => {
     const global = await ctx.db.query("globals").unique();
-    const internalState = await ctx.db.query("internalState").unique();
+    const internalState = await ctx.db
+      .query("internalState")
+      .order("desc")
+      .first();
     const inProgressWork = internalState?.running.length ?? 0;
     const maxParallelism = global?.maxParallelism ?? DEFAULT_MAX_PARALLELISM;
     const pendingStart = await (ctx.db.query("pendingStart") as any).count();
