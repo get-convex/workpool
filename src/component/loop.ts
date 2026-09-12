@@ -26,8 +26,8 @@ import {
   SECOND,
   type RunResult,
   toSegment,
-  vResult,
 } from "./shared.js";
+import { vResultInternal } from "./schema.js";
 import { generateReport, recordCompleted, recordStarted } from "./stats.js";
 
 const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
@@ -67,6 +67,7 @@ export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
     failed: 0,
     retries: 0,
     canceled: 0,
+    conflicted: 0,
     lastReportTs: 0,
   },
   running: [],
@@ -84,7 +85,7 @@ export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
 const vCompletion = v.object({
   _id: v.id("pendingCompletion"),
   workId: v.id("work"),
-  runResult: vResult,
+  runResult: vResultInternal,
   retry: v.boolean(),
   segment: v.int64(),
 });
@@ -296,6 +297,7 @@ export const run = internalMutation({
         failed: 0,
         retries: 0,
         canceled: 0,
+        conflicted: 0,
         lastReportTs,
       };
     }
@@ -403,10 +405,21 @@ async function handleCompletions(
           console.warn(`[main] ${c.workId} is gone, but trying to complete`);
           return;
         }
-        const retried = await rescheduleJob(ctx, work, console);
+        const wasStuckInScheduler = c.runResult.kind === "stuckInScheduler";
+        const retried = await rescheduleJob(
+          ctx,
+          work,
+          console,
+          wasStuckInScheduler,
+        );
         if (retried) {
-          state.report.retries++;
-          recordCompleted(console, work, "retrying", undefined);
+          if (wasStuckInScheduler) {
+            state.report.conflicted = (state.report.conflicted ?? 0) + 1;
+            recordCompleted(console, work, "retrying conflicted", undefined);
+          } else {
+            state.report.retries++;
+            recordCompleted(console, work, "retrying", undefined);
+          }
         } else {
           // We don't retry if it's been canceled in the mean time.
           state.report.canceled++;
@@ -528,9 +541,16 @@ async function handleRecovery(
     )
   ).flatMap((r) => (r ? [r] : []));
   state.running = state.running.filter((r) => !missing.has(r.workId));
+  // Pass scheduledAt so the recovery handler can measure scheduler lag
+  // (`Date.now() - scheduledAt` when it actually runs) and judge stuck
+  // mutations relative to current backlog.
+  const scheduledAt = Date.now();
   for (let i = 0; i < jobs.length; i += RECOVERY_BATCH_SIZE) {
     const batch = jobs.slice(i, i + RECOVERY_BATCH_SIZE);
-    await ctx.scheduler.runAfter(0, internal.recovery.recover, { jobs: batch });
+    await ctx.scheduler.runAfter(0, internal.recovery.recover, {
+      jobs: batch,
+      scheduledAt,
+    });
   }
 }
 
@@ -666,6 +686,7 @@ async function rescheduleJob(
   ctx: MutationCtx,
   work: Doc<"work">,
   console: Logger,
+  wasStuckInScheduler: boolean,
 ): Promise<boolean> {
   const pendingCancelation = await ctx.db
     .query("pendingCancelation")
@@ -679,7 +700,16 @@ async function rescheduleJob(
   if (work.canceled) {
     return false;
   }
-  if (!work.retryBehavior) {
+  // stuckInScheduler retries immediately and doesn't need retryBehavior —
+  // the function never ran, so user-configured backoff doesn't apply.
+  let backoffMs: number;
+  if (wasStuckInScheduler) {
+    backoffMs = 0;
+  } else if (work.retryBehavior) {
+    backoffMs =
+      work.retryBehavior.initialBackoffMs *
+      Math.pow(work.retryBehavior.base, work.attempts - 1);
+  } else {
     console.warn(`[main] ${work._id} has no retryBehavior so not retrying`);
     return false;
   }
@@ -692,10 +722,7 @@ async function rescheduleJob(
     console.error(`[main] ${work._id} already in pendingStart so not retrying`);
     return false;
   }
-  const backoffMs =
-    work.retryBehavior.initialBackoffMs *
-    Math.pow(work.retryBehavior.base, work.attempts - 1);
-  const nextAttempt = withJitter(backoffMs);
+  const nextAttempt = wasStuckInScheduler ? 0 : withJitter(backoffMs);
   const startTime = Date.now() + nextAttempt;
   const segment = toSegment(startTime);
   await ctx.db.insert("pendingStart", {
