@@ -12,7 +12,6 @@ import type * as complete from "../complete.js";
 import type * as config from "../config.js";
 import type * as danger from "../danger.js";
 import type * as errors from "../errors.js";
-import type * as future from "../future.js";
 import type * as kick from "../kick.js";
 import type * as lib from "../lib.js";
 import type * as logging from "../logging.js";
@@ -34,7 +33,6 @@ const fullApi: ApiFromModules<{
   config: typeof config;
   danger: typeof danger;
   errors: typeof errors;
-  future: typeof future;
   kick: typeof kick;
   lib: typeof lib;
   logging: typeof logging;
