@@ -115,19 +115,24 @@ export async function enqueueHandler(
   // Store the work item
   const workId = await ctx.db.insert("work", workItem);
   const now = Date.now();
-  const scheduled = runAt > now;
-  // Scheduled keys stay at or above the snapshot, which bounds the cursor.
-  const segment = scheduled
-    ? maxBigint(toTimestamp(runAt), snapshotTs())
-    : ctx.db.vars.commitTs;
-  const pendingStartId = await ctx.db.insert("pendingStart", {
-    workId,
-    segment,
-    // Only near-term starts can commit behind the cursor.
-    ...(scheduled && (segment as bigint) <= toTimestamp(now + 5 * MINUTE)
-      ? { scanTs: ctx.db.vars.commitTs }
-      : {}),
-  });
+  let pendingStartId: Id<"pendingStart">;
+  if (runAt > now) {
+    // Scheduled keys stay at or above the snapshot, which bounds the cursor.
+    const segment = maxBigint(toTimestamp(runAt), snapshotTs());
+    pendingStartId = await ctx.db.insert("pendingStart", {
+      workId,
+      segment,
+      // Only near-term starts can commit behind the cursor.
+      ...(segment <= toTimestamp(now + 5 * MINUTE)
+        ? { scanTs: ctx.db.vars.commitTs }
+        : {}),
+    });
+  } else {
+    pendingStartId = await ctx.db.insert("pendingStart", {
+      workId,
+      segment: ctx.db.vars.commitTs,
+    });
+  }
   await ctx.db.patch("work", workId, { pendingStartId });
   recordEnqueued(console, { workId, fnName: workArgs.fnName, runAt });
   return workId;
