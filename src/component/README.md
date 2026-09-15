@@ -45,8 +45,8 @@ pings are no-ops rather than racing an idle transition.
 
 ## Storage and reads
 
-- Store one queue document per work item and delete it when the work starts or
-  cancels.
+- Pack work sharing an ordering key into queue documents; remove members as they
+  start or cancel, and delete empty documents.
 - Read queues through bounded index ranges and point-read work documents.
 - Keep the incoming cursor at or below the transaction snapshot so later commits
   remain reachable. Convert legacy buckets before resetting the cursors.

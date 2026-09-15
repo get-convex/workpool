@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Orders queues by commit timestamp. Requires Convex 1.43 or later.
+- Improves queue throughput by ordering work by commit timestamp and packing
+  batch enqueues into fewer documents. Requires Convex 1.43 or later.
 - Recovers near-term scheduled work that commits behind the queue cursor.
 - Migrates queued work from older versions automatically, preserving scheduled
   start times. Large queues may briefly delay new work during migration.
