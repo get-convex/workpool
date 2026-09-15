@@ -386,9 +386,7 @@ async function queryPending(
   ]);
 
   // Rescue scheduled entries that committed behind the incoming cursor.
-  // Revisit only that subset at the boundary scanTs, then inspect later stamps.
-  // The compound index sorts behind-cursor entries first within each stamp,
-  // so stopping midway is safe and future entries need not be rescanned.
+  // The scanTs index orders enqueues by commit time, then by segment.
   const sweepStarts: Start[] = [];
   let sweepStop: bigint | undefined;
   {
@@ -402,8 +400,8 @@ async function queryPending(
       return ++docs >= SWEEP_DOC_BATCH ? "stop" : "more";
     };
 
-    // (1) Out-of-order entries left at the boundary stamp. Nothing at or above
-    // the cursor is read, so a bulk enqueue sharing this stamp costs nothing.
+    // At sweepCursor, revisit only entries behind incomingCursor.
+    // The index skips entries the normal segment scan can still reach.
     let boundaryDone = true;
     for await (const doc of ctx.db
       .query("pendingStart")
@@ -416,16 +414,15 @@ async function queryPending(
       }
     }
 
-    // (2) Later stamps. Reaching one is what lets the cursor move off the
-    // boundary; until then it stays put and (1) repeats, which is cheap.
+    // Advance through newer scanTs values. The next iteration resumes at
+    // sweepStop using the restricted query above.
     if (boundaryDone) {
       for await (const doc of ctx.db
         .query("pendingStart")
         .withIndex("scanTs", (q) => q.gt("scanTs", sweepCursor))) {
         const scanTs = doc.scanTs as bigint;
         const behind = (doc.segment as bigint) < incomingCursor;
-        // Not behind: the segment scan owns it. Pass over it so the cursor can
-        // advance, without reading its entries.
+        // The normal segment scan handles entries at or above incomingCursor.
         if (behind && take(doc) === "stop") break;
         sweepStop = scanTs;
         if (!behind && ++docs >= SWEEP_DOC_BATCH) break;
@@ -787,9 +784,8 @@ async function rescheduleJob(
     work.retryBehavior.initialBackoffMs *
     Math.pow(work.retryBehavior.base, work.attempts - 1);
   const nextAttempt = withJitter(backoffMs);
-  // Raised to at least the snapshot, which the cursor may reach this run, so
-  // the retry can't land behind it; a backoff shorter than the clocks' skew
-  // just starts next iteration.
+  // Keep retries at or above the snapshot so they cannot land behind the cursor.
+  // TODO: Remove the snapshot floor once convex-test guarantees snapshotTs <= Date.now().
   const segment = maxBigint(
     toTimestamp(Date.now() + nextAttempt),
     snapshotTs(),
