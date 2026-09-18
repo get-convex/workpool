@@ -61,6 +61,7 @@ export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
     failed: 0,
     retries: 0,
     canceled: 0,
+    conflicted: 0,
     lastReportTs: 0,
   },
   running: [],
@@ -304,6 +305,7 @@ export const run = internalMutation({
         failed: 0,
         retries: 0,
         canceled: 0,
+        conflicted: 0,
         lastReportTs,
       };
     }
@@ -488,8 +490,14 @@ async function handleCompletions(
           return;
         }
         if (await rescheduleJob(ctx, work, console)) {
-          state.report.retries++;
-          recordCompleted(console, work, "retrying", undefined);
+          // Mutations only retry when recovery replaces a stuck scheduler run.
+          if (work.fnType === "mutation") {
+            state.report.conflicted = (state.report.conflicted ?? 0) + 1;
+            recordCompleted(console, work, "retrying conflicted", undefined);
+          } else {
+            state.report.retries++;
+            recordCompleted(console, work, "retrying", undefined);
+          }
         } else {
           // We don't retry if it's been canceled in the mean time.
           state.report.canceled++;
@@ -603,9 +611,16 @@ async function handleRecovery(
     )
   ).flatMap((r) => (r ? [r] : []));
   state.running = state.running.filter((r) => !missing.has(r.workId));
+  // Pass scheduledAt so the recovery handler can measure scheduler lag
+  // (`Date.now() - scheduledAt` when it actually runs) and judge stuck
+  // mutations relative to current backlog.
+  const scheduledAt = Date.now();
   for (let i = 0; i < jobs.length; i += RECOVERY_BATCH_SIZE) {
     const batch = jobs.slice(i, i + RECOVERY_BATCH_SIZE);
-    await ctx.scheduler.runAfter(0, internal.recovery.recover, { jobs: batch });
+    await ctx.scheduler.runAfter(0, internal.recovery.recover, {
+      jobs: batch,
+      scheduledAt,
+    });
   }
 }
 
@@ -771,25 +786,27 @@ async function rescheduleJob(
   if (work.canceled) {
     return false;
   }
-  if (!work.retryBehavior) {
-    console.warn(`[main] ${work._id} has no retryBehavior so not retrying`);
-    return false;
-  }
   if (await findPendingStart(ctx, work)) {
     // Not sure why this would ever happen, but ensure uniqueness explicitly.
     console.error(`[main] ${work._id} already in pendingStart so not retrying`);
     return false;
   }
-  const backoffMs =
-    work.retryBehavior.initialBackoffMs *
-    Math.pow(work.retryBehavior.base, work.attempts - 1);
-  const nextAttempt = withJitter(backoffMs);
-  // Keep retries at or above the snapshot so they cannot land behind the cursor.
-  // TODO: Remove the snapshot floor once convex-test guarantees snapshotTs <= Date.now().
-  const segment = maxBigint(
-    toTimestamp(Date.now() + nextAttempt),
-    snapshotTs(),
-  );
+  // Recovery retries mutations immediately. The commit stamp keeps the new
+  // start ahead of the incoming cursor, without wall-clock ordering or a sweep.
+  let segment: bigint | typeof ctx.db.vars.commitTs = ctx.db.vars.commitTs;
+  if (work.fnType !== "mutation") {
+    if (!work.retryBehavior) {
+      console.warn(`[main] ${work._id} has no retryBehavior so not retrying`);
+      return false;
+    }
+    const backoffMs =
+      work.retryBehavior.initialBackoffMs *
+      Math.pow(work.retryBehavior.base, work.attempts - 1);
+    const nextAttempt = withJitter(backoffMs);
+    // Keep retries at or above the snapshot so they cannot land behind the cursor.
+    // TODO: Remove the snapshot floor once convex-test guarantees snapshotTs <= Date.now().
+    segment = maxBigint(toTimestamp(Date.now() + nextAttempt), snapshotTs());
+  }
   const pendingStartId = await ctx.db.insert("pendingStart", {
     workId: work._id,
     segment,
