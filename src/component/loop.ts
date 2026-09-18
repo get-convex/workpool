@@ -28,8 +28,8 @@ import {
   SECOND,
   snapshotTs,
   toTimestamp,
+  vResult,
 } from "./shared.js";
-import { vResultInternal } from "./schema.js";
 import { generateReport, recordCompleted, recordStarted } from "./stats.js";
 import { findPendingStart } from "./pendingStart.js";
 
@@ -72,7 +72,7 @@ export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
 const vCompletion = v.object({
   pendingId: v.id("pendingCompletion"),
   workId: v.id("work"),
-  runResult: vResultInternal,
+  runResult: vResult,
   retry: v.boolean(),
   segment: v.int64(),
 });
@@ -489,15 +489,9 @@ async function handleCompletions(
           console.warn(`[main] ${c.workId} is gone, but trying to complete`);
           return;
         }
-        const wasStuckInScheduler = c.runResult.kind === "stuckInScheduler";
-        const retried = await rescheduleJob(
-          ctx,
-          work,
-          console,
-          wasStuckInScheduler,
-        );
-        if (retried) {
-          if (wasStuckInScheduler) {
+        if (await rescheduleJob(ctx, work, console)) {
+          // Mutations only retry when recovery replaces a stuck scheduler run.
+          if (work.fnType === "mutation") {
             state.report.conflicted = (state.report.conflicted ?? 0) + 1;
             recordCompleted(console, work, "retrying conflicted", undefined);
           } else {
@@ -779,7 +773,6 @@ async function rescheduleJob(
   ctx: MutationCtx,
   work: Doc<"work">,
   console: Logger,
-  wasStuckInScheduler: boolean,
 ): Promise<boolean> {
   const pendingCancelation = await ctx.db
     .query("pendingCancelation")
@@ -793,31 +786,27 @@ async function rescheduleJob(
   if (work.canceled) {
     return false;
   }
-  // stuckInScheduler retries immediately and doesn't need retryBehavior —
-  // the function never ran, so user-configured backoff doesn't apply.
-  let backoffMs: number;
-  if (wasStuckInScheduler) {
-    backoffMs = 0;
-  } else if (work.retryBehavior) {
-    backoffMs =
-      work.retryBehavior.initialBackoffMs *
-      Math.pow(work.retryBehavior.base, work.attempts - 1);
-  } else {
-    console.warn(`[main] ${work._id} has no retryBehavior so not retrying`);
-    return false;
-  }
   if (await findPendingStart(ctx, work)) {
     // Not sure why this would ever happen, but ensure uniqueness explicitly.
     console.error(`[main] ${work._id} already in pendingStart so not retrying`);
     return false;
   }
-  const nextAttempt = wasStuckInScheduler ? 0 : withJitter(backoffMs);
-  // Keep retries at or above the snapshot so they cannot land behind the cursor.
-  // TODO: Remove the snapshot floor once convex-test guarantees snapshotTs <= Date.now().
-  const segment = maxBigint(
-    toTimestamp(Date.now() + nextAttempt),
-    snapshotTs(),
-  );
+  // Recovery retries mutations immediately. The commit stamp keeps the new
+  // start ahead of the incoming cursor, without wall-clock ordering or a sweep.
+  let segment: bigint | typeof ctx.db.vars.commitTs = ctx.db.vars.commitTs;
+  if (work.fnType !== "mutation") {
+    if (!work.retryBehavior) {
+      console.warn(`[main] ${work._id} has no retryBehavior so not retrying`);
+      return false;
+    }
+    const backoffMs =
+      work.retryBehavior.initialBackoffMs *
+      Math.pow(work.retryBehavior.base, work.attempts - 1);
+    const nextAttempt = withJitter(backoffMs);
+    // Keep retries at or above the snapshot so they cannot land behind the cursor.
+    // TODO: Remove the snapshot floor once convex-test guarantees snapshotTs <= Date.now().
+    segment = maxBigint(toTimestamp(Date.now() + nextAttempt), snapshotTs());
+  }
   const pendingStartId = await ctx.db.insert("pendingStart", {
     workId: work._id,
     segment,

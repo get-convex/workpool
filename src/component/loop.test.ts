@@ -1220,6 +1220,123 @@ describe("loop", () => {
   // ────────────────────────────────────────────────────────────────────
 
   describe("recovery", () => {
+    it("requeues a stuck mutation in commit order and frees its slot for queued work", async () => {
+      await initialize({ maxParallelism: 1 });
+      const workId = await enqueueWork({ fnType: "mutation" });
+      await runLoop();
+      const original = (await observe()).running[0];
+      const nextWorkId = await enqueueWork({ fnType: "mutation" });
+
+      vi.setSystemTime(Date.now() + 11 * MINUTE);
+      const recovery = {
+        jobs: [{ ...original, attempt: 0 }],
+        scheduledAt: Date.now(),
+      };
+      await t.mutation(internal.recovery.recover, recovery);
+      // Concurrently scheduled recovery calls must not create extra retries.
+      await t.mutation(internal.recovery.recover, recovery);
+      expect((await observe()).pendingCompletion).toHaveLength(1);
+      expect(await statusOf(workId)).toEqual({
+        state: "pending",
+        previousAttempts: 1,
+      });
+      expect(
+        await t.run(
+          async (ctx) =>
+            (
+              await ctx.db.system.get(
+                "_scheduled_functions",
+                original.scheduledId,
+              )
+            )?.state.kind,
+        ),
+      ).toBe("canceled");
+
+      await runLoop();
+      let o = await observe();
+      expect(o.running.map((r) => r.workId)).toEqual([nextWorkId]);
+      expect(o.pendingCompletion).toHaveLength(0);
+      expect(o.pendingStart).toHaveLength(1);
+      const retry = o.pendingStart[0];
+      expect(retry.workId).toBe(workId);
+      expect(retry.segment).toBeGreaterThan(o.segmentCursors!.incoming);
+      expect(retry.scanTs).toBeUndefined();
+      expect(await t.run((ctx) => ctx.db.get("work", workId))).toMatchObject({
+        pendingStartId: retry._id,
+        attempts: 1,
+      });
+
+      // Old completions and recovery calls stay stale after the retry signal
+      // has been consumed, and cannot remove or requeue this work again.
+      await simulateCompletion(
+        workId,
+        { kind: "success", returnValue: null },
+        0,
+      );
+      await t.mutation(internal.recovery.recover, recovery);
+      expect((await observe()).pendingCompletion).toHaveLength(0);
+      expect((await observe()).pendingStart).toHaveLength(1);
+
+      await simulateCompletion(nextWorkId, {
+        kind: "success",
+        returnValue: null,
+      });
+      await runLoop();
+      o = await observe();
+      expect(o.running.map((r) => r.workId)).toEqual([workId]);
+      expect(o.running[0].scheduledId).not.toBe(original.scheduledId);
+      expect(o.pendingStart).toHaveLength(0);
+      const scheduled = await t.run((ctx) =>
+        ctx.db.system.get("_scheduled_functions", o.running[0].scheduledId),
+      );
+      expect(scheduled?.args[0]).toMatchObject({
+        attempt: 1,
+        fnType: "mutation",
+      });
+
+      await simulateCompletion(
+        workId,
+        { kind: "success", returnValue: null },
+        1,
+      );
+      await runLoop();
+      expect(await statusOf(workId)).toEqual({ state: "finished" });
+      expect((await observe()).running).toHaveLength(0);
+    });
+
+    it.each(["before", "after"])(
+      "honors cancellation %s mutation recovery",
+      async (when) => {
+        await initialize({ maxParallelism: 1 });
+        const workId = await enqueueWork({ fnType: "mutation" });
+        await runLoop();
+        const original = (await observe()).running[0];
+        vi.setSystemTime(Date.now() + 11 * MINUTE);
+        if (when === "before") await t.mutation(api.lib.cancel, { id: workId });
+        await t.mutation(internal.recovery.recover, {
+          jobs: [{ ...original, attempt: 0 }],
+          scheduledAt: Date.now(),
+        });
+        if (when === "after") await t.mutation(api.lib.cancel, { id: workId });
+
+        await runLoop();
+        const o = await observe();
+        expect(o.running).toHaveLength(0);
+        expect(o.pendingStart).toHaveLength(0);
+        expect(o.pendingCompletion).toHaveLength(0);
+      },
+    );
+
+    it("does not retry ordinary mutation failures", async () => {
+      await initialize();
+      const workId = await enqueueWork({ fnType: "mutation" });
+      await runLoop();
+      await simulateCompletion(workId, { kind: "failed", error: "User error" });
+      await runLoop();
+      expect(await statusOf(workId)).toEqual({ state: "finished" });
+      expect((await observe()).pendingStart).toHaveLength(0);
+    });
+
     it("flags a recovery iteration and advances lastRecovery for silent workers", async () => {
       await initialize();
       // Pre-populate state.running with an old entry.
