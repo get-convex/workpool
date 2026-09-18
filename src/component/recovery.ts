@@ -2,6 +2,7 @@ import { type Infer, v } from "convex/values";
 import { internalMutation, type MutationCtx } from "./_generated/server.js";
 import { createLogger } from "./logging.js";
 import { type CompleteJob, completeHandler } from "./complete.js";
+import { kickMainLoop } from "./kick.js";
 import { MINUTE } from "./shared.js";
 
 const recoveryArgs = v.object({
@@ -54,8 +55,11 @@ export async function recoveryHandler(
   const globals = await ctx.db.query("globals").unique();
   const console = createLogger(globals?.logLevel);
   // If scheduledAt is omitted (older callers, or tests), treat lag as 0.
-  const schedulerLagMs = scheduledAt ? Math.max(0, Date.now() - scheduledAt) : 0;
+  const schedulerLagMs = scheduledAt
+    ? Math.max(0, Date.now() - scheduledAt)
+    : 0;
   const completionJobs: CompleteJob[] = [];
+  let recoveredMutation = false;
   for (let i = 0; i < jobs.length; i++) {
     const job = jobs[i];
     const preamble = `[recovery] Scheduled job ${job.scheduledId} for work ${job.workId}`;
@@ -114,8 +118,8 @@ export async function recoveryHandler(
         break;
       }
       case "pending": {
-        // We only re-enqueue mutations. Actions sitting in pending usually
-        // mean an overloaded scheduler — cancelling them doesn't help.
+        // Only mutations have their effects and scheduler completion committed
+        // atomically. Queries can share an action batch, so leave those alone.
         if (work.fnType !== "mutation") {
           break;
         }
@@ -128,14 +132,23 @@ export async function recoveryHandler(
             `(lag ${schedulerLagMs}ms, threshold ${MUTATION_STUCK_THRESHOLD_MS}ms) — re-enqueueing`,
         );
         await ctx.scheduler.cancel(scheduled._id);
-        completionJobs.push({
+        // This attempt never committed. Request a retry directly, without
+        // applying the action retry policy or invoking onComplete. Advancing
+        // attempts invalidates recovery calls still carrying the old attempt.
+        await ctx.db.patch("work", work._id, { attempts: work.attempts + 1 });
+        await ctx.db.insert("pendingCompletion", {
+          segment: ctx.db.vars.commitTs,
           workId: job.workId,
-          runResult: { kind: "stuckInScheduler" },
-          attempt: job.attempt,
+          runResult: { kind: "failed", error: "Mutation stuck in scheduler" },
+          retry: true,
         });
+        recoveredMutation = true;
         break;
       }
     }
+  }
+  if (recoveredMutation) {
+    await kickMainLoop(ctx, "retry");
   }
   if (completionJobs.length > 0) {
     await completeHandler(ctx, { jobs: completionJobs });

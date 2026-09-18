@@ -588,8 +588,13 @@ describe("recovery", () => {
           .withIndex("workId", (q) => q.eq("workId", workId))
           .collect();
         expect(pendingCompletions).toHaveLength(1);
-        expect(pendingCompletions[0].runResult.kind).toBe("stuckInScheduler");
+        expect(pendingCompletions[0].runResult.kind).toBe("failed");
         expect(pendingCompletions[0].retry).toBe(true);
+        expect((await ctx.db.get("work", workId))?.attempts).toBe(1);
+        expect(
+          (await ctx.db.system.get("_scheduled_functions", scheduledId))?.state
+            .kind,
+        ).toBe("canceled");
       });
     });
 
@@ -630,39 +635,47 @@ describe("recovery", () => {
       });
     });
 
-    it("should not re-enqueue pending actions", async () => {
-      const [workId, scheduledId] = await t.run(async (ctx) => {
-        const workId = await makeDummyWork(ctx, { fnType: "action" });
-        const scheduledId = await makeDummyScheduledFunction(ctx, workId);
-        return [workId, scheduledId];
-      });
-
-      const scheduledTime = Date.now() - 60 * 60 * 1000; // 1h pending
-      await t.run(async (ctx) => {
-        ctx.db.system.get = patchedSystemGet(ctx.db, {
-          [scheduledId]: {
-            _id: scheduledId,
-            _creationTime: scheduledTime,
-            name: "internal/worker.runActionWrapper",
-            args: [{}],
-            scheduledTime,
-            state: { kind: "pending" },
-          },
+    it.each(["action", "query"] as const)(
+      "should not re-enqueue pending %s work",
+      async (fnType) => {
+        const [workId, scheduledId] = await t.run(async (ctx) => {
+          const workId = await makeDummyWork(ctx, { fnType });
+          const scheduledId = await makeDummyScheduledFunction(ctx, workId);
+          return [workId, scheduledId];
         });
-        await recoveryHandler(ctx, {
-          jobs: [{ scheduledId, workId, attempt: 0, started: scheduledTime }],
-          scheduledAt: Date.now(),
-        });
-      });
 
-      await t.run(async (ctx) => {
-        const pendingCompletions = await ctx.db
-          .query("pendingCompletion")
-          .withIndex("workId", (q) => q.eq("workId", workId))
-          .collect();
-        expect(pendingCompletions).toHaveLength(0);
-      });
-    });
+        const scheduledTime = Date.now() - 60 * 60 * 1000; // 1h pending
+        await t.run(async (ctx) => {
+          ctx.db.system.get = patchedSystemGet(ctx.db, {
+            [scheduledId]: {
+              _id: scheduledId,
+              _creationTime: scheduledTime,
+              name: "internal/worker.runActionWrapper",
+              args: [{}],
+              scheduledTime,
+              state: { kind: "pending" },
+            },
+          });
+          await recoveryHandler(ctx, {
+            jobs: [{ scheduledId, workId, attempt: 0, started: scheduledTime }],
+            scheduledAt: Date.now(),
+          });
+        });
+
+        await t.run(async (ctx) => {
+          const pendingCompletions = await ctx.db
+            .query("pendingCompletion")
+            .withIndex("workId", (q) => q.eq("workId", workId))
+            .collect();
+          expect(pendingCompletions).toHaveLength(0);
+          expect((await ctx.db.get("work", workId))?.attempts).toBe(0);
+          expect(
+            (await ctx.db.system.get("_scheduled_functions", scheduledId))
+              ?.state.kind,
+          ).toBe("pending");
+        });
+      },
+    );
 
     it("should not process jobs with other scheduled states", async () => {
       // Create work and scheduled function
