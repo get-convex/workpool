@@ -55,6 +55,7 @@ export default defineSchema({
     payloadSize: v.optional(v.number()),
     attempts: v.number(), // number of completed attempts
     onComplete: v.optional(vOnCompleteFnContext),
+    completeTransactionally: v.optional(v.boolean()),
     retryBehavior: v.optional(retryBehavior),
     canceled: v.optional(v.boolean()),
   }),
