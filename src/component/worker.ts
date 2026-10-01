@@ -17,6 +17,7 @@ import { getNonRetryableErrorMessage, isNonRetryableError } from "./errors.js";
 import { createLogger, type Logger, logLevel } from "./logging.js";
 import type { RunResult } from "./shared.js";
 import type { CompleteJob } from "./complete.js";
+import { createCompleter } from "./completer.js";
 import { assert } from "convex-helpers";
 
 const commonRunArgs = {
@@ -120,10 +121,23 @@ export const runBatch = internalAction({
   },
   handler: async (ctx, { items, logLevel }) => {
     const console = createLogger(logLevel);
+    const completer = createCompleter(
+      (jobs) => ctx.runMutation(internal.complete.complete, { jobs }),
+      async (jobs, e) => {
+        if (jobs.length === 1) {
+          await scheduleComplete(ctx, console, jobs[0]!, e);
+          return;
+        }
+        console.error(
+          `[runBatch] completing ${jobs.length} jobs together failed, completing each alone: ${e}`,
+        );
+        await Promise.all(jobs.map((job) => completeInline(ctx, console, job)));
+      },
+    );
     await Promise.all(
       items.map(async (item) => {
         const status = await runOne(ctx, console, item);
-        await completeInline(ctx, console, {
+        await completer.add({
           workId: item.workId,
           attempt: item.attempt,
           ...status,
@@ -149,13 +163,22 @@ async function completeInline(
   try {
     await ctx.runMutation(internal.complete.complete, { jobs: [job] });
   } catch (e) {
-    console.error(
-      `[runBatch] completing ${job.workId} inline failed, falling back to scheduled onComplete: ${e}`,
-    );
-    await ctx.scheduler.runAfter(0, internal.complete.complete, {
-      jobs: [job],
-    });
+    await scheduleComplete(ctx, console, job, e);
   }
+}
+
+async function scheduleComplete(
+  ctx: ActionCtx,
+  console: Logger,
+  job: CompleteJob,
+  error: unknown,
+) {
+  console.error(
+    `[runBatch] completing ${job.workId} inline failed, falling back to scheduled onComplete: ${error}`,
+  );
+  await ctx.scheduler.runAfter(0, internal.complete.complete, {
+    jobs: [job],
+  });
 }
 
 async function runOne(
