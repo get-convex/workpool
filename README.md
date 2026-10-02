@@ -130,10 +130,11 @@ export const emailSent = internalMutation({
 });
 ```
 
-Note: the `onComplete` handler runs in a different transaction than the job
-enqueued. If you want to run it in the same transaction, you can do that work at
-the end of the enqueued function, before returning. This is generally faster and
-more typesafe when handling the "success" case.
+By default, the `onComplete` handler runs in a different transaction than the
+enqueued job. For mutations, `completeTransactionally: true` makes successful
+work and its selected callback commit together, as described below. You can also
+do that work at the end of the enqueued function, before returning, which avoids
+another function call and preserves the result's type directly.
 
 You can also use this equivalent helper to define an `onComplete` mutation. Note
 the `DataModel` type parameter, if you want ctx.db to be type safe.
@@ -168,6 +169,39 @@ scheduled; an attempt already in progress runs to its own outcome, so a race
 with `cancel` can still report `"success"` or a terminal `"failed"`. Direct
 scheduler cancelation (for example, from the dashboard) is treated as a failure
 and can trigger retries instead.
+
+### Transactional success for mutations
+
+Use `completeTransactionally: true` with `enqueueMutation` or
+`enqueueMutationBatch` to commit each mutation, its selected success callback,
+and workpool completion bookkeeping together:
+
+```ts
+await pool.enqueueMutation(ctx, internal.tasks.process, args, {
+  onComplete: internal.tasks.handleResult,
+  onCompleteExcludeKinds: ["canceled"],
+  completeTransactionally: true,
+});
+```
+
+The callback can read the mutation's writes. If the success callback or
+completion bookkeeping throws, the scheduled mutation fails and all those writes
+roll back. Workpool's periodic recovery then marks the work as failed and
+invokes the callback for `"failed"`, unless excluded. Until recovery runs, the
+job remains running and occupies a concurrency slot. There is no separate
+fallback execution of the success callback.
+
+Ordinary work errors still use the existing failure-completion path. Failure and
+cancellation callbacks keep their usual transaction behavior. Excluding every
+kind, or omitting the callback, still allows transactional bookkeeping, avoiding
+the separately scheduled completion mutation. Jobs in a batch remain independent
+transactions. Actions and queries do not support this option.
+
+This option requires Convex 1.41 or newer. The work and callback share one
+transaction budget. Workpool uses nested transaction limits to reserve space for
+completion bookkeeping; work that fits by itself may exceed the combined budget.
+Limit overruns or execution failures can still fail the transaction, in which
+case recovery handles it as above.
 
 ### Idempotency
 
@@ -335,6 +369,8 @@ options include:
 - `onCompleteExcludeKinds`: Optional list of result kinds to skip: `"success"`,
   `"failed"`, and `"canceled"`. Defaults to excluding none, so every outcome
   invokes the callback.
+- `completeTransactionally`: Mutation-only option to commit successful work, its
+  selected callback, and completion bookkeeping together. Defaults to false.
 - `context`: Any data you want to pass to the `onComplete` mutation.
 - `runAt` and `runAfter`: Similar to `ctx.scheduler.run*`, allows you to
   schedule the work to run later. By default it's immediate.
