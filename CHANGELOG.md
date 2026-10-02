@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.13
+
+- Avoid unused local in shared.ts type assertion (#242)
+
 ## 0.4.12
 
 - Adds onCompleteExcludeKinds to filter callbacks by result kind (#237). Use
