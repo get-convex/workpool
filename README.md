@@ -233,12 +233,9 @@ run in parallel.
 The workpool stores the status of each function in the database, and thanks to
 Convex's reactive queries, you can read it in a query to power a reactive UI.
 
-By default, it will keep the status for 1 day but you can change this with the
-`statusTtl` option to `Workpool`.
-
-To keep the status forever, set `statusTtl: Number.POSITIVE_INFINITY`.
-
-You can read the status of a function by calling `pool.status(id)`.
+You can read the status of a function by calling `pool.status(id)`. After the
+work finishes, it does not maintain any metadata, and assumes any
+correctly-formatted workId previously existed, and returns "finished".
 
 ```ts
 import { vWorkIdValidator } from "@convex-dev/workpool";
