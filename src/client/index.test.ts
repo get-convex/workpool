@@ -1,20 +1,14 @@
 import {
-  anyApi,
-  componentsGeneric,
   defineSchema,
   defineTable,
-  internalActionGeneric,
-  internalMutationGeneric,
-  internalQueryGeneric,
   makeFunctionReference,
-  type ApiFromModules,
   type DataModelFromSchemaDefinition,
   type FunctionArgs,
   type GenericDataModel,
   type GenericMutationCtx,
 } from "convex/server";
 import { type Infer, type ObjectType, v } from "convex/values";
-import { convexTest } from "convex-test";
+import { defineTestApp } from "convex-test";
 import {
   afterEach,
   beforeEach,
@@ -61,6 +55,13 @@ const runArgs = {
 };
 type RunArgs = ObjectType<typeof runArgs>;
 type Context = { key: string; padding?: string; throw?: boolean };
+// An application with real callback functions and a nested workpool component.
+const app = defineTestApp({
+  schema,
+  components: {
+    workpool,
+  },
+});
 
 // Observe real callback execution while retaining Convex validation and rollback.
 const callback = vi.fn(
@@ -83,7 +84,7 @@ const callback = vi.fn(
 );
 let actionGate: Promise<void> | undefined;
 const fixtures = {
-  attempt: internalMutationGeneric({
+  attempt: app.internalMutation({
     args: { key: v.string() },
     returns: v.number(),
     handler: async (ctx, { key }) => {
@@ -95,7 +96,7 @@ const fixtures = {
       return events.filter((e) => e.kind === "attempt").length;
     },
   }),
-  action: internalActionGeneric({
+  action: app.internalAction({
     args: runArgs,
     returns: v.string(),
     handler: async (ctx, args): Promise<string> => {
@@ -108,7 +109,7 @@ const fixtures = {
       return "action result";
     },
   }),
-  mutation: internalMutationGeneric({
+  mutation: app.internalMutation({
     args: runArgs,
     returns: v.string(),
     handler: async (ctx, args) => {
@@ -117,7 +118,7 @@ const fixtures = {
       return "mutation result";
     },
   }),
-  query: internalQueryGeneric({
+  query: app.internalQuery({
     args: runArgs,
     returns: v.string(),
     handler: async (_ctx, args) => {
@@ -125,7 +126,7 @@ const fixtures = {
       return "query result";
     },
   }),
-  complete: internalMutationGeneric({
+  complete: app.internalMutation({
     args: vOnCompleteArgs(
       v.object({
         key: v.string(),
@@ -136,23 +137,18 @@ const fixtures = {
     returns: v.null(),
     handler: callback,
   }),
-  optionalComplete: internalMutationGeneric({
+  optionalComplete: app.internalMutation({
     args: vOnCompleteArgs(),
     returns: v.null(),
     handler: callback,
   }),
 };
-const refs = (
-  anyApi as unknown as ApiFromModules<{ callbacks: typeof fixtures }>
-).callbacks;
-// An application with real callback functions and a nested workpool component.
-// The generated path provides the module root expected by convex-test.
-const modules = {
-  "./_generated/server.ts": async () => ({}),
-  "./callbacks.ts": async () => fixtures,
-};
-const component = componentsGeneric().workpool as unknown as WorkpoolComponent;
-const pool = new Workpool(component, { maxParallelism: 3, logLevel: "ERROR" });
+const { internal, createTest } = app.defineModules({ callbacks: fixtures });
+const refs = internal.callbacks;
+const pool = new Workpool(app.components.workpool, {
+  maxParallelism: 3,
+  logLevel: "ERROR",
+});
 const retries = { maxAttempts: 3, initialBackoffMs: 1, base: 2 };
 type Kind = "action" | "mutation" | "query";
 type Mode = "all" | "failed" | "canceled";
@@ -173,9 +169,7 @@ const excludeFilters = [
 describe("completion callbacks through the client and scheduler", () => {
   let t: ReturnType<typeof setup>;
   function setup() {
-    const t = convexTest(schema, modules);
-    workpool.register(t);
-    return t;
+    return createTest();
   }
   beforeEach(() => {
     vi.useFakeTimers();
