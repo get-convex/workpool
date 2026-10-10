@@ -1,5 +1,5 @@
 import { defineSchema, defineTable } from "convex/server";
-import { v } from "convex/values";
+import { v, type Infer } from "convex/values";
 import {
   fnType,
   vConfig,
@@ -10,6 +10,16 @@ import {
 
 // Represents a slice of time to process work.
 const segment = v.int64();
+
+// Internal-only RunResult kinds, used by recovery → complete → main loop.
+// External callers (worker, onComplete) only ever see vResult.
+export const vResultInternal = v.union(
+  vResult,
+  // Mutation was canceled by recovery because it sat in the scheduler
+  // beyond the stuck threshold; main loop must re-enqueue it.
+  v.object({ kind: v.literal("stuckInScheduler") }),
+);
+export type RunResultInternal = Infer<typeof vResultInternal>;
 
 export default defineSchema({
   // Written from kickLoop, read everywhere.
@@ -70,7 +80,7 @@ export default defineSchema({
   // Written by complete, read & deleted by `main`.
   pendingCompletion: defineTable({
     segment,
-    runResult: vResult,
+    runResult: vResultInternal,
     workId: v.id("work"),
     retry: v.boolean(),
   })
