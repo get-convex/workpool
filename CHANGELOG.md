@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.14
+
+- Updates the /test entrypoint for compatibility with convex-test's new
+  `defineTestApp` capability.
+
 ## 0.4.13
 
 - Avoid unused local in shared.ts type assertion (#242)
