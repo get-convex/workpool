@@ -344,6 +344,27 @@ describe("lib", () => {
   });
 
   describe("status", () => {
+    it("reports running work after it leaves a shared queue document", async () => {
+      const ids = await t.mutation(api.lib.enqueueBatch, {
+        items: Array.from({ length: 2 }, () => ({
+          fnType: "action" as const,
+          fnHandle: "testHandle",
+          fnName: "testFunction",
+          fnArgs: {},
+          runAt: Date.now(),
+        })),
+        config: { logLevel: "WARN" },
+      });
+      await t.run(async (ctx) => {
+        const queued = (await ctx.db.query("pendingStart").unique())!;
+        await ctx.db.patch("pendingStart", queued._id, { workIds: [ids[1]] });
+      });
+      expect(await t.query(api.lib.statusBatch, { ids })).toEqual([
+        { state: "running", previousAttempts: 0 },
+        { state: "pending", previousAttempts: 0 },
+      ]);
+    });
+
     it("should return finished state for non-existent work", async () => {
       const id = await t.mutation(api.lib.enqueue, {
         fnHandle: "testHandle",
@@ -383,7 +404,7 @@ describe("lib", () => {
         expect(work).toBeDefined();
         const pendingStarts = await ctx.db.query("pendingStart").collect();
         expect(pendingStarts).toHaveLength(1);
-        expect(pendingStarts[0].workId).toBe(id);
+        expect(pendingStarts[0].workIds).toEqual([id]);
       });
 
       const status = await t.query(api.lib.status, { id });

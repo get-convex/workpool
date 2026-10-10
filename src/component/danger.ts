@@ -2,7 +2,11 @@ import { v } from "convex/values";
 import { kickMainLoop } from "./kick.js";
 import { internal } from "./_generated/api.js";
 import { internalMutation, type MutationCtx } from "./_generated/server.js";
-import { findPendingStart } from "./pendingStart.js";
+import {
+  findPendingStart,
+  memberIds,
+  removeFromPendingStart,
+} from "./pendingStart.js";
 
 const DEFAULT_OLDER_THAN = 1000 * 60 * 60 * 24;
 
@@ -19,13 +23,24 @@ export const clearPending = internalMutation({
       .query("pendingStart")
       .withIndex("by_creation_time", (q) => q.lte("_creationTime", time))
       .order("desc")) {
-      const work = await ctx.db.get("work", entry.workId);
-      if (work) {
-        if (work.payloadId) await ctx.db.delete("payload", work.payloadId);
-        await ctx.db.delete("work", work._id);
+      const removed = [];
+      let shouldYield = false;
+      for (const workId of memberIds(entry)) {
+        const work = await ctx.db.get("work", workId);
+        if (work) {
+          // Clean up any large data stored separately
+          if (work.payloadId) {
+            await ctx.db.delete("payload", work.payloadId);
+          }
+          await ctx.db.delete("work", work._id);
+        }
+        removed.push(workId);
+        shouldYield = await usedHalfTransactionBudget(ctx);
+        if (shouldYield) break;
       }
-      await ctx.db.delete("pendingStart", entry._id);
-      if (await usedHalfTransactionBudget(ctx)) {
+      await removeFromPendingStart(ctx, entry, removed);
+      if (shouldYield || (await usedHalfTransactionBudget(ctx))) {
+        // The inclusive boundary revisits any members left in this document.
         await ctx.scheduler.runAfter(0, internal.danger.clearPending, {
           before: entry._creationTime,
         });
@@ -63,7 +78,7 @@ export const clearOldWork = internalMutation({
         .withIndex("workId", (q) => q.eq("workId", entry._id))
         .unique();
       if (pendingStart) {
-        await ctx.db.delete("pendingStart", pendingStart._id);
+        await removeFromPendingStart(ctx, pendingStart, [entry._id]);
       }
       if (pendingCompletion) {
         await ctx.db.delete("pendingCompletion", pendingCompletion._id);

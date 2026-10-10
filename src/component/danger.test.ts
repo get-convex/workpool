@@ -14,28 +14,31 @@ describe("danger cleanup", () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  async function enqueueWork(count: number, payloadBytes = 10) {
+  async function enqueuePacked(count: number, payloadBytes = 10) {
     return t.run(async (ctx) => {
       const workIds: Id<"work">[] = [];
       for (let i = 0; i < count; i++) {
         const payloadId = await ctx.db.insert("payload", {
           args: { data: "x".repeat(payloadBytes) },
         });
-        const workId = await ctx.db.insert("work", {
-          fnType: "action",
-          fnHandle: "test",
-          fnName: "test",
-          attempts: 0,
-          payloadId,
-          payloadSize: payloadBytes,
-        });
-        workIds.push(workId);
-        const pendingStartId = await ctx.db.insert("pendingStart", {
-          workId,
-          segment: toTimestamp(Date.now()),
-        });
-        await ctx.db.patch("work", workId, { pendingStartId });
+        workIds.push(
+          await ctx.db.insert("work", {
+            fnType: "action",
+            fnHandle: "test",
+            fnName: "test",
+            attempts: 0,
+            payloadId,
+            payloadSize: payloadBytes,
+          }),
+        );
       }
+      const pendingStartId = await ctx.db.insert("pendingStart", {
+        workIds,
+        segment: toTimestamp(Date.now()),
+      });
+      await Promise.all(
+        workIds.map((id) => ctx.db.patch("work", id, { pendingStartId })),
+      );
       return workIds;
     });
   }
@@ -45,12 +48,12 @@ describe("danger cleanup", () => {
     [250, 10, { documentsWritten: 100 }],
     [8, 800_000, { bytesRead: 4_000_000 }],
   ])(
-    "resumes cleanup when a transaction budget is reached (%i works)",
+    "resumes a packed document when a cleanup budget is reached (%i works)",
     async (count, payloadBytes, transactionLimits) => {
-      const ids = await enqueueWork(count, payloadBytes);
+      const ids = await enqueuePacked(count, payloadBytes);
       const before = Date.now() + 1;
       vi.advanceTimersByTime(10);
-      const newerIds = await enqueueWork(1);
+      const newerIds = await enqueuePacked(1);
 
       await t.run((ctx) =>
         ctx.runMutation(
@@ -63,7 +66,7 @@ describe("danger cleanup", () => {
       );
       await t.run(async (ctx) => {
         const remaining = (await ctx.db.query("pendingStart").collect())
-          .map((p) => p.workId)
+          .flatMap((p) => p.workIds ?? [])
           .filter((id) => ids.includes(id));
         expect(remaining.length).toBeGreaterThan(0);
         expect(remaining.length).toBeLessThan(count);
@@ -75,8 +78,8 @@ describe("danger cleanup", () => {
         expect(
           (await ctx.db.query("work").collect()).map((w) => w._id),
         ).toEqual(newerIds);
-        expect((await ctx.db.query("pendingStart").unique())!.workId).toBe(
-          newerIds[0],
+        expect((await ctx.db.query("pendingStart").unique())!.workIds).toEqual(
+          newerIds,
         );
         expect(await ctx.db.query("payload").collect()).toHaveLength(1);
       });
