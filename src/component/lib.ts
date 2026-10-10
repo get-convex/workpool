@@ -41,8 +41,15 @@ const itemArgs = {
   runAt: v.number(),
   // TODO: annotation?
   onComplete: v.optional(vOnCompleteFnContext),
+  completeTransactionally: v.optional(v.boolean()),
   retryBehavior: v.optional(retryBehavior),
 };
+
+function validateCompletionMode(item: ObjectType<typeof itemArgs>) {
+  if (item.completeTransactionally && item.fnType !== "mutation") {
+    throw new Error("completeTransactionally is only supported for mutations.");
+  }
+}
 const enqueueArgs = {
   ...itemArgs,
   config: vConfig.partial(),
@@ -51,6 +58,7 @@ export const enqueue = mutation({
   args: enqueueArgs,
   returns: v.id("work"),
   handler: async (ctx, { config, ...itemArgs }) => {
+    validateCompletionMode(itemArgs);
     const globals = await getOrUpdateGlobals(ctx, config);
     const console = createLogger(globals.logLevel);
     await kickMainLoop(ctx, "enqueue");
@@ -127,6 +135,8 @@ export const enqueueBatch = mutation({
   },
   returns: v.array(v.id("work")),
   handler: async (ctx, { config, items }) => {
+    // Validate before any of the batch starts enqueueing work.
+    for (const item of items) validateCompletionMode(item);
     const globals = await getOrUpdateGlobals(ctx, config);
     const console = createLogger(globals.logLevel);
     await kickMainLoop(ctx, "enqueue");

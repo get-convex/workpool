@@ -16,7 +16,8 @@ import {
 import { getNonRetryableErrorMessage, isNonRetryableError } from "./errors.js";
 import { createLogger, type Logger, logLevel } from "./logging.js";
 import type { RunResult } from "./shared.js";
-import type { CompleteJob } from "./complete.js";
+import { completeHandler, type CompleteJob } from "./complete.js";
+import { completionTransactionLimits } from "./limits.js";
 import { assert } from "convex-helpers";
 
 const commonRunArgs = {
@@ -39,11 +40,21 @@ export const runMutationWrapper = internalMutation({
     payloadId: v.optional(v.id("payload")),
     fnArgs: v.optional(v.record(v.string(), v.any())),
     fnType: v.union(v.literal("query"), v.literal("mutation")),
+    completeTransactionally: v.optional(v.boolean()),
     logLevel,
     attempt: v.number(),
   },
   handler: async (ctx, { workId, attempt, ...args }) => {
     const console = createLogger(args.logLevel);
+
+    if (args.completeTransactionally) {
+      assert(
+        args.fnType === "mutation",
+        "Only mutations can complete transactionally",
+      );
+      const work = await ctx.db.get("work", workId);
+      if (!work || work.attempts !== attempt) return;
+    }
 
     let fnArgs = args.fnArgs;
     if (!fnArgs) {
@@ -53,17 +64,26 @@ export const runMutationWrapper = internalMutation({
       fnArgs = payload.args;
     }
 
+    let returnValue;
     try {
-      const returnValue = await (args.fnType === "query"
+      returnValue = await (args.fnType === "query"
         ? ctx.runQuery(args.fnHandle as FunctionHandle<"query">, fnArgs)
-        : ctx.runMutation(args.fnHandle as FunctionHandle<"mutation">, fnArgs));
-      // NOTE: we could run the `saveResult` handler here, or call `ctx.runMutation`,
-      // but we want the mutation to be a separate transaction to reduce the window for OCCs.
-      await ctx.scheduler.runAfter(0, internal.complete.complete, {
-        jobs: [
-          { workId, runResult: { kind: "success", returnValue }, attempt },
-        ],
-      });
+        : ctx.runMutation(
+            args.fnHandle as FunctionHandle<"mutation">,
+            fnArgs,
+            args.completeTransactionally
+              ? { transactionLimits: await completionTransactionLimits(ctx) }
+              : undefined,
+          ));
+      if (!args.completeTransactionally) {
+        // Keep the default completion in a separate transaction.
+        await ctx.scheduler.runAfter(0, internal.complete.complete, {
+          jobs: [
+            { workId, runResult: { kind: "success", returnValue }, attempt },
+          ],
+        });
+        return;
+      }
     } catch (e: unknown) {
       console.error(e);
       const runResult = { kind: "failed" as const, error: formatError(e) };
@@ -77,7 +97,16 @@ export const runMutationWrapper = internalMutation({
           },
         ],
       });
+      return;
     }
+
+    const jobs: CompleteJob[] = [
+      { workId, runResult: { kind: "success", returnValue }, attempt },
+    ];
+    // Do not catch completion failures: letting the wrapper throw rolls back
+    // the work and callback writes together. Recovery records the failure.
+    // Calling the handler directly avoids another UDF execution.
+    await completeHandler(ctx, { jobs }, { transactionalSuccess: true });
   },
 });
 
