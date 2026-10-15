@@ -109,6 +109,8 @@ export const calculateBacklogAndReport = internalMutation({
   args: {
     startSegment: v.int64(),
     endSegment: v.int64(),
+    // Unused. Kept so calls scheduled by older versions still validate.
+    cursor: v.optional(v.string()),
     report: schema.tables.internalState.validator.fields.report,
     running: v.number(),
     logLevel,
