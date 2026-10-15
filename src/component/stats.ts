@@ -14,7 +14,6 @@ import {
 import { createLogger, type Logger, logLevel, shouldLog } from "./logging.js";
 import { components, internal } from "./_generated/api.js";
 import schema from "./schema.js";
-import { paginator } from "convex-helpers/server/pagination";
 
 /**
  * Record stats about work execution. Intended to be queried by Axiom or Datadog.
@@ -78,28 +77,27 @@ export async function generateReport(
     return;
   }
   const currentSegment = getCurrentSegment();
-  const pendingStart = await paginator(ctx.db, schema)
+  // Use take() rather than paginate(): this runs inside the main loop
+  // transaction, and only one paginate() call is allowed per transaction.
+  const numItems = Math.max(maxParallelism, 10);
+  const pendingStart = await ctx.db
     .query("pendingStart")
     .withIndex("segment", (q) =>
       q
         .gte("segment", state.segmentCursors.incoming)
         .lt("segment", currentSegment),
     )
-    .paginate({
-      numItems: Math.max(maxParallelism, 10),
-      cursor: null,
-    });
-  if (pendingStart.isDone) {
+    .take(numItems + 1);
+  if (pendingStart.length <= numItems) {
     recordReport(console, {
       ...state.report,
       running: state.running.length,
-      backlog: pendingStart.page.length,
+      backlog: pendingStart.length,
     });
   } else {
     await ctx.scheduler.runAfter(0, internal.stats.calculateBacklogAndReport, {
       startSegment: 0n,
       endSegment: currentSegment,
-      cursor: pendingStart.continueCursor,
       report: state.report,
       running: state.running.length,
       logLevel,
@@ -111,7 +109,8 @@ export const calculateBacklogAndReport = internalMutation({
   args: {
     startSegment: v.int64(),
     endSegment: v.int64(),
-    cursor: v.string(),
+    // Unused. Kept optional so previously scheduled calls still validate.
+    cursor: v.optional(v.string()),
     report: schema.tables.internalState.validator.fields.report,
     running: v.number(),
     logLevel,

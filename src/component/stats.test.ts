@@ -1,4 +1,3 @@
-import { paginator } from "convex-helpers/server/pagination";
 import { convexTest } from "convex-test";
 import {
   afterEach,
@@ -302,23 +301,10 @@ describe("stats", () => {
       });
       assert(state);
 
-      const cursor = await t.run(async (ctx) => {
-        return await paginator(ctx.db, schema)
-          .query("pendingStart")
-          .withIndex("segment", (q) =>
-            q.gte("segment", 0n).lt("segment", currentSegment),
-          )
-          .paginate({
-            numItems: 1,
-            cursor: null,
-          });
-      });
-
       // Call calculateBacklogAndReport directly
       await t.mutation(internal.stats.calculateBacklogAndReport, {
         startSegment: 0n,
         endSegment: currentSegment,
-        cursor: cursor.continueCursor,
         report: state.report,
         running: state.running.length,
         logLevel: "REPORT",
