@@ -77,9 +77,6 @@ export async function generateReport(
     return;
   }
   const currentSegment = getCurrentSegment();
-  // Use take() rather than paginate(): this runs inside the main loop
-  // transaction, and only one paginate() call is allowed per transaction.
-  const numItems = Math.max(maxParallelism, 10);
   const pendingStart = await ctx.db
     .query("pendingStart")
     .withIndex("segment", (q) =>
@@ -87,12 +84,15 @@ export async function generateReport(
         .gte("segment", state.segmentCursors.incoming)
         .lt("segment", currentSegment),
     )
-    .take(numItems + 1);
-  if (pendingStart.length <= numItems) {
+    .paginate({
+      numItems: Math.max(maxParallelism, 10),
+      cursor: null,
+    });
+  if (pendingStart.isDone) {
     recordReport(console, {
       ...state.report,
       running: state.running.length,
-      backlog: pendingStart.length,
+      backlog: pendingStart.page.length,
     });
   } else {
     await ctx.scheduler.runAfter(0, internal.stats.calculateBacklogAndReport, {
@@ -109,8 +109,6 @@ export const calculateBacklogAndReport = internalMutation({
   args: {
     startSegment: v.int64(),
     endSegment: v.int64(),
-    // Unused. Kept optional so previously scheduled calls still validate.
-    cursor: v.optional(v.string()),
     report: schema.tables.internalState.validator.fields.report,
     running: v.number(),
     logLevel,
