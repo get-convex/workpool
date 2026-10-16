@@ -1,6 +1,6 @@
 import type { Infer, Validator, VAny } from "convex/values";
 
-import { v } from "convex/values";
+import { jsonToConvex, v } from "convex/values";
 import { type Logger, logLevel } from "./logging.js";
 
 export const fnType = v.union(
@@ -19,6 +19,7 @@ export const HOUR = 60 * MINUTE;
 export const DAY = 24 * HOUR;
 export const YEAR = 365 * DAY;
 
+// Decode the 100ms buckets used before commit-timestamp ordering.
 export function toSegment(ms: number): bigint {
   return BigInt(Math.floor(ms / SEGMENT_MS));
 }
@@ -27,13 +28,63 @@ export function getCurrentSegment(): bigint {
   return toSegment(Date.now());
 }
 
-export function getNextSegment(): bigint {
-  return toSegment(Date.now()) + 1n;
-}
-
 export function fromSegment(segment: bigint): number {
   return Number(segment) * SEGMENT_MS;
 }
+
+// A commit timestamp is nanoseconds since the epoch, so a wall-clock time
+// converts into the same ordering as one. This is what lets a single index hold
+// both "ready as soon as it commits" and "not before this time".
+const NS_PER_MS = 1_000_000n;
+
+/**
+ * A wall-clock time on the commit-timestamp scale, preserving any fractional
+ * milliseconds exactly: the whole and fractional parts convert separately, so
+ * no precision is lost multiplying a large float. Round-trips through
+ * `fromTimestamp`.
+ */
+export function toTimestamp(ms: number): bigint {
+  const whole = Math.floor(ms);
+  return (
+    BigInt(whole) * NS_PER_MS +
+    BigInt(Math.round((ms - whole) * Number(NS_PER_MS)))
+  );
+}
+
+/**
+ * Back to (possibly fractional) milliseconds, dividing the whole and
+ * remainder parts separately so large values don't lose precision.
+ */
+export function fromTimestamp(timestamp: bigint): number {
+  return (
+    Number(timestamp / NS_PER_MS) +
+    Number(timestamp % NS_PER_MS) / Number(NS_PER_MS)
+  );
+}
+
+declare const Convex: {
+  syscall: (op: string, jsonArgs: string) => string;
+};
+
+/**
+ * The snapshot this transaction reads at, in nanoseconds on the
+ * commit-timestamp clock. Everything stamped at or below it is visible here,
+ * and everything that commits later is stamped above it.
+ *
+ * TODO(convex): replace with `ctx.meta.getSnapshotTs()` once a released
+ * `convex` exposes it; this is the syscall it wraps.
+ */
+export function snapshotTs(): bigint {
+  const json = Convex.syscall("1.0/getSnapshotTs", "{}");
+  return jsonToConvex(JSON.parse(json)) as bigint;
+}
+
+export function maxBigint(a: bigint, b: bigint): bigint {
+  return a > b ? a : b;
+}
+
+// Separates legacy 100ms buckets from timestamps within the scheduling bounds.
+export const MIN_TIMESTAMP = toTimestamp(Date.UTC(2000, 0, 1));
 
 export const vConfig = v.object({
   maxParallelism: v.number(),
@@ -165,18 +216,4 @@ export function boundScheduledTime(ms: number, console: Logger): number {
     return Date.now() + YEAR;
   }
   return ms;
-}
-
-/**
- * Returns the smaller of two bigint values.
- */
-export function min<T extends bigint>(a: T, b: T): T {
-  return a > b ? b : a;
-}
-
-/**
- * Returns the larger of two bigint values.
- */
-export function max<T extends bigint>(a: T, b: T): T {
-  return a < b ? b : a;
 }

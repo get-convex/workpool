@@ -7,25 +7,34 @@ import {
   retryBehavior,
   vResult,
 } from "./shared.js";
+import { deprecated } from "convex-helpers/validators";
 
-// Represents a slice of time to process work.
-const segment = v.int64();
+// When a queue entry becomes eligible, in nanoseconds since the epoch: the
+// commit timestamp of the enqueue for ready work, or the start time for
+// scheduled work.
+const segment = v.commitTs();
+// Epoch time in nanoseconds. CommitTs resolves to this after committing.
+const timestamp = v.int64();
 
 export default defineSchema({
   // Written from kickLoop, read everywhere.
   globals: defineTable(vConfig),
   // Singleton, only read & written by `run`.
   internalState: defineTable({
-    // @deprecated batch-worker now owns the generation guard. We keep writing
-    // `0n` for rollback compatibility with older workpool versions.
-    generation: v.optional(v.int64()),
+    /** @deprecated batch-worker now owns the generation guard. */
+    generation: deprecated,
     // Track where we've scanned to, so we skip tombstones on re-scan.
+    // Legacy cursors used 100ms buckets.
     segmentCursors: v.object({
-      incoming: segment,
-      completion: segment,
-      cancelation: segment,
+      incoming: timestamp,
+      completion: timestamp,
+      cancelation: timestamp,
+      // Cursor into scanTs. Absent until legacy queue pointers and cursors are upgraded.
+      sweep: v.optional(timestamp),
     }),
-    lastRecovery: segment,
+    // When the loop last checked for stuck jobs, in nanoseconds.
+    // Legacy 100ms buckets are interpreted as long ago.
+    lastRecovery: timestamp,
     report: v.object({
       completed: v.number(), // finished running, counts retries & failures
       succeeded: v.number(), // finished successfully, regardless of retries
@@ -57,14 +66,19 @@ export default defineSchema({
     onComplete: v.optional(vOnCompleteFnContext),
     retryBehavior: v.optional(retryBehavior),
     canceled: v.optional(v.boolean()),
+    // May point to a deleted entry after starting, or be absent on legacy work.
+    pendingStartId: v.optional(v.id("pendingStart")),
   }),
 
-  // Written on enqueue & rescheduled for retry, read & deleted by `main`.
+  // Work waiting to start, one document per work item.
   pendingStart: defineTable({
     workId: v.id("work"),
     segment,
+    // The enqueue's commit timestamp, present iff the document could have
+    // committed out of order (a scheduled start within five minutes).
+    scanTs: v.optional(v.commitTs()),
   })
-    .index("workId", ["workId"])
+    .index("scanTs", ["scanTs", "segment"])
     .index("segment", ["segment"]),
 
   // Written by complete, read & deleted by `main`.
