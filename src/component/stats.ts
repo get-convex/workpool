@@ -18,7 +18,7 @@ import { paginator } from "convex-helpers/server/pagination";
 
 /**
  * Record stats about work execution. Intended to be queried by Axiom or Datadog.
- * See the [README](https://github.com/get-convex/workpool) for example queries.
+ * See the [README](https://github.com/convex/workpool) for example queries.
  */
 
 export function recordEnqueued(
