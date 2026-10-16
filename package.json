@@ -1,11 +1,11 @@
 {
   "name": "@convex-dev/workpool",
   "description": "Convex component for queued background jobs with configurable concurrency, action retries, backoff, and completion callbacks.",
-  "repository": "github:get-convex/workpool",
+  "repository": "github:convex/workpool",
   "homepage": "https://www.convex.dev/components/workpool",
   "bugs": {
     "email": "support@convex.dev",
-    "url": "https://github.com/get-convex/workpool/issues"
+    "url": "https://github.com/convex/workpool/issues"
   },
   "version": "0.4.14",
   "license": "Apache-2.0",
